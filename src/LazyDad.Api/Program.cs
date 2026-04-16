@@ -21,7 +21,7 @@ builder.Services.AddScoped<IJokeRepository, JokeRepository>();
 
 builder.Services.AddSingleton<ILlmClientFactory, LlmClientFactory>();
 builder.Services.AddScoped<JokeGenerationService>();
-// TODO Step 5: register JokeSchedulerService (IHostedService)
+builder.Services.AddHostedService<JokeSchedulerService>();
 
 var app = builder.Build();
 
