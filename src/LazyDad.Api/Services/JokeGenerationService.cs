@@ -52,6 +52,7 @@ public class JokeGenerationService
         sb.AppendLine("Rules:");
         sb.AppendLine("- The joke must be a classic dad joke: a pun, wordplay, or groan-worthy one-liner.");
         sb.AppendLine("- The joke must be family-friendly.");
+        sb.AppendLine("- Do NOT mention \"Russia\" or \"Russian\" anywhere in the joke.");
 
         if (recentJokes.Count > 0)
         {
