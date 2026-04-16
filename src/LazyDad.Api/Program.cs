@@ -24,6 +24,13 @@ builder.Services.AddScoped<JokeGenerationService>();
 builder.Services.AddScoped<HtmlGeneratorService>();
 builder.Services.AddHostedService<JokeSchedulerService>();
 
+// WebRootPath is null when wwwroot doesn't exist in the published output.
+// Set it explicitly so UseDefaultFiles/UseStaticFiles know where to look,
+// then create the directory so the runtime file provider doesn't reject it.
+var wwwrootPath = Path.Combine(builder.Environment.ContentRootPath, "wwwroot");
+Directory.CreateDirectory(wwwrootPath);
+builder.Environment.WebRootPath = wwwrootPath;
+
 var app = builder.Build();
 
 app.UseDefaultFiles();
