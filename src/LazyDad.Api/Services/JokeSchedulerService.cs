@@ -60,6 +60,7 @@ public class JokeSchedulerService : BackgroundService
         using var scope = scopeFactory.CreateScope();
         var generationService = scope.ServiceProvider.GetRequiredService<JokeGenerationService>();
         var jokeRepository = scope.ServiceProvider.GetRequiredService<IJokeRepository>();
+        var htmlGenerator = scope.ServiceProvider.GetRequiredService<HtmlGeneratorService>();
 
         try
         {
@@ -83,6 +84,8 @@ public class JokeSchedulerService : BackgroundService
             await jokeRepository.AddAsync(joke, stoppingToken);
 
             logger.LogInformation("Joke saved for '{Language}': {Text}", language.Language, text);
+
+            await htmlGenerator.RegenerateAsync(stoppingToken);
         }
         catch (OperationCanceledException)
         {
