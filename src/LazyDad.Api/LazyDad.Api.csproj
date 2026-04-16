@@ -20,4 +20,8 @@
     <UserSecretsId>787e2790-3b82-4086-a38c-c86cb58e524c</UserSecretsId>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="LazyDad.Tests" />
+  </ItemGroup>
+
 </Project>
