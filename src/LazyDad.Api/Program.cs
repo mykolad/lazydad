@@ -21,12 +21,20 @@ builder.Services.AddScoped<IJokeRepository, JokeRepository>();
 
 builder.Services.AddSingleton<ILlmClientFactory, LlmClientFactory>();
 builder.Services.AddScoped<JokeGenerationService>();
+builder.Services.AddScoped<HtmlGeneratorService>();
 builder.Services.AddHostedService<JokeSchedulerService>();
 
 var app = builder.Build();
 
+app.UseStaticFiles();
 app.MapControllers();
+app.MapGet("/healthz", () => Results.Ok(new { status = "healthy" }));
 
-// TODO Step 6: add /healthz endpoint
+// Regenerate the HTML page from existing jokes on every startup.
+using (var scope = app.Services.CreateScope())
+{
+    var htmlGenerator = scope.ServiceProvider.GetRequiredService<HtmlGeneratorService>();
+    await htmlGenerator.RegenerateAsync(CancellationToken.None);
+}
 
 app.Run();
