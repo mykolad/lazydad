@@ -30,7 +30,7 @@ public class HtmlGeneratorService
 
         var html = BuildHtml(byLanguage, jokes.Count);
 
-        var wwwroot = env.WebRootPath ?? Path.Combine(env.ContentRootPath, "wwwroot");
+        var wwwroot = Path.Combine(env.ContentRootPath, "wwwroot");
         Directory.CreateDirectory(wwwroot);
 
         var path = Path.Combine(wwwroot, "index.html");

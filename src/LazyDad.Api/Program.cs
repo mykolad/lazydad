@@ -4,6 +4,7 @@ using LazyDad.Data;
 using LazyDad.Data.Repositories;
 using Microsoft.AspNetCore.HttpLogging;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.FileProviders;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -27,18 +28,17 @@ builder.Services.AddScoped<JokeGenerationService>();
 builder.Services.AddScoped<HtmlGeneratorService>();
 builder.Services.AddHostedService<JokeSchedulerService>();
 
-// WebRootPath is null when wwwroot doesn't exist in the published output.
-// Set it explicitly so UseDefaultFiles/UseStaticFiles know where to look,
-// then create the directory so the runtime file provider doesn't reject it.
 var wwwrootPath = Path.Combine(builder.Environment.ContentRootPath, "wwwroot");
 Directory.CreateDirectory(wwwrootPath);
-builder.Environment.WebRootPath = wwwrootPath;
 
 var app = builder.Build();
 
+// Pass an explicit PhysicalFileProvider so the middleware is not affected by
+// the stale internal WebRootFileProvider (which is snapshotted before wwwroot exists).
+var fileProvider = new PhysicalFileProvider(wwwrootPath);
 app.UseHttpLogging();
-app.UseDefaultFiles();
-app.UseStaticFiles();
+app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = fileProvider });
+app.UseStaticFiles(new StaticFileOptions { FileProvider = fileProvider });
 app.MapControllers();
 app.MapGet("/healthz", () => Results.Ok(new { status = "healthy" }));
 
