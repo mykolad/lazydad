@@ -26,6 +26,7 @@ builder.Services.AddHostedService<JokeSchedulerService>();
 
 var app = builder.Build();
 
+app.UseDefaultFiles();
 app.UseStaticFiles();
 app.MapControllers();
 app.MapGet("/healthz", () => Results.Ok(new { status = "healthy" }));
