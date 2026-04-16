@@ -1,9 +1,23 @@
+using LazyDad.Api.Configuration;
+using LazyDad.Data;
+using LazyDad.Data.Repositories;
+using Microsoft.EntityFrameworkCore;
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 
-// TODO Step 2: register LazyDadDbContext
-// TODO Step 3: bind configuration options
+builder.Services.AddDbContext<LazyDadDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+builder.Services.Configure<JokeGenerationOptions>(
+    builder.Configuration.GetSection(JokeGenerationOptions.SectionName));
+
+builder.Services.Configure<Dictionary<string, LlmProviderOptions>>(
+    builder.Configuration.GetSection(LlmProviderOptions.SectionName));
+
+builder.Services.AddScoped<IJokeRepository, JokeRepository>();
+
 // TODO Step 4: register LlmClientFactory and JokeGenerationService
 // TODO Step 5: register JokeSchedulerService (IHostedService)
 
