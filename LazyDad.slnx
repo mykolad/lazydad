@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/LazyDad.Api/LazyDad.Api.csproj" />
+    <Project Path="src/LazyDad.Data/LazyDad.Data.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/LazyDad.Tests/LazyDad.Tests.csproj" />
+  </Folder>
+</Solution>
