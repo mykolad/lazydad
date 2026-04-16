@@ -1,4 +1,5 @@
 using LazyDad.Api.Configuration;
+using LazyDad.Api.Services;
 using LazyDad.Data;
 using LazyDad.Data.Repositories;
 using Microsoft.EntityFrameworkCore;
@@ -18,7 +19,8 @@ builder.Services.Configure<Dictionary<string, LlmProviderOptions>>(
 
 builder.Services.AddScoped<IJokeRepository, JokeRepository>();
 
-// TODO Step 4: register LlmClientFactory and JokeGenerationService
+builder.Services.AddSingleton<ILlmClientFactory, LlmClientFactory>();
+builder.Services.AddScoped<JokeGenerationService>();
 // TODO Step 5: register JokeSchedulerService (IHostedService)
 
 var app = builder.Build();
