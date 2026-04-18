@@ -14,14 +14,19 @@ public class JokeGenerationServiceTests
     private readonly Mock<ILlmClientFactory> llmClientFactoryMock = new();
     private readonly Mock<IChatClient> chatClientMock = new();
 
+    private readonly LlmModelOptions defaultModel = new()
+    {
+        Provider = "AzureOpenAI",
+        Model = "gpt-5.4-mini"
+    };
+
     private readonly LanguageOptions russianLanguage = new()
     {
         Language = "Russian",
         Enabled = true,
         IntervalHours = 24,
-        LlmProvider = "AzureOpenAI",
-        LlmModel = "gpt-5.4-mini",
-        PromptHint = "Write the joke in Russian."
+        PromptHint = "Write the joke in Russian.",
+        LlmModels = [new() { Provider = "AzureOpenAI", Model = "gpt-5.4-mini" }]
     };
 
     private JokeGenerationService CreateService(int uniquenessSampleSize = 20)
@@ -53,7 +58,7 @@ public class JokeGenerationServiceTests
             .ReturnsAsync(new ChatResponse([new ChatMessage(ChatRole.Assistant, expectedJoke)]));
 
         var service = CreateService();
-        var result = await service.GenerateAsync(russianLanguage, CancellationToken.None);
+        var result = await service.GenerateAsync(russianLanguage, defaultModel, CancellationToken.None);
 
         Assert.Equal(expectedJoke, result);
     }
@@ -82,7 +87,7 @@ public class JokeGenerationServiceTests
             .ReturnsAsync(new ChatResponse([new ChatMessage(ChatRole.Assistant, "A new joke")]));
 
         var service = CreateService();
-        await service.GenerateAsync(russianLanguage, CancellationToken.None);
+        await service.GenerateAsync(russianLanguage, defaultModel, CancellationToken.None);
 
         Assert.NotNull(capturedMessages);
         var systemPrompt = capturedMessages.First().Text;

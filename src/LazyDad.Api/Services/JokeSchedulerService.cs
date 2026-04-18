@@ -41,8 +41,14 @@ public class JokeSchedulerService : BackgroundService
 
     private async Task RunLoopAsync(LanguageOptions language, CancellationToken stoppingToken)
     {
-        logger.LogInformation("Starting joke scheduler for language '{Language}' (every {Hours}h).",
-            language.Language, language.IntervalHours);
+        if (language.LlmModels.Count == 0)
+        {
+            logger.LogWarning("No LLM models configured for '{Language}'. Skipping.", language.Language);
+            return;
+        }
+
+        logger.LogInformation("Starting joke scheduler for language '{Language}' (every {Hours}h, {Count} model(s)).",
+            language.Language, language.IntervalHours, language.LlmModels.Count);
 
         // Generate immediately on startup, then on each period.
         await GenerateAndPersistAsync(language, stoppingToken);
@@ -62,40 +68,47 @@ public class JokeSchedulerService : BackgroundService
         var jokeRepository = scope.ServiceProvider.GetRequiredService<IJokeRepository>();
         var htmlGenerator = scope.ServiceProvider.GetRequiredService<HtmlGeneratorService>();
 
-        try
+        var anySucceeded = false;
+
+        foreach (var model in language.LlmModels)
         {
-            logger.LogInformation("Generating joke for '{Language}'...", language.Language);
-
-            var text = await generationService.GenerateAsync(language, stoppingToken);
-
-            if (string.IsNullOrWhiteSpace(text))
+            try
             {
-                logger.LogWarning("LLM returned an empty response for '{Language}'. Skipping.", language.Language);
-                return;
+                logger.LogInformation("Generating joke for '{Language}' using {Model}...", language.Language, model.Model);
+
+                var text = await generationService.GenerateAsync(language, model, stoppingToken);
+
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    logger.LogWarning("LLM returned an empty response for '{Language}' ({Model}). Skipping.", language.Language, model.Model);
+                    continue;
+                }
+
+                var joke = new Joke
+                {
+                    Language = language.Language,
+                    Model = model.Model,
+                    Text = text,
+                    GeneratedAt = DateTime.UtcNow
+                };
+
+                await jokeRepository.AddAsync(joke, stoppingToken);
+
+                logger.LogInformation("Joke saved for '{Language}' ({Model}): {Text}", language.Language, model.Model, text);
+
+                anySucceeded = true;
             }
-
-            var joke = new Joke
+            catch (OperationCanceledException)
             {
-                Language = language.Language,
-                Text = text,
-                GeneratedAt = DateTime.UtcNow
-            };
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to generate or persist joke for '{Language}' ({Model}).", language.Language, model.Model);
+            }
+        }
 
-            await jokeRepository.AddAsync(joke, stoppingToken);
-
-            logger.LogInformation("Joke saved for '{Language}': {Text}", language.Language, text);
-
+        if (anySucceeded)
             await htmlGenerator.RegenerateAsync(stoppingToken);
-        }
-        catch (OperationCanceledException)
-        {
-            // Shutdown requested — exit cleanly without logging as an error.
-            throw;
-        }
-        catch (Exception ex)
-        {
-            // Log and continue — one failure should not stop the scheduler.
-            logger.LogError(ex, "Failed to generate or persist joke for '{Language}'.", language.Language);
-        }
     }
 }
