@@ -34,7 +34,10 @@ public class JokeGenerationService
         using var chatClient = llmClientFactory.CreateClient(model.Provider, model.Model);
 
         var response = await chatClient.GetResponseAsync(
-            [new ChatMessage(ChatRole.System, prompt)],
+            [
+                new ChatMessage(ChatRole.System, prompt),
+                new ChatMessage(ChatRole.User, "Generate the joke now.")
+            ],
             cancellationToken: cancellationToken);
 
         return response.Text?.Trim() ?? string.Empty;
