@@ -57,7 +57,9 @@ public class HtmlGeneratorService
         sb.AppendLine("    h2 { font-size: 1.1rem; text-transform: uppercase; letter-spacing: 0.1em; color: #666; margin-top: 2.5rem; border-bottom: 1px solid #ddd; padding-bottom: 0.4rem; }");
         sb.AppendLine("    .joke { background: #fff; border: 1px solid #e8e8e8; border-radius: 6px; padding: 1rem 1.2rem; margin: 0.75rem 0; }");
         sb.AppendLine("    .joke p { margin: 0 0 0.4rem; line-height: 1.5; }");
+        sb.AppendLine("    .joke-meta { display: flex; gap: 1rem; align-items: center; margin-top: 0.4rem; }");
         sb.AppendLine("    .joke time { color: #aaa; font-size: 0.8rem; font-style: italic; }");
+        sb.AppendLine("    .joke .model { color: #fff; background: #888; border-radius: 3px; font-size: 0.7rem; padding: 0.1rem 0.4rem; font-family: monospace; font-style: normal; }");
         sb.AppendLine("    .empty { color: #aaa; font-style: italic; }");
         sb.AppendLine("  </style>");
         sb.AppendLine("</head>");
@@ -80,7 +82,11 @@ public class HtmlGeneratorService
                     var display = joke.GeneratedAt.ToString("dd MMM yyyy");
                     sb.AppendLine("  <div class=\"joke\">");
                     sb.AppendLine($"    <p>{EscapeHtml(joke.Text)}</p>");
-                    sb.AppendLine($"    <time datetime=\"{iso}\">{display}</time>");
+                    sb.AppendLine("    <div class=\"joke-meta\">");
+                    sb.AppendLine($"      <time datetime=\"{iso}\">{display}</time>");
+                    if (!string.IsNullOrWhiteSpace(joke.Model))
+                        sb.AppendLine($"      <span class=\"model\">{EscapeHtml(joke.Model)}</span>");
+                    sb.AppendLine("    </div>");
                     sb.AppendLine("  </div>");
                 }
             }

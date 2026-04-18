@@ -22,7 +22,7 @@ public class JokeGenerationService
         this.options = options;
     }
 
-    public async Task<string> GenerateAsync(LanguageOptions language, CancellationToken cancellationToken)
+    public async Task<string> GenerateAsync(LanguageOptions language, LlmModelOptions model, CancellationToken cancellationToken)
     {
         var recentJokes = await jokeRepository.GetRecentByLanguageAsync(
             language.Language,
@@ -31,7 +31,7 @@ public class JokeGenerationService
 
         var prompt = BuildSystemPrompt(language, recentJokes.Select(j => j.Text).ToList());
 
-        using var chatClient = llmClientFactory.CreateClient(language.LlmProvider, language.LlmModel);
+        using var chatClient = llmClientFactory.CreateClient(model.Provider, model.Model);
 
         var response = await chatClient.GetResponseAsync(
             [new ChatMessage(ChatRole.System, prompt)],
