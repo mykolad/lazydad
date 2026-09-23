@@ -1,0 +1,27 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <ProjectReference Include="..\LazyDad.Data\LazyDad.Data.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Azure.AI.OpenAI" Version="2.9.0-beta.1" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.6">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.5.0" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>787e2790-3b82-4086-a38c-c86cb58e524c</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="LazyDad.Tests" />
+  </ItemGroup>
+
+</Project>
