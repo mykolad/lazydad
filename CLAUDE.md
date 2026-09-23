@@ -44,7 +44,8 @@ tests/LazyDad.Tests — xUnit + Moq unit tests
   delete + insert in one transaction.
 - Russian language support was removed (migration `RemoveRussianJokes` purges its rows).
 - Distributed lock (`SchedulerLock` table) is scaffolded in the DB but not yet wired
-  up — deferred until multi-replica becomes a concern.
+  up. That's safe only because the app runs a single replica; it must be wired up
+  before scaling out (issue #5).
 
 ## EF Core migrations
 
@@ -72,10 +73,20 @@ Azure SQL firewall must allow the local machine's public IP.
 
 ## Azure resources
 
-- **SQL server:** `lazydad-sql-swedencentral` (swedencentral)
+- **SQL server:** `lazydad-sql-swedencentral` (swedencentral); database `lazydad-db` on the
+  **Basic** DTU tier (5 DTU, 2 GB), always on. Serverless was dropped: every 4-hour tick
+  woke it for the 60-minute auto-pause minimum, which cost about $74/month.
+- **Migrations** are applied by hand (`dotnet ef database update`, see above) before a
+  deploy that needs them; the app does not migrate on startup (issue #4).
 - **Azure OpenAI** (swedencentral): each `LlmModels[].Model` in config is the Azure deployment name (e.g. `gpt-5.3-chat`)
-- **Container Apps:** Linux containers, min 2 replicas
+- **Container Apps:** `lazydad-app`, Linux, Consumption profile, 0.5 vCPU / 1 GiB, **exactly
+  one replica** (min = max = 1), no health probes configured yet. Scaling out needs the
+  scheduler lock and shared page rendering first; see issue #6.
 - Port exposed by the container: **8080** (`ASPNETCORE_URLS=http://+:8080`)
+- **Deploy:** `tsg/redeploy.ps1` (local Docker), or build in ACR without Docker:
+  `az acr build --registry lazydadacr --image lazydad:<short-sha> .` then
+  `az containerapp update -n lazydad-app -g lazydad-rg --image <acr-login-server>/lazydad:<short-sha>`.
+  Tag images with the commit they were built from.
 
 ## Building and testing
 
