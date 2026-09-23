@@ -39,11 +39,24 @@ app.UseStaticFiles(new StaticFileOptions { FileProvider = fileProvider });
 app.MapControllers();
 app.MapGet("/healthz", () => Results.Ok(new { status = "healthy" }));
 
-// Regenerate the HTML page from existing jokes on every startup.
-using (var scope = app.Services.CreateScope())
+// Regenerate the HTML page from existing jokes once the server is listening, off the startup
+// path: a slow or unreachable DB (including EF's retry delays) must not keep /healthz down.
+// A failure is only logged; the scheduler's first tick regenerates the page again.
+app.Lifetime.ApplicationStarted.Register(() => _ = Task.Run(async () =>
 {
-    var htmlGenerator = scope.ServiceProvider.GetRequiredService<HtmlGeneratorService>();
-    await htmlGenerator.RegenerateAsync(CancellationToken.None);
-}
+    try
+    {
+        using var scope = app.Services.CreateScope();
+        var htmlGenerator = scope.ServiceProvider.GetRequiredService<HtmlGeneratorService>();
+        await htmlGenerator.RegenerateAsync(app.Lifetime.ApplicationStopping);
+    }
+    catch (OperationCanceledException) when (app.Lifetime.ApplicationStopping.IsCancellationRequested)
+    {
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning(ex, "Startup HTML regeneration failed; the scheduler will regenerate the page on its next tick.");
+    }
+}));
 
 app.Run();
