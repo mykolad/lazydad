@@ -4,6 +4,7 @@ using LazyDad.Data;
 using LazyDad.Data.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,8 +14,10 @@ builder.Services.AddDbContext<LazyDadDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"),
         sql => sql.EnableRetryOnFailure()));
 
-builder.Services.Configure<JokeGenerationOptions>(
-    builder.Configuration.GetSection(JokeGenerationOptions.SectionName));
+builder.Services.AddOptions<JokeGenerationOptions>()
+    .Bind(builder.Configuration.GetSection(JokeGenerationOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<JokeGenerationOptions>, JokeGenerationOptionsValidator>();
 
 builder.Services.Configure<TopJokesOptions>(
     builder.Configuration.GetSection(TopJokesOptions.SectionName));
@@ -44,11 +47,24 @@ app.UseStaticFiles(new StaticFileOptions { FileProvider = fileProvider });
 app.MapControllers();
 app.MapGet("/healthz", () => Results.Ok(new { status = "healthy" }));
 
-// Regenerate the HTML page from existing jokes on every startup.
-using (var scope = app.Services.CreateScope())
+// Regenerate the HTML page from existing jokes once the server is listening, off the startup
+// path: a slow or unreachable DB (including EF's retry delays) must not keep /healthz down.
+// A failure is only logged; the scheduler's first tick regenerates the page again.
+app.Lifetime.ApplicationStarted.Register(() => _ = Task.Run(async () =>
 {
-    var htmlGenerator = scope.ServiceProvider.GetRequiredService<HtmlGeneratorService>();
-    await htmlGenerator.RegenerateAsync(CancellationToken.None);
-}
+    try
+    {
+        using var scope = app.Services.CreateScope();
+        var htmlGenerator = scope.ServiceProvider.GetRequiredService<HtmlGeneratorService>();
+        await htmlGenerator.RegenerateAsync(app.Lifetime.ApplicationStopping);
+    }
+    catch (OperationCanceledException) when (app.Lifetime.ApplicationStopping.IsCancellationRequested)
+    {
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning(ex, "Startup HTML regeneration failed; the scheduler will regenerate the page on its next tick.");
+    }
+}));
 
 app.Run();
