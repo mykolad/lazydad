@@ -4,6 +4,7 @@ using LazyDad.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace LazyDad.Data.Migrations
 {
     [DbContext(typeof(LazyDadDbContext))]
-    partial class LazyDadDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260923052321_RemoveRussianJokes")]
+    partial class RemoveRussianJokes
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -74,50 +77,6 @@ namespace LazyDad.Data.Migrations
                     b.HasKey("LockKey");
 
                     b.ToTable("SchedulerLocks");
-                });
-
-            modelBuilder.Entity("LazyDad.Data.Entities.TopJoke", b =>
-                {
-                    b.Property<string>("Language")
-                        .HasMaxLength(50)
-                        .HasColumnType("nvarchar(50)");
-
-                    b.Property<int>("Rank")
-                        .HasColumnType("int");
-
-                    b.Property<int>("JokeId")
-                        .HasColumnType("int");
-
-                    b.Property<string>("JudgeModel")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("nvarchar(100)");
-
-                    b.Property<string>("Reason")
-                        .IsRequired()
-                        .HasMaxLength(500)
-                        .HasColumnType("nvarchar(500)");
-
-                    b.Property<DateTime>("SelectedAt")
-                        .HasColumnType("datetime2");
-
-                    b.HasKey("Language", "Rank");
-
-                    b.HasIndex("JokeId")
-                        .IsUnique();
-
-                    b.ToTable("TopJokes");
-                });
-
-            modelBuilder.Entity("LazyDad.Data.Entities.TopJoke", b =>
-                {
-                    b.HasOne("LazyDad.Data.Entities.Joke", "Joke")
-                        .WithMany()
-                        .HasForeignKey("JokeId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Joke");
                 });
 #pragma warning restore 612, 618
         }

@@ -16,13 +16,18 @@ builder.Services.AddDbContext<LazyDadDbContext>(options =>
 builder.Services.Configure<JokeGenerationOptions>(
     builder.Configuration.GetSection(JokeGenerationOptions.SectionName));
 
+builder.Services.Configure<TopJokesOptions>(
+    builder.Configuration.GetSection(TopJokesOptions.SectionName));
+
 builder.Services.Configure<Dictionary<string, LlmProviderOptions>>(
     builder.Configuration.GetSection(LlmProviderOptions.SectionName));
 
 builder.Services.AddScoped<IJokeRepository, JokeRepository>();
+builder.Services.AddScoped<ITopJokeRepository, TopJokeRepository>();
 
 builder.Services.AddSingleton<ILlmClientFactory, LlmClientFactory>();
 builder.Services.AddScoped<JokeGenerationService>();
+builder.Services.AddScoped<TopJokeService>();
 builder.Services.AddScoped<HtmlGeneratorService>();
 builder.Services.AddHostedService<JokeSchedulerService>();
 

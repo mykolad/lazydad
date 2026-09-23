@@ -20,12 +20,12 @@ public class JokeGenerationServiceTests
         Model = "gpt-5.4-mini"
     };
 
-    private readonly LanguageOptions russianLanguage = new()
+    private readonly LanguageOptions ukrainianLanguage = new()
     {
-        Language = "Russian",
+        Language = "Ukrainian",
         Enabled = true,
         IntervalHours = 24,
-        PromptHint = "Write the joke in Russian.",
+        PromptHint = "Write the joke in Ukrainian.",
         LlmModels = [new() { Provider = "AzureOpenAI", Model = "gpt-5.4-mini" }]
     };
 
@@ -34,7 +34,7 @@ public class JokeGenerationServiceTests
         var options = Options.Create(new JokeGenerationOptions
         {
             UniquenessSampleSize = uniquenessSampleSize,
-            Languages = [russianLanguage]
+            Languages = [ukrainianLanguage]
         });
 
         return new JokeGenerationService(jokeRepositoryMock.Object, llmClientFactoryMock.Object, options);
@@ -46,7 +46,7 @@ public class JokeGenerationServiceTests
         const string expectedJoke = "Why did the scarecrow win an award? Because he was outstanding in his field!";
 
         jokeRepositoryMock
-            .Setup(r => r.GetRecentByLanguageAsync("Russian", 20, It.IsAny<CancellationToken>()))
+            .Setup(r => r.GetRecentByLanguageAsync("Ukrainian", 20, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
 
         llmClientFactoryMock
@@ -58,7 +58,7 @@ public class JokeGenerationServiceTests
             .ReturnsAsync(new ChatResponse([new ChatMessage(ChatRole.Assistant, expectedJoke)]));
 
         var service = CreateService();
-        var result = await service.GenerateAsync(russianLanguage, defaultModel, CancellationToken.None);
+        var result = await service.GenerateAsync(ukrainianLanguage, defaultModel, CancellationToken.None);
 
         Assert.Equal(expectedJoke, result);
     }
@@ -68,12 +68,12 @@ public class JokeGenerationServiceTests
     {
         var recentJokes = new List<Joke>
         {
-            new() { Language = "Russian", Text = "Joke one", GeneratedAt = DateTime.UtcNow },
-            new() { Language = "Russian", Text = "Joke two", GeneratedAt = DateTime.UtcNow }
+            new() { Language = "Ukrainian", Text = "Joke one", GeneratedAt = DateTime.UtcNow },
+            new() { Language = "Ukrainian", Text = "Joke two", GeneratedAt = DateTime.UtcNow }
         };
 
         jokeRepositoryMock
-            .Setup(r => r.GetRecentByLanguageAsync("Russian", 20, It.IsAny<CancellationToken>()))
+            .Setup(r => r.GetRecentByLanguageAsync("Ukrainian", 20, It.IsAny<CancellationToken>()))
             .ReturnsAsync(recentJokes);
 
         llmClientFactoryMock
@@ -87,7 +87,7 @@ public class JokeGenerationServiceTests
             .ReturnsAsync(new ChatResponse([new ChatMessage(ChatRole.Assistant, "A new joke")]));
 
         var service = CreateService();
-        await service.GenerateAsync(russianLanguage, defaultModel, CancellationToken.None);
+        await service.GenerateAsync(ukrainianLanguage, defaultModel, CancellationToken.None);
 
         Assert.NotNull(capturedMessages);
         var systemPrompt = capturedMessages.First().Text;
@@ -98,7 +98,7 @@ public class JokeGenerationServiceTests
     [Fact]
     public void BuildSystemPrompt_WithNoRecentJokes_DoesNotIncludeExclusionList()
     {
-        var prompt = JokeGenerationService.BuildSystemPrompt(russianLanguage, []);
+        var prompt = JokeGenerationService.BuildSystemPrompt(ukrainianLanguage, []);
 
         Assert.DoesNotContain("already-used", prompt);
     }
@@ -108,7 +108,7 @@ public class JokeGenerationServiceTests
     {
         var jokes = new List<string> { "First joke", "Second joke" };
 
-        var prompt = JokeGenerationService.BuildSystemPrompt(russianLanguage, jokes);
+        var prompt = JokeGenerationService.BuildSystemPrompt(ukrainianLanguage, jokes);
 
         Assert.Contains("First joke", prompt);
         Assert.Contains("Second joke", prompt);
@@ -118,8 +118,8 @@ public class JokeGenerationServiceTests
     [Fact]
     public void BuildSystemPrompt_IncludesPromptHint()
     {
-        var prompt = JokeGenerationService.BuildSystemPrompt(russianLanguage, []);
+        var prompt = JokeGenerationService.BuildSystemPrompt(ukrainianLanguage, []);
 
-        Assert.Contains(russianLanguage.PromptHint, prompt);
+        Assert.Contains(ukrainianLanguage.PromptHint, prompt);
     }
 }
