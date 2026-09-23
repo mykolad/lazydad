@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  # Minimum line coverage (%) for LazyDad.Api + LazyDad.Data, migrations excluded.
+  # Ratchet this up as tests are added; never lower it to make a PR pass.
+  COVERAGE_MIN_LINE: 25
+
+jobs:
+  build-and-test:
+    name: build-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'dotnet-tools.json') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: |
+          dotnet restore LazyDad.slnx
+          dotnet tool restore
+
+      - name: Build
+        run: dotnet build LazyDad.slnx -c Release --no-restore
+
+      - name: Test with coverage
+        run: >
+          dotnet test LazyDad.slnx -c Release --no-build
+          --settings tests/LazyDad.Tests/coverage.runsettings
+          --results-directory TestResults
+          --logger "trx;LogFileName=results.trx"
+
+      - name: Coverage report
+        if: ${{ !cancelled() }}
+        run: >
+          dotnet tool run reportgenerator
+          -reports:"TestResults/**/coverage.cobertura.xml"
+          -targetdir:coverage
+          -reporttypes:"MarkdownSummaryGithub;JsonSummary;Html"
+
+      - name: Publish coverage summary
+        if: ${{ !cancelled() }}
+        run: cat coverage/SummaryGithub.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce coverage threshold
+        run: |
+          line=$(jq '.summary.linecoverage' coverage/Summary.json)
+          echo "Line coverage: ${line}% (minimum ${COVERAGE_MIN_LINE}%)"
+          if awk -v c="$line" -v m="$COVERAGE_MIN_LINE" 'BEGIN { exit !(c < m) }'; then
+            echo "::error title=Coverage too low::Line coverage ${line}% is below the required ${COVERAGE_MIN_LINE}%."
+            exit 1
+          fi
+
+      - name: Upload test results and coverage
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-and-coverage
+          path: |
+            TestResults/**/*.trx
+            coverage/
+          retention-days: 14

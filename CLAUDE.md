@@ -84,6 +84,21 @@ dotnet build lazydad.slnx
 dotnet test  lazydad.slnx
 ```
 
+## CI
+
+`.github/workflows/ci.yml` runs on every PR and on pushes to `master`: build, tests, and
+coverage (coverlet → ReportGenerator, pinned in `dotnet-tools.json`). The job fails if line coverage
+is below `COVERAGE_MIN_LINE`. Coverage settings (included assemblies, migrations excluded)
+live in `tests/LazyDad.Tests/coverage.runsettings`. To run the same check locally:
+
+```
+dotnet tool restore
+dotnet test LazyDad.slnx --settings tests/LazyDad.Tests/coverage.runsettings --results-directory TestResults
+dotnet tool run reportgenerator -reports:"TestResults/**/coverage.cobertura.xml" -targetdir:coverage -reporttypes:Html
+```
+
+Raise `COVERAGE_MIN_LINE` as coverage grows; never lower it to get a PR through.
+
 ## Docker
 
 ```
