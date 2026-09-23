@@ -84,6 +84,20 @@ dotnet build lazydad.slnx
 dotnet test  lazydad.slnx
 ```
 
+## CI
+
+`.github/workflows/ci.yml` runs on every PR and on pushes to `master`: build, then
+`tools/coverage.ps1` for tests, coverage (coverlet → ReportGenerator, pinned in `dotnet-tools.json`),
+and the gate. The job fails if line coverage is below the script's `$MinLineCoverage`.
+Coverage settings (included assemblies, migrations excluded) live in
+`tests/LazyDad.Tests/coverage.runsettings`. CI runs the same script, so a local run reproduces the gate:
+
+```
+./tools/coverage.ps1        # HTML report at coverage/index.html
+```
+
+Raise `$MinLineCoverage` as coverage grows; never lower it to get a PR through.
+
 ## Docker
 
 ```
