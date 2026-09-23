@@ -102,7 +102,7 @@ public class JokeSchedulerService : BackgroundService
 
                 logger.LogInformation("Joke saved for '{Language}' ({Model}): {Text}", joke.Language, joke.Model, joke.Text);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
                 throw;
             }
@@ -118,7 +118,7 @@ public class JokeSchedulerService : BackgroundService
         {
             topChanged = await topJokeService.UpdateAsync(language.Language, saved, stoppingToken);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
             throw;
         }
@@ -158,7 +158,9 @@ public class JokeSchedulerService : BackgroundService
                 GeneratedAt = DateTime.UtcNow
             };
         }
-        catch (OperationCanceledException)
+        // Only shutdown propagates. A provider timeout is also an OperationCanceledException;
+        // rethrowing it would fault Task.WhenAll and discard the sibling models' jokes.
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
             throw;
         }
