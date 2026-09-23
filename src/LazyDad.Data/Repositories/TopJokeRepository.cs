@@ -12,8 +12,11 @@ public class TopJokeRepository : ITopJokeRepository
         this.context = context;
     }
 
+    // Reads are no-tracking: ReplaceAsync inserts rows with the same (Language, Rank) keys,
+    // which EF refuses to track while the previously read instances are still tracked.
     public async Task<List<TopJoke>> GetAllAsync(CancellationToken cancellationToken)
         => await context.TopJokes
+            .AsNoTracking()
             .Include(t => t.Joke)
             .OrderBy(t => t.Language)
             .ThenBy(t => t.Rank)
@@ -21,6 +24,7 @@ public class TopJokeRepository : ITopJokeRepository
 
     public async Task<List<TopJoke>> GetByLanguageAsync(string language, CancellationToken cancellationToken)
         => await context.TopJokes
+            .AsNoTracking()
             .Include(t => t.Joke)
             .Where(t => t.Language == language)
             .OrderBy(t => t.Rank)
@@ -39,6 +43,11 @@ public class TopJokeRepository : ITopJokeRepository
             await context.TopJokes
                 .Where(t => t.Language == language)
                 .ExecuteDeleteAsync(cancellationToken);
+
+            // ExecuteDelete bypasses the change tracker; drop any rows still tracked for this
+            // language (e.g. loaded by a caller with tracking) so the inserts don't collide.
+            foreach (var stale in context.ChangeTracker.Entries<TopJoke>().Where(e => e.Entity.Language == language).ToList())
+                stale.State = EntityState.Detached;
 
             context.TopJokes.AddRange(entries);
             await context.SaveChangesAsync(cancellationToken);
