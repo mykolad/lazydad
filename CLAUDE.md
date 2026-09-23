@@ -32,6 +32,7 @@ tests/LazyDad.Tests — xUnit + Moq unit tests
 - `HtmlGeneratorService.RegenerateAsync` rewrites `wwwroot/index.html` in full each
   time — simple and stateless.
 - One `PeriodicTimer` loop per enabled language runs concurrently via `Task.WhenAll`.
+- Russian language support was removed (migration `RemoveRussianJokes` purges its rows).
 - Distributed lock (`SchedulerLock` table) is scaffolded in the DB but not yet wired
   up — deferred until multi-replica becomes a concern.
 
