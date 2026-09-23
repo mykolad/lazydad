@@ -147,10 +147,13 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         // Logged by the tick's catch block, i.e. after the exception has been handled.
         await schedulerLogger.WaitForAsync(LogLevel.Error, "tick for 'Ukrainian' failed", Timeout);
 
-        // The loop has moved on to wait for its next tick rather than faulting.
-        Assert.False(scheduler.ExecuteTask!.IsCompleted);
         Assert.DoesNotContain(schedulerLogger.Entries, e => e.Message.Contains("tick for 'Ukrainian' completed"));
         await scheduler.StopAsync(CancellationToken.None);
+
+        // The error log is written inside the catch block, so "not completed" right after it
+        // proves little. StopAsync doesn't rethrow a faulted ExecuteTask either. The terminal
+        // state does prove it: a loop that survived ends cancelled by shutdown, never faulted.
+        Assert.True(scheduler.ExecuteTask!.IsCanceled, $"Expected Canceled, was {scheduler.ExecuteTask.Status}.");
         Assert.Single(saved);
     }
 
