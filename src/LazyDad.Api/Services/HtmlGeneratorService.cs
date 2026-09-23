@@ -1,45 +1,73 @@
 using System.Text;
+using LazyDad.Api.Configuration;
 using LazyDad.Data.Entities;
 using LazyDad.Data.Repositories;
+using Microsoft.Extensions.Options;
 
 namespace LazyDad.Api.Services;
 
 public class HtmlGeneratorService
 {
+    // The service is scoped, so the lock must be static to serialize writers across scopes
+    // (concurrent language loops, startup regeneration).
+    private static readonly SemaphoreSlim WriteLock = new(1, 1);
+
     private readonly IJokeRepository jokeRepository;
     private readonly ITopJokeRepository topJokeRepository;
+    private readonly IOptions<JokeGenerationOptions> options;
     private readonly IWebHostEnvironment env;
     private readonly ILogger<HtmlGeneratorService> logger;
 
     public HtmlGeneratorService(
         IJokeRepository jokeRepository,
         ITopJokeRepository topJokeRepository,
+        IOptions<JokeGenerationOptions> options,
         IWebHostEnvironment env,
         ILogger<HtmlGeneratorService> logger)
     {
         this.jokeRepository = jokeRepository;
         this.topJokeRepository = topJokeRepository;
+        this.options = options;
         this.env = env;
         this.logger = logger;
     }
 
     public async Task RegenerateAsync(CancellationToken cancellationToken)
     {
-        var jokes = await jokeRepository.GetAllAsync(cancellationToken);
-        var topJokes = await topJokeRepository.GetAllAsync(cancellationToken);
+        await WriteLock.WaitAsync(cancellationToken);
+        try
+        {
+            var jokes = await jokeRepository.GetAllAsync(cancellationToken);
+            var topJokes = await topJokeRepository.GetAllAsync(cancellationToken);
 
-        var html = BuildHtml(jokes, topJokes);
+            var html = BuildHtml(jokes, topJokes, LanguageCodes(options.Value));
 
-        var wwwroot = Path.Combine(env.ContentRootPath, "wwwroot");
-        Directory.CreateDirectory(wwwroot);
+            var wwwroot = Path.Combine(env.ContentRootPath, "wwwroot");
+            Directory.CreateDirectory(wwwroot);
 
-        var path = Path.Combine(wwwroot, "index.html");
-        await File.WriteAllTextAsync(path, html, Encoding.UTF8, cancellationToken);
+            // Write to a temp file and rename over the old page, so a request never sees a half-written file.
+            var path = Path.Combine(wwwroot, "index.html");
+            var tempPath = path + ".tmp";
+            await File.WriteAllTextAsync(tempPath, html, Encoding.UTF8, cancellationToken);
+            File.Move(tempPath, path, overwrite: true);
 
-        logger.LogInformation("index.html regenerated ({Count} jokes).", jokes.Count);
+            logger.LogInformation("index.html regenerated ({Count} jokes).", jokes.Count);
+        }
+        finally
+        {
+            WriteLock.Release();
+        }
     }
 
-    internal static string BuildHtml(IReadOnlyList<Joke> jokes, IReadOnlyList<TopJoke> topJokes)
+    internal static IReadOnlyDictionary<string, string> LanguageCodes(JokeGenerationOptions options)
+        => options.Languages
+            .Where(l => !string.IsNullOrWhiteSpace(l.LanguageCode))
+            .ToDictionary(l => l.Language, l => l.LanguageCode, StringComparer.OrdinalIgnoreCase);
+
+    internal static string BuildHtml(
+        IReadOnlyList<Joke> jokes,
+        IReadOnlyList<TopJoke> topJokes,
+        IReadOnlyDictionary<string, string> languageCodes)
     {
         var sb = new StringBuilder();
         sb.AppendLine("<!DOCTYPE html>");
@@ -78,7 +106,7 @@ public class HtmlGeneratorService
             foreach (var top in group.OrderBy(t => t.Rank))
             {
                 sb.AppendLine("    <div class=\"joke\">");
-                sb.AppendLine($"      <p><span class=\"rank\">{RankBadge(top.Rank)}</span>{EscapeHtml(top.Joke.Text)}</p>");
+                sb.AppendLine($"      <p><span class=\"rank\">{RankBadge(top.Rank)}</span><span{LangAttribute(top.Language, languageCodes)}>{EscapeHtml(top.Joke.Text)}</span></p>");
                 if (!string.IsNullOrWhiteSpace(top.Reason))
                     sb.AppendLine($"      <p class=\"reason\">{EscapeHtml(top.Reason)}</p>");
                 sb.AppendLine("      <div class=\"joke-meta\">");
@@ -106,7 +134,7 @@ public class HtmlGeneratorService
                 var iso = joke.GeneratedAt.ToString("yyyy-MM-ddTHH:mm:ssZ");
                 var display = joke.GeneratedAt.ToString("dd MMM yyyy");
                 sb.AppendLine("  <div class=\"joke\">");
-                sb.AppendLine($"    <p>{EscapeHtml(joke.Text)}</p>");
+                sb.AppendLine($"    <p{LangAttribute(joke.Language, languageCodes)}>{EscapeHtml(joke.Text)}</p>");
                 sb.AppendLine("    <div class=\"joke-meta\">");
                 sb.AppendLine($"      <time datetime=\"{iso}\">{display}</time>");
                 if (!string.IsNullOrWhiteSpace(joke.Language))
@@ -130,6 +158,11 @@ public class HtmlGeneratorService
         3 => "🥉",
         _ => $"#{rank}"
     };
+
+    // The page chrome is English (<html lang="en">); each joke is tagged with its own language
+    // so screen readers pronounce it correctly.
+    private static string LangAttribute(string language, IReadOnlyDictionary<string, string> languageCodes)
+        => languageCodes.TryGetValue(language, out var code) ? $" lang=\"{EscapeHtml(code)}\"" : string.Empty;
 
     private static string EscapeHtml(string text)
         => text.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;");

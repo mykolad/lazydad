@@ -73,7 +73,7 @@ Azure SQL firewall must allow the local machine's public IP.
 ## Azure resources
 
 - **SQL server:** `lazydad-sql-swedencentral` (swedencentral)
-- **OpenAI deployment:** `gpt-5.4-mini` on Azure OpenAI (swedencentral)
+- **Azure OpenAI** (swedencentral): each `LlmModels[].Model` in config is the Azure deployment name (e.g. `gpt-5.3-chat`)
 - **Container Apps:** Linux containers, min 2 replicas
 - Port exposed by the container: **8080** (`ASPNETCORE_URLS=http://+:8080`)
 

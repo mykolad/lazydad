@@ -51,13 +51,33 @@ public class JokeSchedulerService : BackgroundService
             language.Language, language.IntervalHours, language.LlmModels.Count);
 
         // Generate immediately on startup, then on each period.
-        await GenerateAndPersistAsync(language, stoppingToken);
+        await RunTickAsync(language, stoppingToken);
 
         using var timer = new PeriodicTimer(TimeSpan.FromHours(language.IntervalHours));
 
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
+            await RunTickAsync(language, stoppingToken);
+        }
+    }
+
+    /// <summary>
+    /// Runs one tick. Any failure (e.g. a transient DB error during HTML regeneration) is
+    /// logged, so the loop survives and retries on the next tick instead of stopping the host.
+    /// </summary>
+    private async Task RunTickAsync(LanguageOptions language, CancellationToken stoppingToken)
+    {
+        try
+        {
             await GenerateAndPersistAsync(language, stoppingToken);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Joke tick for '{Language}' failed; will retry on the next tick.", language.Language);
         }
     }
 

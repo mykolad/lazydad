@@ -1,3 +1,8 @@
+# Fail fast: stop on the first error, including a non-zero exit from az/docker
+# (PowerShell 7.3+), so a failed login, build or push never reaches the app update.
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
+
 $ACR_NAME   = "lazydadacr"
 $RG         = "lazydad-rg"
 $APP_NAME   = "lazydad-app"
