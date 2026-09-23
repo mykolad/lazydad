@@ -19,8 +19,10 @@ builder.Services.AddOptions<JokeGenerationOptions>()
     .ValidateOnStart();
 builder.Services.AddSingleton<IValidateOptions<JokeGenerationOptions>, JokeGenerationOptionsValidator>();
 
-builder.Services.Configure<TopJokesOptions>(
-    builder.Configuration.GetSection(TopJokesOptions.SectionName));
+builder.Services.AddOptions<TopJokesOptions>()
+    .Bind(builder.Configuration.GetSection(TopJokesOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<TopJokesOptions>, TopJokesOptionsValidator>();
 
 builder.Services.Configure<Dictionary<string, LlmProviderOptions>>(
     builder.Configuration.GetSection(LlmProviderOptions.SectionName));
