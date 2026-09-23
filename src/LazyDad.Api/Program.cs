@@ -4,6 +4,7 @@ using LazyDad.Data;
 using LazyDad.Data.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,8 +14,10 @@ builder.Services.AddDbContext<LazyDadDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"),
         sql => sql.EnableRetryOnFailure()));
 
-builder.Services.Configure<JokeGenerationOptions>(
-    builder.Configuration.GetSection(JokeGenerationOptions.SectionName));
+builder.Services.AddOptions<JokeGenerationOptions>()
+    .Bind(builder.Configuration.GetSection(JokeGenerationOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<JokeGenerationOptions>, JokeGenerationOptionsValidator>();
 
 builder.Services.Configure<Dictionary<string, LlmProviderOptions>>(
     builder.Configuration.GetSection(LlmProviderOptions.SectionName));
