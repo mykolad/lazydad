@@ -15,9 +15,6 @@ concurrency:
 env:
   DOTNET_NOLOGO: true
   DOTNET_CLI_TELEMETRY_OPTOUT: true
-  # Minimum line coverage (%) for LazyDad.Api + LazyDad.Data, migrations excluded.
-  # Ratchet this up as tests are added; never lower it to make a PR pass.
-  COVERAGE_MIN_LINE: 25
 
 jobs:
   build-and-test:
@@ -46,33 +43,14 @@ jobs:
       - name: Build
         run: dotnet build LazyDad.slnx -c Release --no-restore
 
-      - name: Test with coverage
-        run: >
-          dotnet test LazyDad.slnx -c Release --no-build
-          --settings tests/LazyDad.Tests/coverage.runsettings
-          --results-directory TestResults
-          --logger "trx;LogFileName=results.trx"
-
-      - name: Coverage report
-        if: ${{ !cancelled() }}
-        run: >
-          dotnet tool run reportgenerator
-          -reports:"TestResults/**/coverage.cobertura.xml"
-          -targetdir:coverage
-          -reporttypes:"MarkdownSummaryGithub;JsonSummary;Html"
+      # Same script as local runs; the coverage minimum lives there.
+      - name: Test, coverage report, and coverage gate
+        shell: pwsh
+        run: ./tools/coverage.ps1 -NoBuild
 
       - name: Publish coverage summary
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && hashFiles('coverage/SummaryGithub.md') != '' }}
         run: cat coverage/SummaryGithub.md >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Enforce coverage threshold
-        run: |
-          line=$(jq '.summary.linecoverage' coverage/Summary.json)
-          echo "Line coverage: ${line}% (minimum ${COVERAGE_MIN_LINE}%)"
-          if awk -v c="$line" -v m="$COVERAGE_MIN_LINE" 'BEGIN { exit !(c < m) }'; then
-            echo "::error title=Coverage too low::Line coverage ${line}% is below the required ${COVERAGE_MIN_LINE}%."
-            exit 1
-          fi
 
       - name: Upload test results and coverage
         if: ${{ !cancelled() }}
