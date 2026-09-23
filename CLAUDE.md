@@ -32,6 +32,16 @@ tests/LazyDad.Tests — xUnit + Moq unit tests
 - `HtmlGeneratorService.RegenerateAsync` rewrites `wwwroot/index.html` in full each
   time — simple and stateless.
 - One `PeriodicTimer` loop per enabled language runs concurrently via `Task.WhenAll`.
+  Within a tick, all of a language's `LlmModels` are called in parallel, each in its
+  own DI scope (a `DbContext` must not be shared across concurrent calls); jokes are
+  then persisted sequentially.
+- **Top-N leaderboard** (`TopJokes` config, `TopJokeService`, `TopJokes` table): after
+  each tick a reasoning "judge" model (`TopJokes:Judge`, e.g. `gpt-6-sol`) sees the
+  current top N plus the new jokes and returns the new ranking as a JSON-schema
+  structured response. If the leaderboard is empty or short, it is seeded from the last
+  `SeedSampleSize` jokes. Invalid verdicts (unknown/duplicate ids, wrong count) are
+  discarded; an unchanged ranking skips the DB write. `ReplaceAsync` does
+  delete + insert in one transaction.
 - Russian language support was removed (migration `RemoveRussianJokes` purges its rows).
 - Distributed lock (`SchedulerLock` table) is scaffolded in the DB but not yet wired
   up — deferred until multi-replica becomes a concern.
