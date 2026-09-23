@@ -124,6 +124,8 @@ public class TopJokeServiceTests
     [InlineData("""{"picks":[{"jokeId":1,"reason":"a"},{"jokeId":99,"reason":"b"},{"jokeId":2,"reason":"c"}]}""")] // unknown id
     [InlineData("""{"picks":[{"jokeId":1,"reason":"a"},{"jokeId":1,"reason":"b"},{"jokeId":2,"reason":"c"}]}""")]  // duplicate
     [InlineData("""{"picks":[{"jokeId":1,"reason":"a"},{"jokeId":2,"reason":"b"}]}""")]                             // too few
+    [InlineData("""{"picks":[{"jokeId":1,"reason":"a"},null,{"jokeId":2,"reason":"c"}]}""")]                   // null pick
+    [InlineData("""{"picks":null}""")]
     [InlineData("not json")]
     public async Task UpdateAsync_WhenVerdictInvalid_DoesNotWrite(string reply)
     {
@@ -172,5 +174,46 @@ public class TopJokeServiceTests
 
         Assert.Contains("[id=1] (CURRENT #1) Joke 1", prompt);
         Assert.Contains("[id=10] Joke 10", prompt);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_WhenPickHasNoReason_SavesEmptyReason()
+    {
+        SetupCurrentTop([MakeTop(1, MakeJoke(1)), MakeTop(2, MakeJoke(2)), MakeTop(3, MakeJoke(3))]);
+        SetupJudgeReply("""{"picks":[{"jokeId":10},{"jokeId":1,"reason":null},{"jokeId":2,"reason":" ok "}]}""");
+
+        IReadOnlyList<TopJoke>? saved = null;
+        topJokeRepositoryMock
+            .Setup(r => r.ReplaceAsync(Language, It.IsAny<IReadOnlyList<TopJoke>>(), It.IsAny<CancellationToken>()))
+            .Callback<string, IReadOnlyList<TopJoke>, CancellationToken>((_, entries, _) => saved = entries)
+            .Returns(Task.CompletedTask);
+
+        var changed = await CreateService().UpdateAsync(Language, [MakeJoke(10)], CancellationToken.None);
+
+        Assert.True(changed);
+        Assert.NotNull(saved);
+        Assert.Equal(["", "", "ok"], saved.Select(e => e.Reason));
+    }
+
+    [Fact]
+    public async Task UpdateAsync_WhenLeaderboardLargerThanSize_TrimsWithoutCallingJudge()
+    {
+        topJokesOptions.Size = 2;
+        SetupCurrentTop([MakeTop(1, MakeJoke(1)), MakeTop(2, MakeJoke(2)), MakeTop(3, MakeJoke(3))]);
+
+        IReadOnlyList<TopJoke>? saved = null;
+        topJokeRepositoryMock
+            .Setup(r => r.ReplaceAsync(Language, It.IsAny<IReadOnlyList<TopJoke>>(), It.IsAny<CancellationToken>()))
+            .Callback<string, IReadOnlyList<TopJoke>, CancellationToken>((_, entries, _) => saved = entries)
+            .Returns(Task.CompletedTask);
+
+        var changed = await CreateService().UpdateAsync(Language, [], CancellationToken.None);
+
+        Assert.True(changed);
+        Assert.NotNull(saved);
+        Assert.Equal([1, 2], saved.Select(e => e.JokeId));
+        Assert.Equal([1, 2], saved.Select(e => e.Rank));
+        Assert.All(saved, e => Assert.Null(e.Joke));
+        llmClientFactoryMock.Verify(f => f.CreateClient(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
     }
 }

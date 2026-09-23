@@ -49,6 +49,15 @@ public class TopJokeService
         var current = await topJokeRepository.GetByLanguageAsync(language, cancellationToken);
         var seeding = current.Count < settings.Size;
 
+        if (current.Count > settings.Size && newJokes.Count == 0)
+        {
+            // Size was lowered since the leaderboard was written: keep the best-ranked rows.
+            // The ranking itself is unchanged, so there's nothing to ask the judge.
+            await topJokeRepository.ReplaceAsync(language, current.Take(settings.Size).Select(CopyOf).ToList(), cancellationToken);
+            logger.LogInformation("'{Language}' leaderboard trimmed from {Old} to {Size} rows.", language, current.Count, settings.Size);
+            return true;
+        }
+
         if (!seeding && newJokes.Count == 0)
             return false;
 
@@ -91,7 +100,8 @@ public class TopJokeService
                 Language = language,
                 Rank = index + 1,
                 JokeId = pick.JokeId,
-                Reason = Truncate(pick.Reason.Trim(), MaxReasonLength),
+                // System.Text.Json doesn't enforce the non-nullable annotation, so a verdict can omit it.
+                Reason = Truncate(pick.Reason?.Trim() ?? string.Empty, MaxReasonLength),
                 JudgeModel = settings.Judge.Model,
                 SelectedAt = now
             })
@@ -190,7 +200,7 @@ public class TopJokeService
 
         var candidateIds = candidates.Select(j => j.Id).ToHashSet();
         var picks = verdict.Picks
-            .Where(p => candidateIds.Contains(p.JokeId))
+            .Where(p => p is not null && candidateIds.Contains(p.JokeId))
             .DistinctBy(p => p.JokeId)
             .ToList();
 
@@ -200,6 +210,18 @@ public class TopJokeService
 
         return picks;
     }
+
+    // A fresh row without the Joke navigation, so ReplaceAsync inserts only the TopJoke.
+    private static TopJoke CopyOf(TopJoke entry)
+        => new()
+        {
+            Language = entry.Language,
+            Rank = entry.Rank,
+            JokeId = entry.JokeId,
+            Reason = entry.Reason,
+            JudgeModel = entry.JudgeModel,
+            SelectedAt = entry.SelectedAt
+        };
 
     private static string Truncate(string text, int maxLength)
         => text.Length <= maxLength ? text : text[..maxLength];

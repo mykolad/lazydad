@@ -6,8 +6,10 @@
         <Configuration>
           <Format>cobertura</Format>
           <Include>[LazyDad.Api]*,[LazyDad.Data]*</Include>
-          <!-- EF migrations are generated code; counting them would swamp the real numbers. -->
-          <ExcludeByFile>**/Migrations/*.cs</ExcludeByFile>
+          <!-- EF migrations are generated code; counting them would swamp the real numbers.
+               Program.cs is the composition root (DI wiring, middleware, startup hooks): it is
+               exercised by running the app, not by unit tests. -->
+          <ExcludeByFile>**/Migrations/*.cs,**/Program.cs</ExcludeByFile>
           <ExcludeByAttribute>GeneratedCodeAttribute,CompilerGeneratedAttribute,ExcludeFromCodeCoverageAttribute</ExcludeByAttribute>
           <SkipAutoProps>true</SkipAutoProps>
         </Configuration>
