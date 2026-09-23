@@ -83,52 +83,91 @@ public class JokeSchedulerService : BackgroundService
 
     private async Task GenerateAndPersistAsync(LanguageOptions language, CancellationToken stoppingToken)
     {
+        // All models for the language are queried in parallel.
+        var generated = await Task.WhenAll(language.LlmModels.Select(model => GenerateAsync(language, model, stoppingToken)));
+
         using var scope = scopeFactory.CreateScope();
-        var generationService = scope.ServiceProvider.GetRequiredService<JokeGenerationService>();
         var jokeRepository = scope.ServiceProvider.GetRequiredService<IJokeRepository>();
+        var topJokeService = scope.ServiceProvider.GetRequiredService<TopJokeService>();
         var htmlGenerator = scope.ServiceProvider.GetRequiredService<HtmlGeneratorService>();
 
-        var anySucceeded = false;
+        var saved = new List<Joke>();
 
-        foreach (var model in language.LlmModels)
+        foreach (var joke in generated.OfType<Joke>())
         {
             try
             {
-                logger.LogInformation("Generating joke for '{Language}' using {Model}...", language.Language, model.Model);
-
-                var text = await generationService.GenerateAsync(language, model, stoppingToken);
-
-                if (string.IsNullOrWhiteSpace(text))
-                {
-                    logger.LogWarning("LLM returned an empty response for '{Language}' ({Model}). Skipping.", language.Language, model.Model);
-                    continue;
-                }
-
-                var joke = new Joke
-                {
-                    Language = language.Language,
-                    Model = model.Model,
-                    Text = text,
-                    GeneratedAt = DateTime.UtcNow
-                };
-
                 await jokeRepository.AddAsync(joke, stoppingToken);
+                saved.Add(joke);
 
-                logger.LogInformation("Joke saved for '{Language}' ({Model}): {Text}", language.Language, model.Model, text);
-
-                anySucceeded = true;
+                logger.LogInformation("Joke saved for '{Language}' ({Model}): {Text}", joke.Language, joke.Model, joke.Text);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
                 throw;
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Failed to generate or persist joke for '{Language}' ({Model}).", language.Language, model.Model);
+                logger.LogError(ex, "Failed to persist joke for '{Language}' ({Model}).", joke.Language, joke.Model);
             }
         }
 
-        if (anySucceeded)
+        // Runs even when nothing new was saved, so an empty leaderboard still gets seeded.
+        var topChanged = false;
+        try
+        {
+            topChanged = await topJokeService.UpdateAsync(language.Language, saved, stoppingToken);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to update the top jokes for '{Language}'.", language.Language);
+        }
+
+        if (saved.Count > 0 || topChanged)
             await htmlGenerator.RegenerateAsync(stoppingToken);
+    }
+
+    /// <summary>Generates one joke with one model. Returns <c>null</c> on failure so sibling models are unaffected.</summary>
+    private async Task<Joke?> GenerateAsync(LanguageOptions language, LlmModelOptions model, CancellationToken stoppingToken)
+    {
+        // Own scope per model: parallel calls must not share a DbContext.
+        using var scope = scopeFactory.CreateScope();
+        var generationService = scope.ServiceProvider.GetRequiredService<JokeGenerationService>();
+
+        try
+        {
+            logger.LogInformation("Generating joke for '{Language}' using {Model}...", language.Language, model.Model);
+
+            var text = await generationService.GenerateAsync(language, model, stoppingToken);
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                logger.LogWarning("LLM returned an empty response for '{Language}' ({Model}). Skipping.", language.Language, model.Model);
+                return null;
+            }
+
+            return new Joke
+            {
+                Language = language.Language,
+                Model = model.Model,
+                Text = text,
+                GeneratedAt = DateTime.UtcNow
+            };
+        }
+        // Only shutdown propagates. A provider timeout is also an OperationCanceledException;
+        // rethrowing it would fault Task.WhenAll and discard the sibling models' jokes.
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to generate joke for '{Language}' ({Model}).", language.Language, model.Model);
+            return null;
+        }
     }
 }

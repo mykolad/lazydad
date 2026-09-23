@@ -8,10 +8,12 @@ namespace LazyDad.Api.Controllers;
 public class JokesController : ControllerBase
 {
     private readonly IJokeRepository jokeRepository;
+    private readonly ITopJokeRepository topJokeRepository;
 
-    public JokesController(IJokeRepository jokeRepository)
+    public JokesController(IJokeRepository jokeRepository, ITopJokeRepository topJokeRepository)
     {
         this.jokeRepository = jokeRepository;
+        this.topJokeRepository = topJokeRepository;
     }
 
     [HttpGet]
@@ -19,6 +21,21 @@ public class JokesController : ControllerBase
     {
         var jokes = await jokeRepository.GetAllAsync(cancellationToken);
         return Ok(jokes);
+    }
+
+    [HttpGet("top")]
+    public async Task<IActionResult> GetTop(CancellationToken cancellationToken)
+    {
+        var top = await topJokeRepository.GetAllAsync(cancellationToken);
+        return Ok(top.Select(t => new
+        {
+            t.Language,
+            t.Rank,
+            t.Reason,
+            t.JudgeModel,
+            t.SelectedAt,
+            t.Joke
+        }));
     }
 
     [HttpGet("{id:int}")]

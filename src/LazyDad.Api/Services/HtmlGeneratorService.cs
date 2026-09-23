@@ -13,17 +13,20 @@ public class HtmlGeneratorService
     private static readonly SemaphoreSlim WriteLock = new(1, 1);
 
     private readonly IJokeRepository jokeRepository;
+    private readonly ITopJokeRepository topJokeRepository;
     private readonly IOptions<JokeGenerationOptions> options;
     private readonly IWebHostEnvironment env;
     private readonly ILogger<HtmlGeneratorService> logger;
 
     public HtmlGeneratorService(
         IJokeRepository jokeRepository,
+        ITopJokeRepository topJokeRepository,
         IOptions<JokeGenerationOptions> options,
         IWebHostEnvironment env,
         ILogger<HtmlGeneratorService> logger)
     {
         this.jokeRepository = jokeRepository;
+        this.topJokeRepository = topJokeRepository;
         this.options = options;
         this.env = env;
         this.logger = logger;
@@ -35,8 +38,9 @@ public class HtmlGeneratorService
         try
         {
             var jokes = await jokeRepository.GetAllAsync(cancellationToken);
+            var topJokes = await topJokeRepository.GetAllAsync(cancellationToken);
 
-            var html = BuildHtml(jokes, LanguageCodes(options.Value));
+            var html = BuildHtml(jokes, topJokes, LanguageCodes(options.Value));
 
             var wwwroot = Path.Combine(env.ContentRootPath, "wwwroot");
             Directory.CreateDirectory(wwwroot);
@@ -60,7 +64,10 @@ public class HtmlGeneratorService
             .Where(l => !string.IsNullOrWhiteSpace(l.LanguageCode))
             .ToDictionary(l => l.Language, l => l.LanguageCode, StringComparer.OrdinalIgnoreCase);
 
-    internal static string BuildHtml(IReadOnlyList<Joke> jokes, IReadOnlyDictionary<string, string> languageCodes)
+    internal static string BuildHtml(
+        IReadOnlyList<Joke> jokes,
+        IReadOnlyList<TopJoke> topJokes,
+        IReadOnlyDictionary<string, string> languageCodes)
     {
         var sb = new StringBuilder();
         sb.AppendLine("<!DOCTYPE html>");
@@ -81,11 +88,40 @@ public class HtmlGeneratorService
         sb.AppendLine("    .tag-lang { background: #5a8a5a; }");
         sb.AppendLine("    .tag-model { background: #888; }");
         sb.AppendLine("    .empty { color: #aaa; font-style: italic; }");
+        sb.AppendLine("    h2 { font-size: 1.2rem; margin: 2rem 0 0.5rem; }");
+        sb.AppendLine("    .top .joke { border-color: #e0c060; background: #fffbea; }");
+        sb.AppendLine("    .rank { font-size: 1.3rem; margin-right: 0.4rem; }");
+        sb.AppendLine("    .reason { color: #8a7a40; font-size: 0.85rem; font-style: italic; }");
+        sb.AppendLine("    .tag-judge { background: #b08a2a; }");
         sb.AppendLine("  </style>");
         sb.AppendLine("</head>");
         sb.AppendLine("<body>");
         sb.AppendLine("  <h1>LazyDad</h1>");
         sb.AppendLine($"  <p class=\"subtitle\">{jokes.Count} joke{(jokes.Count == 1 ? "" : "s")} generated so far.</p>");
+
+        foreach (var group in topJokes.GroupBy(t => t.Language))
+        {
+            sb.AppendLine("  <section class=\"top\">");
+            sb.AppendLine($"    <h2>Top {group.Count()} &middot; {EscapeHtml(group.Key)}</h2>");
+            foreach (var top in group.OrderBy(t => t.Rank))
+            {
+                sb.AppendLine("    <div class=\"joke\">");
+                sb.AppendLine($"      <p><span class=\"rank\">{RankBadge(top.Rank)}</span><span{LangAttribute(top.Language, languageCodes)}>{EscapeHtml(top.Joke.Text)}</span></p>");
+                if (!string.IsNullOrWhiteSpace(top.Reason))
+                    sb.AppendLine($"      <p class=\"reason\">{EscapeHtml(top.Reason)}</p>");
+                sb.AppendLine("      <div class=\"joke-meta\">");
+                sb.AppendLine($"        <time datetime=\"{top.Joke.GeneratedAt:yyyy-MM-ddTHH:mm:ssZ}\">{top.Joke.GeneratedAt:dd MMM yyyy}</time>");
+                if (!string.IsNullOrWhiteSpace(top.Joke.Model))
+                    sb.AppendLine($"        <span class=\"tag tag-model\">{EscapeHtml(top.Joke.Model)}</span>");
+                sb.AppendLine($"        <span class=\"tag tag-judge\">judged by {EscapeHtml(top.JudgeModel)}</span>");
+                sb.AppendLine("      </div>");
+                sb.AppendLine("    </div>");
+            }
+            sb.AppendLine("  </section>");
+        }
+
+        if (topJokes.Count > 0)
+            sb.AppendLine("  <h2>All jokes</h2>");
 
         if (jokes.Count == 0)
         {
@@ -114,6 +150,14 @@ public class HtmlGeneratorService
         sb.AppendLine("</html>");
         return sb.ToString();
     }
+
+    private static string RankBadge(int rank) => rank switch
+    {
+        1 => "🥇",
+        2 => "🥈",
+        3 => "🥉",
+        _ => $"#{rank}"
+    };
 
     // The page chrome is English (<html lang="en">); each joke is tagged with its own language
     // so screen readers pronounce it correctly.

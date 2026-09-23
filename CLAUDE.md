@@ -32,9 +32,20 @@ tests/LazyDad.Tests — xUnit + Moq unit tests
 - `HtmlGeneratorService.RegenerateAsync` rewrites `wwwroot/index.html` in full each
   time — simple and stateless.
 - One `PeriodicTimer` loop per enabled language runs concurrently via `Task.WhenAll`.
+  Within a tick, all of a language's `LlmModels` are called in parallel, each in its
+  own DI scope (a `DbContext` must not be shared across concurrent calls); jokes are
+  then persisted sequentially.
+- **Top-N leaderboard** (`TopJokes` config, `TopJokeService`, `TopJokes` table): after
+  each tick a reasoning "judge" model (`TopJokes:Judge`, e.g. `gpt-6-sol`) sees the
+  current top N plus the new jokes and returns the new ranking as a JSON-schema
+  structured response. If the leaderboard is empty or short, it is seeded from the last
+  `SeedSampleSize` jokes. Invalid verdicts (unknown/duplicate ids, wrong count) are
+  discarded; an unchanged ranking skips the DB write. `ReplaceAsync` does
+  delete + insert in one transaction.
 - Russian language support was removed (migration `RemoveRussianJokes` purges its rows).
 - Distributed lock (`SchedulerLock` table) is scaffolded in the DB but not yet wired
-  up — deferred until multi-replica becomes a concern.
+  up. That's safe only because the app runs a single replica; it must be wired up
+  before scaling out (issue #5).
 
 ## EF Core migrations
 
@@ -62,10 +73,20 @@ Azure SQL firewall must allow the local machine's public IP.
 
 ## Azure resources
 
-- **SQL server:** `lazydad-sql-swedencentral` (swedencentral)
+- **SQL server:** `lazydad-sql-swedencentral` (swedencentral); database `lazydad-db` on the
+  **Basic** DTU tier (5 DTU, 2 GB), always on. Serverless was dropped: every 4-hour tick
+  woke it for the 60-minute auto-pause minimum, which cost about $74/month.
+- **Migrations** are applied by hand (`dotnet ef database update`, see above) before a
+  deploy that needs them; the app does not migrate on startup (issue #4).
 - **Azure OpenAI** (swedencentral): each `LlmModels[].Model` in config is the Azure deployment name (e.g. `gpt-5.3-chat`)
-- **Container Apps:** Linux containers, min 2 replicas
+- **Container Apps:** `lazydad-app`, Linux, Consumption profile, 0.5 vCPU / 1 GiB, **exactly
+  one replica** (min = max = 1), no health probes configured yet. Scaling out needs the
+  scheduler lock and shared page rendering first; see issue #6.
 - Port exposed by the container: **8080** (`ASPNETCORE_URLS=http://+:8080`)
+- **Deploy:** `tsg/redeploy.ps1` (local Docker), or build in ACR without Docker:
+  `az acr build --registry lazydadacr --image lazydad:<short-sha> .` then
+  `az containerapp update -n lazydad-app -g lazydad-rg --image <acr-login-server>/lazydad:<short-sha>`.
+  Tag images with the commit they were built from.
 
 ## Building and testing
 
@@ -73,6 +94,20 @@ Azure SQL firewall must allow the local machine's public IP.
 dotnet build lazydad.slnx
 dotnet test  lazydad.slnx
 ```
+
+## CI
+
+`.github/workflows/ci.yml` runs on every PR and on pushes to `master`: build, then
+`tools/coverage.ps1` for tests, coverage (coverlet → ReportGenerator, pinned in `dotnet-tools.json`),
+and the gate. The job fails if line coverage is below the script's `$MinLineCoverage`.
+Coverage settings (included assemblies, migrations excluded) live in
+`tests/LazyDad.Tests/coverage.runsettings`. CI runs the same script, so a local run reproduces the gate:
+
+```
+./tools/coverage.ps1        # HTML report at coverage/index.html
+```
+
+Raise `$MinLineCoverage` as coverage grows; never lower it to get a PR through.
 
 ## Docker
 
