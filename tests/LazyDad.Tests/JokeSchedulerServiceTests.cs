@@ -5,7 +5,7 @@ using LazyDad.Data.Repositories;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
 
@@ -25,6 +25,9 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     private readonly Mock<ILlmClientFactory> llmClientFactoryMock = new();
     private readonly string contentRoot = Directory.CreateTempSubdirectory("lazydad-tests-").FullName;
     private readonly List<Joke> saved = [];
+    // Tests wait on the scheduler's own "tick completed" / "tick failed" logs: they are
+    // written after all tick work, so assertions never race the background loop.
+    private readonly CapturingLogger<JokeSchedulerService> schedulerLogger = new();
     private ServiceProvider? provider;
 
     public JokeSchedulerServiceTests()
@@ -81,9 +84,10 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         services.AddScoped<HtmlGeneratorService>();
         provider = services.BuildServiceProvider();
 
-        return new JokeSchedulerService(
-            provider.GetRequiredService<IServiceScopeFactory>(), options, NullLogger<JokeSchedulerService>.Instance);
+        return new JokeSchedulerService(provider.GetRequiredService<IServiceScopeFactory>(), options, schedulerLogger);
     }
+
+    private Task TickCompletedAsync() => schedulerLogger.WaitForAsync(LogLevel.Debug, "tick for 'Ukrainian' completed", Timeout);
 
     private void SetupModel(string model, Func<Task<ChatResponse>> reply)
     {
@@ -97,17 +101,6 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     private static Task<ChatResponse> Reply(string text)
         => Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, text)]));
 
-    private static async Task WaitUntilAsync(Func<bool> condition)
-    {
-        var deadline = DateTime.UtcNow + Timeout;
-        while (!condition())
-        {
-            if (DateTime.UtcNow > deadline)
-                throw new TimeoutException("Condition not met within the test timeout.");
-            await Task.Delay(20);
-        }
-    }
-
     [Fact]
     public async Task Tick_WhenOneModelTimesOut_SavesTheOtherModelsJokeAndWritesPage()
     {
@@ -117,7 +110,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         var scheduler = CreateScheduler(Ukrainian("fast", "slow"));
 
         await scheduler.StartAsync(CancellationToken.None);
-        await WaitUntilAsync(() => File.Exists(IndexPath));
+        await TickCompletedAsync();
         await scheduler.StopAsync(CancellationToken.None);
 
         var joke = Assert.Single(saved);
@@ -129,15 +122,14 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     [Fact]
     public async Task Tick_WhenModelReturnsEmptyText_SavesNothingAndSkipsPage()
     {
-        var asked = new TaskCompletionSource();
-        SetupModel("blank", () => { asked.TrySetResult(); return Reply("   "); });
+        SetupModel("blank", () => Reply("   "));
         var scheduler = CreateScheduler(Ukrainian("blank"));
 
         await scheduler.StartAsync(CancellationToken.None);
-        await asked.Task.WaitAsync(Timeout);
-        await Task.Delay(200);
+        await TickCompletedAsync();
         await scheduler.StopAsync(CancellationToken.None);
 
+        Assert.Contains(schedulerLogger.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("empty response"));
         Assert.Empty(saved);
         Assert.False(File.Exists(IndexPath));
     }
@@ -146,19 +138,18 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     public async Task Tick_WhenPageRegenerationFails_LoopSurvives()
     {
         SetupModel("fast", () => Reply("Жарт"));
-        var regenerationAttempted = new TaskCompletionSource();
         jokeRepositoryMock
             .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .Callback(() => regenerationAttempted.TrySetResult())
             .ThrowsAsync(new InvalidOperationException("DB unavailable"));
         var scheduler = CreateScheduler(Ukrainian("fast"));
 
         await scheduler.StartAsync(CancellationToken.None);
-        await regenerationAttempted.Task.WaitAsync(Timeout);
-        await Task.Delay(200);
+        // Logged by the tick's catch block, i.e. after the exception has been handled.
+        await schedulerLogger.WaitForAsync(LogLevel.Error, "tick for 'Ukrainian' failed", Timeout);
 
-        // The failed tick is logged; the loop is still waiting for its next tick rather than faulted.
+        // The loop has moved on to wait for its next tick rather than faulting.
         Assert.False(scheduler.ExecuteTask!.IsCompleted);
+        Assert.DoesNotContain(schedulerLogger.Entries, e => e.Message.Contains("tick for 'Ukrainian' completed"));
         await scheduler.StopAsync(CancellationToken.None);
         Assert.Single(saved);
     }

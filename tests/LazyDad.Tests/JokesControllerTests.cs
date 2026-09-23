@@ -61,9 +61,10 @@ public class JokesControllerTests
     public async Task GetTop_ProjectsLeaderboardWithJoke()
     {
         var joke = MakeJoke(5);
+        var selectedAt = new DateTime(2026, 9, 24, 7, 43, 17, DateTimeKind.Utc);
         topJokeRepositoryMock.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(
         [
-            new TopJoke { Language = "Ukrainian", Rank = 1, JokeId = 5, Joke = joke, Reason = "Clever", JudgeModel = "gpt-6-sol" }
+            new TopJoke { Language = "Ukrainian", Rank = 1, JokeId = 5, Joke = joke, Reason = "Clever", JudgeModel = "gpt-6-sol", SelectedAt = selectedAt }
         ]);
 
         var result = await CreateController().GetTop(CancellationToken.None);
@@ -76,6 +77,11 @@ public class JokesControllerTests
         Assert.Equal("Ukrainian", entry.GetProperty("language").GetString());
         Assert.Equal("Clever", entry.GetProperty("reason").GetString());
         Assert.Equal("gpt-6-sol", entry.GetProperty("judgeModel").GetString());
+        Assert.Equal(selectedAt, entry.GetProperty("selectedAt").GetDateTime());
+        // The whole public shape: adding, removing or renaming a field must be a deliberate test change.
+        Assert.Equal(
+            ["language", "rank", "reason", "judgeModel", "selectedAt", "joke"],
+            entry.EnumerateObject().Select(p => p.Name));
         Assert.Equal("Joke 5", entry.GetProperty("joke").GetProperty("text").GetString());
     }
 }
