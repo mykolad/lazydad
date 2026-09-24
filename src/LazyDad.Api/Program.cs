@@ -47,7 +47,9 @@ var fileProvider = new PhysicalFileProvider(wwwrootPath);
 app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = fileProvider });
 app.UseStaticFiles(new StaticFileOptions { FileProvider = fileProvider });
 app.MapControllers();
-app.MapGet("/healthz", () => Results.Ok(new { status = "healthy" }));
+// CD sets App__Version to the image's commit, so smoke tests can tell the new revision is serving.
+var appVersion = app.Configuration["App:Version"] ?? "dev";
+app.MapGet("/healthz", () => Results.Ok(new { status = "healthy", version = appVersion }));
 
 // Regenerate the HTML page from existing jokes once the server is listening, off the startup
 // path: a slow or unreachable DB (including EF's retry delays) must not keep /healthz down.

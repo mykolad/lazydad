@@ -73,20 +73,23 @@ Azure SQL firewall must allow the local machine's public IP.
 
 ## Azure resources
 
-- **SQL server:** `lazydad-sql-swedencentral` (swedencentral); database `lazydad-db` on the
-  **Basic** DTU tier (5 DTU, 2 GB), always on. Serverless was dropped: every 4-hour tick
-  woke it for the 60-minute auto-pause minimum, which cost about $74/month.
-- **Migrations** are applied by hand (`dotnet ef database update`, see above) before a
-  deploy that needs them; the app does not migrate on startup (issue #4).
+- **SQL server:** `lazydad-sql-swedencentral` (swedencentral).
+  - Prod: `lazydad-db`, **Basic** DTU tier (5 DTU, 2 GB), always on. Serverless was dropped:
+    every 4-hour tick woke it for the 60-minute auto-pause minimum, which cost about $74/month.
+  - Staging: `lazydad-db-staging`, serverless on the **free offer** (100k vCore-s/month). It
+    pauses when idle; if the free amount runs out it stays paused until next month, and staging
+    deploys fail until then.
+- **Migrations** run in CD as an EF migration bundle, against staging and then prod (see CD).
+  The app never migrates on startup.
 - **Azure OpenAI** (swedencentral): each `LlmModels[].Model` in config is the Azure deployment name (e.g. `gpt-5.3-chat`)
-- **Container Apps:** `lazydad-app`, Linux, Consumption profile, 0.5 vCPU / 1 GiB, **exactly
-  one replica** (min = max = 1), no health probes configured yet. Scaling out needs the
-  scheduler lock and shared page rendering first; see issue #6.
+- **Container Apps** (environment `lazydad-cae`, Consumption, 0.5 vCPU / 1 GiB):
+  - `lazydad-app` (prod): **exactly one replica** (min = max = 1), no health probes yet.
+    Scaling out needs the scheduler lock and shared page rendering first; see issue #6.
+  - `lazydad-app-staging`: 0–1 replicas (scales to zero when idle). Calls the real LLMs.
+  - Both pull from ACR with the `lazydad-acr-pull` managed identity; the ACR admin user is disabled.
 - Port exposed by the container: **8080** (`ASPNETCORE_URLS=http://+:8080`)
-- **Deploy:** `tsg/redeploy.ps1` (local Docker), or build in ACR without Docker:
-  `az acr build --registry lazydadacr --image lazydad:<short-sha> .` then
-  `az containerapp update -n lazydad-app -g lazydad-rg --image <acr-login-server>/lazydad:<short-sha>`.
-  Tag images with the commit they were built from.
+- `/healthz` returns `{status, version}`; CD sets `App__Version` to the image's commit.
+- **Setup runbook:** `infra/cd-setup.md` has the one-time Azure/GitHub setup behind CD.
 
 ## Building and testing
 
@@ -108,6 +111,36 @@ Coverage settings (included assemblies, migrations excluded) live in
 ```
 
 Raise `$MinLineCoverage` as coverage grows; never lower it to get a PR through.
+The unit run excludes `Category=Smoke` (the smoke tests need a deployed app).
+
+## CD
+
+`.github/workflows/cd.yml` runs after CI succeeds on a push to `master` (or manually via
+*Run workflow*). It builds once and promotes the same image:
+
+1. **build** builds the image `lazydad:<short-sha>` and pushes it to ACR, and builds the EF
+   migration bundle (`dotnet-ef`, pinned in `dotnet-tools.json`).
+2. **staging** then **production**: the same reusable `.github/workflows/deploy.yml` in each
+   environment. It opens the SQL firewall for the runner, runs the bundle, closes the firewall,
+   rolls the app to the image (with `App__Version`), and runs `tests/LazyDad.SmokeTests`
+   against it.
+
+Promotion is automatic: production runs only if staging's smoke tests pass. Azure login is
+OIDC through the `lazydad-github-cd` managed identity; nothing secret lives in GitHub except
+each environment's `SQL_CONNECTION_STRING`. Both environments only accept deployments from
+`master`.
+
+The smoke tests check that `/healthz` reports the new version, that the page and API are served,
+that every model configured in `appsettings.json` produced a fresh joke after the rollout, and
+that the leaderboard is populated. To run them against staging locally:
+
+```
+$env:SMOKE_BASE_URL = "https://lazydad-app-staging.<env-domain>.westeurope.azurecontainerapps.io"
+$env:SMOKE_DEPLOYED_AFTER = "2026-09-24T00:00:00Z"   # optional SMOKE_EXPECTED_VERSION too
+dotnet test tests/LazyDad.SmokeTests
+```
+
+`tsg/redeploy.ps1` is only a manual fallback now. It skips staging, migrations and smoke tests.
 
 ## Docker
 

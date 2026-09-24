@@ -27,7 +27,9 @@ $testArgs = @(
     '--collect', 'XPlat Code Coverage',
     '--settings', 'tests/LazyDad.Tests/coverage.runsettings',
     '--results-directory', 'TestResults',
-    '--logger', 'trx;LogFileName=results.trx'
+    '--logger', 'trx;LogFileName=results.trx',
+    # Smoke tests target a deployed app; the CD pipeline runs them against staging and prod.
+    '--filter', 'Category!=Smoke'
 )
 if ($NoBuild) { $testArgs += '--no-build' }
 
