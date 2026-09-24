@@ -11,7 +11,7 @@ param(
     [string] $Configuration = 'Release',
     [switch] $NoBuild,
     # Ratchet this up as tests are added; never lower it to get a PR through.
-    [double] $MinLineCoverage = 25
+    [double] $MinLineCoverage = 85
 )
 
 $ErrorActionPreference = 'Stop'

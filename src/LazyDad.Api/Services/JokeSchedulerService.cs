@@ -70,6 +70,7 @@ public class JokeSchedulerService : BackgroundService
         try
         {
             await GenerateAndPersistAsync(language, stoppingToken);
+            logger.LogDebug("Joke tick for '{Language}' completed.", language.Language);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {

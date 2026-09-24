@@ -1,0 +1,185 @@
+using LazyDad.Api.Configuration;
+using LazyDad.Api.Services;
+using LazyDad.Data.Entities;
+using LazyDad.Data.Repositories;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Moq;
+
+namespace LazyDad.Tests;
+
+/// <summary>
+/// Drives the real scheduler through one tick, with real generation/leaderboard/HTML services
+/// resolved from DI scopes, and mocks only at the edges (repositories, LLM clients).
+/// The PeriodicTimer interval is an hour, so only the immediate startup tick runs in a test.
+/// </summary>
+public sealed class JokeSchedulerServiceTests : IDisposable
+{
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
+
+    private readonly Mock<IJokeRepository> jokeRepositoryMock = new();
+    private readonly Mock<ITopJokeRepository> topJokeRepositoryMock = new();
+    private readonly Mock<ILlmClientFactory> llmClientFactoryMock = new();
+    private readonly string contentRoot = Directory.CreateTempSubdirectory("lazydad-tests-").FullName;
+    private readonly List<Joke> saved = [];
+    // Tests wait on the scheduler's own "tick completed" / "tick failed" logs: they are
+    // written after all tick work, so assertions never race the background loop.
+    private readonly CapturingLogger<JokeSchedulerService> schedulerLogger = new();
+    private ServiceProvider? provider;
+
+    public JokeSchedulerServiceTests()
+    {
+        jokeRepositoryMock
+            .Setup(r => r.GetRecentByLanguageAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        jokeRepositoryMock
+            .Setup(r => r.AddAsync(It.IsAny<Joke>(), It.IsAny<CancellationToken>()))
+            .Callback<Joke, CancellationToken>((joke, _) => { lock (saved) { joke.Id = saved.Count + 1; saved.Add(joke); } })
+            .Returns(Task.CompletedTask);
+        jokeRepositoryMock
+            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => { lock (saved) { return saved.ToList(); } });
+        topJokeRepositoryMock
+            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+    }
+
+    public void Dispose()
+    {
+        provider?.Dispose();
+        Directory.Delete(contentRoot, recursive: true);
+    }
+
+    private string IndexPath => Path.Combine(contentRoot, "wwwroot", "index.html");
+
+    private static LanguageOptions Ukrainian(params string[] models)
+        => new()
+        {
+            Language = "Ukrainian",
+            LanguageCode = "uk",
+            Enabled = true,
+            IntervalHours = 1,
+            LlmModels = models.Select(m => new LlmModelOptions { Provider = "AzureOpenAI", Model = m }).ToList()
+        };
+
+    private JokeSchedulerService CreateScheduler(params LanguageOptions[] languages)
+    {
+        var options = Options.Create(new JokeGenerationOptions { UniquenessSampleSize = 20, Languages = [.. languages] });
+        var env = new Mock<IWebHostEnvironment>();
+        env.Setup(e => e.ContentRootPath).Returns(contentRoot);
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(options);
+        services.AddSingleton(Options.Create(new TopJokesOptions { Enabled = false }));
+        services.AddSingleton(jokeRepositoryMock.Object);
+        services.AddSingleton(topJokeRepositoryMock.Object);
+        services.AddSingleton(llmClientFactoryMock.Object);
+        services.AddSingleton(env.Object);
+        services.AddScoped<JokeGenerationService>();
+        services.AddScoped<TopJokeService>();
+        services.AddScoped<HtmlGeneratorService>();
+        provider = services.BuildServiceProvider();
+
+        return new JokeSchedulerService(provider.GetRequiredService<IServiceScopeFactory>(), options, schedulerLogger);
+    }
+
+    private Task TickCompletedAsync() => schedulerLogger.WaitForAsync(LogLevel.Debug, "tick for 'Ukrainian' completed", Timeout);
+
+    private void SetupModel(string model, Func<Task<ChatResponse>> reply)
+    {
+        var client = new Mock<IChatClient>();
+        client
+            .Setup(c => c.GetResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions>(), It.IsAny<CancellationToken>()))
+            .Returns(reply);
+        llmClientFactoryMock.Setup(f => f.CreateClient("AzureOpenAI", model)).Returns(client.Object);
+    }
+
+    private static Task<ChatResponse> Reply(string text)
+        => Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, text)]));
+
+    [Fact]
+    public async Task Tick_WhenOneModelTimesOut_SavesTheOtherModelsJokeAndWritesPage()
+    {
+        SetupModel("fast", () => Reply("Швидкий жарт"));
+        // A provider timeout is an OperationCanceledException that isn't caused by shutdown.
+        SetupModel("slow", () => Task.FromException<ChatResponse>(new TaskCanceledException("HTTP timeout")));
+        var scheduler = CreateScheduler(Ukrainian("fast", "slow"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await TickCompletedAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        var joke = Assert.Single(saved);
+        Assert.Equal("fast", joke.Model);
+        Assert.Equal("Ukrainian", joke.Language);
+        Assert.Contains("<p lang=\"uk\">Швидкий жарт</p>", await File.ReadAllTextAsync(IndexPath));
+    }
+
+    [Fact]
+    public async Task Tick_WhenModelReturnsEmptyText_SavesNothingAndSkipsPage()
+    {
+        SetupModel("blank", () => Reply("   "));
+        var scheduler = CreateScheduler(Ukrainian("blank"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await TickCompletedAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Contains(schedulerLogger.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("empty response"));
+        Assert.Empty(saved);
+        Assert.False(File.Exists(IndexPath));
+    }
+
+    [Fact]
+    public async Task Tick_WhenPageRegenerationFails_LoopSurvives()
+    {
+        SetupModel("fast", () => Reply("Жарт"));
+        jokeRepositoryMock
+            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("DB unavailable"));
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        // Logged by the tick's catch block, i.e. after the exception has been handled.
+        await schedulerLogger.WaitForAsync(LogLevel.Error, "tick for 'Ukrainian' failed", Timeout);
+
+        Assert.DoesNotContain(schedulerLogger.Entries, e => e.Message.Contains("tick for 'Ukrainian' completed"));
+        await scheduler.StopAsync(CancellationToken.None);
+
+        // The error log is written inside the catch block, so "not completed" right after it
+        // proves little. StopAsync doesn't rethrow a faulted ExecuteTask either. The terminal
+        // state does prove it: a loop that survived ends cancelled by shutdown, never faulted.
+        Assert.True(scheduler.ExecuteTask!.IsCanceled, $"Expected Canceled, was {scheduler.ExecuteTask.Status}.");
+        Assert.Single(saved);
+    }
+
+    [Fact]
+    public async Task Start_WithNoEnabledLanguages_ExitsWithoutGenerating()
+    {
+        var disabled = Ukrainian("fast");
+        disabled.Enabled = false;
+        var scheduler = CreateScheduler(disabled);
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await scheduler.ExecuteTask!.WaitAsync(Timeout);
+
+        Assert.True(scheduler.ExecuteTask.IsCompletedSuccessfully);
+        llmClientFactoryMock.Verify(f => f.CreateClient(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Start_WithLanguageWithoutModels_SkipsIt()
+    {
+        var scheduler = CreateScheduler(Ukrainian());
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await scheduler.ExecuteTask!.WaitAsync(Timeout);
+
+        Assert.True(scheduler.ExecuteTask.IsCompletedSuccessfully);
+        Assert.Empty(saved);
+    }
+}
