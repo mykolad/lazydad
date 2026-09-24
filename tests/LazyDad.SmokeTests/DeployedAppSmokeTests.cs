@@ -18,18 +18,21 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
     }
 
     [Fact]
-    public async Task Healthz_ReportsHealthyAndTheDeployedVersion()
+    public async Task Healthz_ReportsHealthyAndTheDeployedVersionAndRevision()
     {
-        // Waits out the scale-from-zero cold start and, when a version is expected, the old revision draining.
+        // Waits out the scale-from-zero cold start and the old revision draining. The revision is
+        // what makes this rollout unique; the version (commit) alone repeats on a re-deploy.
         var health = await target.PollAsync<JsonElement>(async () =>
         {
             var json = await target.GetJsonAsync("healthz");
-            // Builds before /healthz reported a version have no field: treat as "not the expected version yet".
-            var version = json.TryGetProperty("version", out var v) ? v.GetString() : null;
-            return target.ExpectedVersion is null || version == target.ExpectedVersion ? json : null;
-        }, SmokeTarget.ColdStartTimeout, $"/healthz to report version '{target.ExpectedVersion}'");
+            // Older builds lack these fields: treat that as "not the new revision yet".
+            return Matches(json, "version", target.ExpectedVersion) && Matches(json, "revision", target.ExpectedRevision) ? json : null;
+        }, SmokeTarget.ColdStartTimeout, $"/healthz to report version '{target.ExpectedVersion}' and revision '{target.ExpectedRevision}'");
 
         Assert.Equal("healthy", health.GetProperty("status").GetString());
+
+        static bool Matches(JsonElement json, string property, string? expected)
+            => expected is null || (json.TryGetProperty(property, out var value) && value.GetString() == expected);
     }
 
     [Fact]

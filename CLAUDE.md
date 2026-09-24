@@ -11,7 +11,8 @@ regenerated after every new joke. Deployed to Azure Container Apps.
 ```
 src/LazyDad.Api    — ASP.NET Core Web API (controllers, background services, configuration)
 src/LazyDad.Data   — EF Core DbContext, entities, migrations, repositories
-tests/LazyDad.Tests — xUnit + Moq unit tests
+tests/LazyDad.Tests      — xUnit + Moq unit tests (plus SQLite in-memory for repositories)
+tests/LazyDad.SmokeTests — smoke tests against a deployed app (run by CD, excluded from CI)
 ```
 
 ## Code style rules
@@ -88,7 +89,8 @@ Azure SQL firewall must allow the local machine's public IP.
   - `lazydad-app-staging`: 0–1 replicas (scales to zero when idle). Calls the real LLMs.
   - Both pull from ACR with the `lazydad-acr-pull` managed identity; the ACR admin user is disabled.
 - Port exposed by the container: **8080** (`ASPNETCORE_URLS=http://+:8080`)
-- `/healthz` returns `{status, version}`; CD sets `App__Version` to the image's commit.
+- `/healthz` returns `{status, version, revision}`: `version` is the image commit (CD sets `App__Version`),
+  `revision` is the platform's `CONTAINER_APP_REVISION`, unique per rollout. Smoke tests wait for both.
 - **Setup runbook:** `infra/cd-setup.md` has the one-time Azure/GitHub setup behind CD.
 
 ## Building and testing
@@ -130,13 +132,13 @@ OIDC through the `lazydad-github-cd` managed identity; nothing secret lives in G
 each environment's `SQL_CONNECTION_STRING`. Both environments only accept deployments from
 `master`.
 
-The smoke tests check that `/healthz` reports the new version, that the page and API are served,
+The smoke tests check that `/healthz` reports the new version and revision, that the page and API are served,
 that every model configured in `appsettings.json` produced a fresh joke after the rollout, and
 that the leaderboard is populated. To run them against staging locally:
 
 ```
 $env:SMOKE_BASE_URL = "https://lazydad-app-staging.<env-domain>.westeurope.azurecontainerapps.io"
-$env:SMOKE_DEPLOYED_AFTER = "2026-09-24T00:00:00Z"   # optional SMOKE_EXPECTED_VERSION too
+$env:SMOKE_DEPLOYED_AFTER = "2026-09-24T00:00:00Z"   # optional: SMOKE_EXPECTED_VERSION, SMOKE_EXPECTED_REVISION
 dotnet test tests/LazyDad.SmokeTests
 ```
 

@@ -9,6 +9,8 @@ namespace LazyDad.SmokeTests;
 /// <list type="bullet">
 /// <item><c>SMOKE_BASE_URL</c>: the app's https URL (required).</item>
 /// <item><c>SMOKE_EXPECTED_VERSION</c>: the commit the new revision must report on /healthz.</item>
+/// <item><c>SMOKE_EXPECTED_REVISION</c>: the Container Apps revision /healthz must report; unique per rollout,
+/// so a re-deploy of the same commit can't be satisfied by the draining revision.</item>
 /// <item><c>SMOKE_DEPLOYED_AFTER</c>: ISO-8601 UTC time; jokes generated after it prove the new revision's LLM calls work.</item>
 /// </list>
 /// Missing SMOKE_BASE_URL fails loudly: a smoke run that silently tests nothing is worse than none.
@@ -26,6 +28,7 @@ public sealed class SmokeTarget : IDisposable
 
         Client = new HttpClient { BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/"), Timeout = TimeSpan.FromSeconds(30) };
         ExpectedVersion = NullIfBlank(Environment.GetEnvironmentVariable("SMOKE_EXPECTED_VERSION"));
+        ExpectedRevision = NullIfBlank(Environment.GetEnvironmentVariable("SMOKE_EXPECTED_REVISION"));
         DeployedAfter = DateTime.TryParse(
             Environment.GetEnvironmentVariable("SMOKE_DEPLOYED_AFTER"),
             CultureInfo.InvariantCulture,
@@ -35,6 +38,7 @@ public sealed class SmokeTarget : IDisposable
 
     public HttpClient Client { get; }
     public string? ExpectedVersion { get; }
+    public string? ExpectedRevision { get; }
     public DateTime? DeployedAfter { get; }
 
     /// <summary>

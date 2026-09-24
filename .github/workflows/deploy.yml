@@ -88,12 +88,16 @@ jobs:
         id: app
         run: |
           echo "deployed_after=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-          # The revision suffix forces a new revision even on a re-run of the same tag,
-          # so the startup tick (and the smoke tests' fresh-joke check) always happens.
+          # A unique revision suffix forces a new revision even on a re-run of the same tag, so the
+          # startup tick (and the smoke tests' fresh-joke check) always happens. The resulting
+          # revision name is what /healthz reports, so the smoke tests can tell this rollout apart
+          # from the draining one even when both run the same commit.
+          suffix="r${{ github.run_number }}-${{ github.run_attempt }}"
           az containerapp update -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
             --image "$REGISTRY/lazydad:${{ inputs.tag }}" \
             --set-env-vars "App__Version=${{ inputs.tag }}" \
-            --revision-suffix "r${{ github.run_number }}-${{ github.run_attempt }}" -o none
+            --revision-suffix "$suffix" -o none
+          echo "revision=${{ inputs.app-name }}--$suffix" >> "$GITHUB_OUTPUT"
           fqdn=$(az containerapp show -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)
           echo "url=https://$fqdn" >> "$GITHUB_OUTPUT"
 
@@ -105,6 +109,7 @@ jobs:
         env:
           SMOKE_BASE_URL: ${{ steps.app.outputs.url }}
           SMOKE_EXPECTED_VERSION: ${{ inputs.tag }}
+          SMOKE_EXPECTED_REVISION: ${{ steps.app.outputs.revision }}
           SMOKE_DEPLOYED_AFTER: ${{ steps.app.outputs.deployed_after }}
         run: dotnet test tests/LazyDad.SmokeTests -c Release --logger "console;verbosity=normal"
 
@@ -113,7 +118,7 @@ jobs:
         run: |
           {
             echo "### ${{ inputs.environment }}"
-            echo "- App: \`${{ inputs.app-name }}\`, image \`lazydad:${{ inputs.tag }}\`"
+            echo "- App: \`${{ inputs.app-name }}\`, image \`lazydad:${{ inputs.tag }}\`, revision \`${{ steps.app.outputs.revision }}\`"
             echo "- URL: ${{ steps.app.outputs.url }}"
             echo "- Result: ${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -47,9 +47,12 @@ var fileProvider = new PhysicalFileProvider(wwwrootPath);
 app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = fileProvider });
 app.UseStaticFiles(new StaticFileOptions { FileProvider = fileProvider });
 app.MapControllers();
-// CD sets App__Version to the image's commit, so smoke tests can tell the new revision is serving.
+// version: the image's commit (CD sets App__Version). revision: the Container Apps revision,
+// unique per rollout even when re-deploying the same commit (the platform sets
+// CONTAINER_APP_REVISION). Smoke tests wait for both, so they can't pass against a draining revision.
 var appVersion = app.Configuration["App:Version"] ?? "dev";
-app.MapGet("/healthz", () => Results.Ok(new { status = "healthy", version = appVersion }));
+var appRevision = app.Configuration["CONTAINER_APP_REVISION"] ?? "local";
+app.MapGet("/healthz", () => Results.Ok(new { status = "healthy", version = appVersion, revision = appRevision }));
 
 // Regenerate the HTML page from existing jokes once the server is listening, off the startup
 // path: a slow or unreachable DB (including EF's retry delays) must not keep /healthz down.
