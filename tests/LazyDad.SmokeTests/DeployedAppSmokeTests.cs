@@ -85,8 +85,13 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
             return json.GetArrayLength() > 0 ? json : null;
         }, SmokeTarget.GenerationTimeout, "a non-empty /jokes/top");
 
-        var ranks = top.EnumerateArray().Select(t => t.GetProperty("rank").GetInt32()).ToList();
-        Assert.Equal(Enumerable.Range(1, ranks.Count), ranks);
+        // Each language has its own 1-based leaderboard, so validate the ranks per language.
+        foreach (var language in top.EnumerateArray().GroupBy(t => t.GetProperty("language").GetString()))
+        {
+            var ranks = language.Select(t => t.GetProperty("rank").GetInt32()).Order().ToList();
+            Assert.True(Enumerable.Range(1, ranks.Count).SequenceEqual(ranks),
+                $"Leaderboard for '{language.Key}' has ranks [{string.Join(", ", ranks)}]; expected 1..{ranks.Count}.");
+        }
         Assert.All(top.EnumerateArray(), t => Assert.False(string.IsNullOrWhiteSpace(t.GetProperty("joke").GetProperty("text").GetString())));
     }
 }
