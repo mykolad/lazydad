@@ -37,17 +37,24 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
     }
 
     [Fact]
-    public async Task HomePage_IsServed()
+    public async Task HomePage_IsServed_WithTheDeployedVersion()
     {
-        var served = await target.PollAsync<bool>(async () =>
+        // The new revision regenerates the page on startup, so wait until it shows the deployed version.
+        var html = await target.PollAsync<(bool Found, string Html)>(async () =>
         {
             using var response = await target.Client.GetAsync("");
             if (response.StatusCode != HttpStatusCode.OK)
                 return null;
-            return (await response.Content.ReadAsStringAsync()).Contains("<title>LazyDad</title>");
-        }, SmokeTarget.ColdStartTimeout, "the home page");
+            var body = await response.Content.ReadAsStringAsync();
+            // Keep polling until the version line exists: the expected version when one is given, else any.
+            var ready = target.ExpectedVersion is null
+                ? body.Contains("<p class=\"version\">Version ")
+                : body.Contains($">{target.ExpectedVersion}</a></p>");
+            return ready ? (true, body) : null;
+        }, SmokeTarget.ColdStartTimeout, $"the home page to show version '{target.ExpectedVersion}'");
 
-        Assert.True(served, "The home page was served but is not the LazyDad page.");
+        Assert.Contains("<title>LazyDad</title>", html.Html);
+        Assert.Matches(@"<p class=""version"">Version (\d{4}\.\d{2}\.\d{2}|\S+ \(local build\))", html.Html);
     }
 
     [Fact]

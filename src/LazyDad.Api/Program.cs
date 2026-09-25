@@ -35,6 +35,7 @@ builder.Services.AddScoped<JokeGenerationService>();
 builder.Services.AddScoped<TopJokeService>();
 builder.Services.AddScoped<HtmlGeneratorService>();
 builder.Services.AddSingleton<SchedulerStatus>();
+builder.Services.Configure<AppInfoOptions>(builder.Configuration.GetSection(AppInfoOptions.SectionName));
 builder.Services.AddHostedService<JokeSchedulerService>();
 
 var wwwrootPath = Path.Combine(builder.Environment.ContentRootPath, "wwwroot");
@@ -48,10 +49,10 @@ var fileProvider = new PhysicalFileProvider(wwwrootPath);
 app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = fileProvider });
 app.UseStaticFiles(new StaticFileOptions { FileProvider = fileProvider });
 app.MapControllers();
-// version: the image's commit (Deploy Master sets App__Version). revision: the Container Apps revision,
+// version: the image's commit (baked into the image as App__Version). revision: the Container Apps revision,
 // unique per rollout even when re-deploying the same commit (the platform sets
 // CONTAINER_APP_REVISION). Smoke tests wait for both, so they can't pass against a draining revision.
-var appVersion = app.Configuration["App:Version"] ?? "dev";
+var appVersion = app.Services.GetRequiredService<IOptions<AppInfoOptions>>().Value.Version;
 var appRevision = app.Configuration["CONTAINER_APP_REVISION"] ?? "local";
 app.MapGet("/healthz", () => Results.Ok(new { status = "healthy", version = appVersion, revision = appRevision }));
 // What this process's scheduler did on its last tick per language (see SchedulerStatus).
