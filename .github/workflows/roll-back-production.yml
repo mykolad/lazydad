@@ -1,0 +1,180 @@
+name: Roll Back Production
+
+# Manual: put production back on an earlier master build, without rebuilding it. The resolve job
+# finds the image, then production runs the same Deploy Environment steps as Deploy Master
+# (protection tags, rollout by digest, smoke tests from that commit) minus migrations: the
+# database keeps its current schema, so the older code must work with it (additive migrations do).
+# The next Deploy Master run rolls forward again; revert on master to stay on this version.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Commit to roll back to (the short SHA shown on the page, e.g. c050a46). Leave empty
+          for the version production ran before the current one.
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+# Shared with Deploy Master and Deploy Branch to Staging, so deployments never interleave.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  RESOURCE_GROUP: lazydad-rg
+  REGISTRY: lazydadacr.azurecr.io
+  APP_NAME: lazydad-app
+
+jobs:
+  resolve:
+    name: resolve the version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Azure login only works through an environment (see infra/deployment-setup.md). Production's
+    # branch policy (master only) also stops a rollback dispatched from another branch.
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      tag: ${{ steps.image.outputs.tag }}
+      ref: ${{ steps.image.outputs.ref }}
+      digest: ${{ steps.image.outputs.digest }}
+
+    steps:
+      # Full history, to check that the target commit is on master.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve the image
+        id: image
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          version=$(printf '%s' "$VERSION" | tr -d '[:space:]' | tr 'A-F' 'a-f')
+
+          # Revisions reference a digest, or (before digest pinning) a commit tag. Empty if it's gone.
+          digest_of() {
+            case "$1" in
+              *@sha256:*) echo "${1#*@}" ;;
+              *) az acr repository show -n lazydadacr --image "lazydad:${1##*:}" --query digest -o tsv 2>/dev/null || true ;;
+            esac
+          }
+
+          # The app's revisions, oldest first (Container Apps keeps the inactive ones).
+          names=(); weights=(); images=()
+          while IFS=$'\t' read -r name weight image; do
+            names+=("$name"); weights+=("$weight"); images+=("$image")
+          done < <(az containerapp revision list -n "$APP_NAME" -g "$RESOURCE_GROUP" --all \
+            --query "sort_by([?properties.provisioningState=='Provisioned'], &properties.createdTime)[].[name, properties.trafficWeight, properties.template.containers[0].image]" -o tsv)
+
+          serving=-1
+          for i in "${!names[@]}"; do
+            weight=${weights[$i]}
+            [[ "$weight" =~ ^[0-9]+$ ]] || weight=0
+            if [ "$weight" -gt 0 ]; then
+              if [ "$serving" -ge 0 ]; then
+                echo "::error::More than one revision serves traffic; roll back by hand."
+                exit 1
+              fi
+              serving=$i
+            fi
+          done
+          if [ "$serving" -lt 0 ]; then
+            echo "::error::No revision serves traffic; roll back by hand."
+            exit 1
+          fi
+          serving_digest=$(digest_of "${images[$serving]}")
+
+          if [ -n "$version" ]; then
+            if ! [[ "$version" =~ ^[0-9a-f]{7,40}$ ]]; then
+              echo "::error::'$VERSION' isn't a commit SHA (7 to 40 hex digits)."
+              exit 1
+            fi
+            digest=$(digest_of "lazydad:${version:0:7}")
+            if [ -z "$digest" ]; then
+              echo "::error::lazydad:${version:0:7} isn't in the registry: it was never built, or the weekly purge deleted it."
+              exit 1
+            fi
+          else
+            # The most recent earlier revision that ran a different image (re-runs reuse the image).
+            digest=""
+            for ((i = serving - 1; i >= 0; i--)); do
+              candidate=$(digest_of "${images[$i]}")
+              if [ -z "$candidate" ]; then
+                echo "::error::Revision ${names[$i]} ran ${images[$i]}, which is no longer in the registry; pass a version instead."
+                exit 1
+              fi
+              if [ "$candidate" != "$serving_digest" ]; then
+                digest=$candidate
+                echo "Previous version: revision ${names[$i]}"
+                break
+              fi
+            done
+            if [ -z "$digest" ]; then
+              echo "::error::No earlier revision ran a different image; pass a version instead."
+              exit 1
+            fi
+          fi
+
+          if [ "$digest" = "$serving_digest" ]; then
+            echo "::error::Production already runs that image (revision ${names[$serving]})."
+            exit 1
+          fi
+
+          # The commit comes from the image itself (see Dockerfile), so the smoke tests run that
+          # commit's checks and expect its version.
+          image="$REGISTRY/lazydad@$digest"
+          az acr login --name lazydadacr
+          docker pull -q "$image" > /dev/null
+          ref=$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")
+          if ! [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::$image has no commit label: it was built before images carried their version (#17), and deploying it would report version 'dev'. Roll back by hand instead (infra/deployment-setup.md, section 7)."
+            exit 1
+          fi
+          if [ -n "$version" ] && [[ "$ref" != "$version"* ]]; then
+            echo "::error::lazydad:${version:0:7} was built from $ref, not $version."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$ref" HEAD 2> /dev/null; then
+            echo "::error::${ref:0:7} isn't on master (a branch build?); production only runs master commits."
+            exit 1
+          fi
+
+          {
+            echo "tag=${ref:0:7}"
+            echo "ref=$ref"
+            echo "digest=$digest"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Rolling production back to \`${ref:0:7}\`"
+            echo "- From revision \`${names[$serving]}\` (\`${serving_digest:-unknown digest}\`)"
+            echo "- To \`$image\`, commit $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$ref"
+            echo "- Migrations aren't rolled back. The next Deploy Master run rolls forward again; revert on master to stay on this version."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  production:
+    needs: resolve
+    uses: ./.github/workflows/deploy-environment.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      environment: production
+      app-name: lazydad-app
+      run-migrations: false
+      tag: ${{ needs.resolve.outputs.tag }}
+      ref: ${{ needs.resolve.outputs.ref }}
+      digest: ${{ needs.resolve.outputs.digest }}
+    secrets: inherit

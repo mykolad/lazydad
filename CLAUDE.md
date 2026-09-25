@@ -176,6 +176,22 @@ Build Image and Deploy Environment steps, smoke tests included, against **stagin
 - **It shares the `deploy` concurrency group with Deploy Master,** so the two never interleave on
   staging. The next Deploy Master run puts staging back on `master`.
 
+### Roll Back Production
+
+`.github/workflows/roll-back-production.yml` (**Roll Back Production**) is manual too: **Actions → Roll Back
+Production → Run workflow** on `master`. It puts production back on an earlier master build without rebuilding.
+- **Which version:** the *version* input (the short SHA shown on the page). Left empty, it's the image of the
+  most recent earlier revision that ran a different image, i.e. "undo the last deploy".
+- **What it runs:** a resolve job finds the image's digest and reads the commit from the image's label.
+  Then production runs the same Deploy Environment steps (protection tags, rollout by digest, that commit's
+  smoke tests), **without migrations**. The database keeps its current schema, so the older code must work
+  with it (additive migrations do).
+- **What it refuses:** images the purge has deleted, images built before the version was baked in (#17),
+  commits that aren't on master, and the image production already runs.
+- **The next Deploy Master run rolls forward again.** To stay on the old version, revert on master.
+- Its resolve job logs in through the `production` environment, so each rollback shows an extra
+  production deployment in GitHub.
+
 `tsg/redeploy.ps1` is only a manual fallback now. It skips staging, migrations and smoke tests.
 
 ## Docker

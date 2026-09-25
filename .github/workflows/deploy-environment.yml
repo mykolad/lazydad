@@ -1,8 +1,8 @@
 name: Deploy Environment
 
 # Reusable: migrate the environment's DB, roll the app to the image, then smoke-test it.
-# Called by Deploy Master (staging, then production) and by Deploy Branch to Staging, so every
-# environment and every deploy path runs exactly the same steps.
+# Called by Deploy Master (staging, then production), Deploy Branch to Staging and Roll Back
+# Production, so every environment and every deploy path runs exactly the same steps.
 on:
   workflow_call:
     inputs:
@@ -15,7 +15,7 @@ on:
         required: true
         type: string
       tag:
-        description: Image tag (short commit SHA) built by build-image.yml
+        description: Image tag (short commit SHA), shown in the summary and expected by the smoke tests as the version
         required: true
         type: string
       ref:
@@ -60,7 +60,9 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
+      # Built by build-image.yml. Roll Back Production neither builds nor migrates, so there's none.
       - uses: actions/download-artifact@v8
+        if: ${{ inputs.run-migrations }}
         with:
           name: efbundle
 
