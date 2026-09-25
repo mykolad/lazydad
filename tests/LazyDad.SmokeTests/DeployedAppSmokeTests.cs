@@ -46,8 +46,11 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
             if (response.StatusCode != HttpStatusCode.OK)
                 return null;
             var body = await response.Content.ReadAsStringAsync();
-            var hasVersion = target.ExpectedVersion is null || body.Contains($">{target.ExpectedVersion}</a></footer>");
-            return hasVersion ? (true, body) : null;
+            // Keep polling until the footer exists: the expected version when one is given, else any version.
+            var ready = target.ExpectedVersion is null
+                ? body.Contains("<footer>Version ")
+                : body.Contains($">{target.ExpectedVersion}</a></footer>");
+            return ready ? (true, body) : null;
         }, SmokeTarget.ColdStartTimeout, $"the home page footer to show version '{target.ExpectedVersion}'");
 
         Assert.Contains("<title>LazyDad</title>", html.Html);

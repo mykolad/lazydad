@@ -97,7 +97,8 @@ public class HtmlGeneratorService
         sb.AppendLine("    .rank { font-size: 1.3rem; margin-right: 0.4rem; }");
         sb.AppendLine("    .reason { color: #8a7a40; font-size: 0.85rem; font-style: italic; }");
         sb.AppendLine("    .tag-judge { background: #b08a2a; }");
-        sb.AppendLine("    footer { margin-top: 2.5rem; color: #aaa; font-size: 0.8rem; }");
+        // #666 on #fafafa is about 5.5:1, above the WCAG AA 4.5:1 minimum for normal-sized text.
+        sb.AppendLine("    footer { margin-top: 2.5rem; color: #666; font-size: 0.8rem; }");
         sb.AppendLine("    footer a { color: inherit; }");
         sb.AppendLine("  </style>");
         sb.AppendLine("</head>");
