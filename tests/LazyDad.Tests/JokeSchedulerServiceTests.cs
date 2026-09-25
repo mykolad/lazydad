@@ -76,6 +76,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         services.AddLogging();
         services.AddSingleton(options);
         services.AddSingleton(Options.Create(new TopJokesOptions { Enabled = false }));
+        services.AddSingleton(Options.Create(new AppInfoOptions()));
         services.AddSingleton(jokeRepositoryMock.Object);
         services.AddSingleton(topJokeRepositoryMock.Object);
         services.AddSingleton(llmClientFactoryMock.Object);

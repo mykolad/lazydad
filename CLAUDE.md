@@ -91,7 +91,12 @@ Azure SQL firewall must allow the local machine's public IP.
     so stray visitors can't wake it and spend LLM tokens.
   - Both pull from ACR with the `lazydad-acr-pull` managed identity; the ACR admin user is disabled.
 - Port exposed by the container: **8080** (`ASPNETCORE_URLS=http://+:8080`)
-- `/healthz` returns `{status, version, revision}`: `version` is the image commit (Deploy Master sets `App__Version`),
+- **Version metadata is baked into the image.** Deploy Master passes build args, and the Dockerfile turns
+  them into `App__Version` (short SHA), `App__Revision` (full SHA), `App__CommitDate`, `App__SourceUrl`
+  (`AppInfoOptions`) and the standard OCI labels. The page footer shows **CalVer + SHA**,
+  e.g. `Version 2026.09.25 · e33d99a`, with the SHA linked to the commit (`Version dev (local build)` otherwise).
+  Deploys remove any `App__Version` container setting, so the image is the only source.
+- `/healthz` returns `{status, version, revision}`: `version` is the image commit (short SHA),
   `revision` is the platform's `CONTAINER_APP_REVISION`, unique per rollout. Smoke tests wait for both.
 - `/status` returns the version, revision and this process's last scheduler tick per language
   (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details).

@@ -99,10 +99,13 @@ jobs:
           # from the draining one even when both run the same commit.
           # run_id, not run_number: run numbers restart when a workflow file is renamed, which
           # would reuse existing revision names (r2-1, ...) and make the rollout fail.
+          # The version comes from the image itself (see Dockerfile). Removing App__Version drops the
+          # deploy-time override older deploys set (only a warning once it's gone), so a container
+          # setting can never contradict the image.
           suffix="r${{ github.run_id }}-${{ github.run_attempt }}"
           az containerapp update -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
             --image "$REGISTRY/lazydad:${{ inputs.tag }}" \
-            --set-env-vars "App__Version=${{ inputs.tag }}" \
+            --remove-env-vars App__Version \
             --revision-suffix "$suffix" -o none
           echo "revision=${{ inputs.app-name }}--$suffix" >> "$GITHUB_OUTPUT"
           fqdn=$(az containerapp show -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)

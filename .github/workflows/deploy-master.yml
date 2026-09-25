@@ -84,7 +84,13 @@ jobs:
         run: |
           az acr login --name lazydadacr
           image="$REGISTRY/lazydad:${{ steps.meta.outputs.tag }}"
-          docker build -t "$image" .
+          # Version metadata is baked into the image (see Dockerfile): App__* settings + OCI labels.
+          docker build -t "$image" \
+            --build-arg VERSION=${{ steps.meta.outputs.tag }} \
+            --build-arg REVISION=${{ steps.meta.outputs.ref }} \
+            --build-arg COMMIT_DATE="$(git show -s --format=%cI HEAD)" \
+            --build-arg SOURCE_URL="${{ github.server_url }}/${{ github.repository }}" \
+            .
           docker push "$image"
           echo "Pushed \`$image\`" >> "$GITHUB_STEP_SUMMARY"
 
