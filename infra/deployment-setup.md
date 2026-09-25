@@ -125,26 +125,30 @@ on a cron schedule in UTC, and costs fractions of a cent per run) deletes old on
 ```bash
 # Git Bash: export MSYS_NO_PATHCONV=1 first, or /dev/null gets rewritten.
 az acr task create --registry lazydadacr --name purge-old-images --schedule "0 3 * * 0" \
-  --cmd "acr purge --filter 'lazydad:.*' --ago 30d --keep 10 --untagged" --context /dev/null
+  --cmd "acr purge --filter 'lazydad:^[0-9a-f]{7}.*$' --ago 30d --keep 10 --untagged" --context /dev/null
 ```
 
 What it keeps:
 - **every image from the last 30 days** (`--ago 30d`)
 - **plus the 10 newest older images.** `--keep` counts only the tags that would otherwise be
   deleted, not all tags.
-- `--untagged` removes manifests nothing references any more. The untagged entries from the April
+- `--untagged` removes manifests that nothing references anymore. The untagged entries from the April
   `docker buildx` pushes are still referenced by their index tags, so they're removed once those tags age out.
+- **whatever an environment runs.** The filter only matches commit-style tags (`^[0-9a-f]{7}`), and
+  Deploy Environment also tags each rollout `deployed-staging` / `deployed-production`. Purge deletes
+  tags, and a manifest that still has a tag is never removed. So the running image survives even if
+  failed deploys pushed many newer images and no deploy succeeded for over 30 days.
 
 Preview what it would delete, check runs, or run it now:
 
 ```bash
-az acr run --registry lazydadacr --cmd "acr purge --filter 'lazydad:.*' --ago 30d --keep 10 --untagged --dry-run" /dev/null
+az acr run --registry lazydadacr --cmd "acr purge --filter 'lazydad:^[0-9a-f]{7}.*$' --ago 30d --keep 10 --untagged --dry-run" /dev/null
 az acr task list-runs --registry lazydadacr --name purge-old-images -o table
 az acr task run --registry lazydadacr --name purge-old-images
 ```
 
-Purge doesn't know what's deployed. Deploy Master always runs the newest image, so that's safe, but
-**lock an image before rolling back to an old one**, so a purge can't remove it while it runs:
+The `deployed-*` tags cover Deploy Master. For a **manual rollback** outside the pipeline, move the tag
+as well (or lock the image), so a purge can't remove what's running:
 `az acr repository update -n lazydadacr --image lazydad:<tag> --delete-enabled false`.
 
 Storage for context: 336 MB of Basic's 10 GB on 2026-09-25. Layers are shared, so each deploy adds

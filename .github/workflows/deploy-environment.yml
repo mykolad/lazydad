@@ -106,6 +106,18 @@ jobs:
           fqdn=$(az containerapp show -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)
           echo "url=https://$fqdn" >> "$GITHUB_OUTPUT"
 
+      # Tag what this environment now runs. The weekly registry purge deletes only commit-style
+      # tags (^[0-9a-f]{7}), and a manifest that still has a tag is never removed, so the image
+      # an environment runs can't be purged even if later failed deploys push newer images.
+      - name: Tag the image as deployed-${{ inputs.environment }}
+        run: |
+          az acr login --name lazydadacr
+          src="$REGISTRY/lazydad:${{ inputs.tag }}"
+          dst="$REGISTRY/lazydad:deployed-${{ inputs.environment }}"
+          docker pull -q "$src"
+          docker tag "$src" "$dst"
+          docker push -q "$dst"
+
       # Staging's ingress denies everything but listed IPs; allow this runner only for the smoke tests.
       # Ingress rules are app-level config, so this doesn't create a revision.
       - name: Allow this runner through the app's IP restrictions

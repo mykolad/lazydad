@@ -96,7 +96,8 @@ Azure SQL firewall must allow the local machine's public IP.
 - `/status` returns the version, revision and this process's last scheduler tick per language
   (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details).
 - **Setup runbook:** `infra/deployment-setup.md` has the one-time Azure/GitHub setup behind Deploy Master,
-  including the weekly registry purge task (`purge-old-images`: keeps the last 30 days plus 10 older images).
+  including the weekly registry purge task (`purge-old-images`: keeps the last 30 days, 10 older
+  images, and whatever is tagged `deployed-staging` / `deployed-production` by Deploy Environment).
 
 ## Building and testing
 
