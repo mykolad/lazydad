@@ -103,7 +103,8 @@ Azure SQL firewall must allow the local machine's public IP.
 - **Setup runbook:** `infra/deployment-setup.md` has the one-time Azure/GitHub setup behind Deploy Master,
   including the weekly registry purge task (`purge-old-images`: keeps the last 30 days, 10 older
   images, and what each environment runs: revisions are pinned to the image digest, and the manifest
-  stays tagged `deployed-<env>` / `deploying-<env>`, applied in two phases around each rollout).
+  stays tagged `deployed-<env>` / `deploying-<env>`, applied in two phases around each rollout; `previous-<env>`
+  marks what served before the latest rollout, for the automatic rollback).
 
 ## Building and testing
 
@@ -144,7 +145,12 @@ Build and Test still compiles the smoke project, because its build step builds t
    `deployed-<environment>` to it,
    allows the runner through staging's IP
    restrictions, and runs `tests/LazyDad.SmokeTests`
-   against it.
+   against it. If they fail, it restarts the new revision (a fresh startup tick) and runs them once more.
+3. **roll-back**, only if production failed **after its new revision took traffic**: the reusable
+   `.github/workflows/roll-back.yml` (**Roll Back**) puts back the image that served before, which Deploy
+   Environment tags `previous-<environment>` before each rollout. It does nothing if production never
+   switched to the new revision, or if the same image served before. It doesn't roll back migrations, and
+   the run still ends as failed, so GitHub notifies you.
 
 Promotion is automatic: production runs only if staging's smoke tests pass. Azure login is
 OIDC through the `lazydad-github-cd` managed identity, trusted via GitHub's immutable subjects
@@ -182,7 +188,8 @@ Build Image and Deploy Environment steps, smoke tests included, against **stagin
 Production → Run workflow** on `master`. It puts production back on an earlier master build without rebuilding.
 - **Which version:** the *version* input (the short SHA shown on the page). Left empty, it's the image of the
   most recent earlier revision that ran a different image, i.e. "undo the last deploy".
-- **What it runs:** a resolve job finds the image's digest and reads the commit from the image's label.
+- **What it runs:** the reusable Roll Back workflow (shared with Deploy Master's automatic rollback). Its
+  resolve job finds the image's digest and reads the commit from the image's label.
   Then production runs the same Deploy Environment steps (protection tags, rollout by digest, that commit's
   smoke tests), **without migrations**. The database keeps its current schema, so the older code must work
   with it (additive migrations do).

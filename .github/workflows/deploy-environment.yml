@@ -35,6 +35,14 @@ on:
         description: Apply the EF migration bundle before rolling out (branch deploys to staging opt in)
         required: true
         type: boolean
+      revision-prefix:
+        description: >-
+          Starts the revision suffix, followed by the run ID and attempt: "r" for deploys, "rb" for
+          rollbacks (Deploy Master deploys and rolls back production in one run). Deploy Master
+          names production's revision "<app-name>--r<run ID>-<attempt>" for an automatic rollback.
+        required: false
+        default: r
+        type: string
 
 env:
   DOTNET_NOLOGO: true
@@ -47,7 +55,8 @@ jobs:
   deploy:
     name: deploy (${{ inputs.environment }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Up to about 17 minutes per smoke-test attempt if every wait times out, and there can be two.
+    timeout-minutes: 45
     environment:
       name: ${{ inputs.environment }}
       url: ${{ steps.app.outputs.url }}
@@ -109,7 +118,7 @@ jobs:
       # Two-phase protection from the weekly purge (which deletes only commit-style tags, then
       # untagged manifests), so the job can stop at any point and whatever runs is still tagged:
       #   1. before the rollout: re-tag what currently runs as deployed-<env> (this also repairs an
-      #      earlier interrupted run), and tag the new digest deploying-<env>;
+      #      earlier interrupted run) and previous-<env>, and tag the new digest deploying-<env>;
       #   2. after the rollout: move deployed-<env> to the new digest.
       - name: Protect the running and the new image
         run: |
@@ -126,6 +135,8 @@ jobs:
           fi
           # Fatal on failure (bash -e): never move the candidate tag while the serving image is unprotected.
           retag "$serving" "$REGISTRY/lazydad:deployed-${{ inputs.environment }}"
+          # What served before this rollout: Deploy Master's automatic rollback returns to it.
+          retag "$serving" "$REGISTRY/lazydad:previous-${{ inputs.environment }}"
           retag "$REGISTRY/lazydad@${{ inputs.digest }}" "$REGISTRY/lazydad:deploying-${{ inputs.environment }}"
 
       - name: Roll out ${{ inputs.tag }}
@@ -144,7 +155,7 @@ jobs:
           # The version comes from the image itself (see Dockerfile). Removing App__Version drops the
           # deploy-time override older deploys set (only a warning once it's gone), so a container
           # setting can never contradict the image.
-          suffix="r${{ github.run_id }}-${{ github.run_attempt }}"
+          suffix="${{ inputs.revision-prefix }}${{ github.run_id }}-${{ github.run_attempt }}"
           az containerapp update -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
             --image "$REGISTRY/lazydad@${{ inputs.digest }}" \
             --remove-env-vars App__Version \
@@ -181,7 +192,15 @@ jobs:
           SMOKE_BASE_URL: ${{ steps.app.outputs.url }}
           SMOKE_EXPECTED_VERSION: ${{ inputs.tag }}
           SMOKE_EXPECTED_REVISION: ${{ steps.app.outputs.revision }}
-        run: dotnet test tests/LazyDad.SmokeTests -c Release --logger "console;verbosity=normal"
+        # One retry, after restarting the revision: its startup tick is the only one the smoke tests
+        # can wait for, and a transient LLM error there would otherwise stay on /status for hours.
+        run: |
+          smoke() { dotnet test tests/LazyDad.SmokeTests -c Release --logger "console;verbosity=normal"; }
+          smoke && exit 0
+          echo "::warning::Smoke tests failed; restarting revision ${{ steps.app.outputs.revision }} and retrying once."
+          az containerapp revision restart -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
+            --revision "${{ steps.app.outputs.revision }}" -o none
+          smoke
 
       - name: Remove this runner from the app's IP restrictions
         if: ${{ always() && steps.ingress.outputs.rule != '' }}

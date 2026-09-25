@@ -1,6 +1,7 @@
 name: Deploy Master
 
-# Build once, promote the same image: staging (migrate, deploy, smoke tests), then production.
+# Build once, promote the same image: staging (migrate, deploy, smoke tests), then production,
+# which is rolled back automatically if it fails after taking traffic.
 # Runs after "Build and Test" succeeds on a push to master, or manually (e.g. to redeploy master).
 on:
   workflow_run:
@@ -64,4 +65,21 @@ jobs:
       tag: ${{ needs.build.outputs.tag }}
       ref: ${{ needs.build.outputs.ref }}
       digest: ${{ needs.build.outputs.digest }}
+    secrets: inherit
+
+  # Production failed after its new revision took traffic (e.g. the smoke tests, even after their
+  # retry): put back the image that served before. Roll Back does nothing if the revision this run
+  # created isn't serving (the deploy failed earlier, so production never changed), or if the
+  # image that served before is the same one. The run still ends as failed, so GitHub notifies you.
+  # Migrations aren't rolled back.
+  roll-back:
+    needs: production
+    if: ${{ failure() && needs.production.result == 'failure' }}
+    uses: ./.github/workflows/roll-back.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      # Deploy Environment's naming, with its default "r" prefix.
+      only-if-serving: lazydad-app--r${{ github.run_id }}-${{ github.run_attempt }}
     secrets: inherit
