@@ -91,7 +91,12 @@ Azure SQL firewall must allow the local machine's public IP.
     so stray visitors can't wake it and spend LLM tokens.
   - Both pull from ACR with the `lazydad-acr-pull` managed identity; the ACR admin user is disabled.
 - Port exposed by the container: **8080** (`ASPNETCORE_URLS=http://+:8080`)
-- `/healthz` returns `{status, version, revision}`: `version` is the image commit (Deploy Master sets `App__Version`),
+- **Version metadata is baked into the image.** Build Image (`build-image.yml`) passes build args, and the Dockerfile turns
+  them into `App__Version` (short SHA), `App__Revision` (full SHA), `App__CommitDate`, `App__SourceUrl`
+  (`AppInfoOptions`) and the standard OCI labels. The top of the page (under the title) shows **CalVer + SHA**,
+  e.g. `Version 2026.09.25 · e33d99a`, with the SHA linked to the commit (`Version dev (local build)` otherwise).
+  Deploys remove any `App__Version` container setting, so the image is the only source.
+- `/healthz` returns `{status, version, revision}`: `version` is the image commit (short SHA),
   `revision` is the platform's `CONTAINER_APP_REVISION`, unique per rollout. Smoke tests wait for both.
 - `/status` returns the version, revision and this process's last scheduler tick per language
   (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details).
@@ -135,7 +140,8 @@ Build and Test still compiles the smoke project, because its build step builds t
 2. **staging** then **production**: the same reusable `.github/workflows/deploy-environment.yml` (**Deploy Environment**) in each
    environment. It opens the SQL firewall for the runner, runs the bundle, closes the firewall,
    protects the running and the new image with tags, rolls the app to the image **by digest**
-   (with `App__Version`), moves `deployed-<environment>` to it,
+   (its version metadata is baked in; any old `App__Version` setting is removed), moves
+   `deployed-<environment>` to it,
    allows the runner through staging's IP
    restrictions, and runs `tests/LazyDad.SmokeTests`
    against it.

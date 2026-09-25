@@ -15,6 +15,7 @@ public class HtmlGeneratorService
     private readonly IJokeRepository jokeRepository;
     private readonly ITopJokeRepository topJokeRepository;
     private readonly IOptions<JokeGenerationOptions> options;
+    private readonly IOptions<AppInfoOptions> appInfo;
     private readonly IWebHostEnvironment env;
     private readonly ILogger<HtmlGeneratorService> logger;
 
@@ -22,12 +23,14 @@ public class HtmlGeneratorService
         IJokeRepository jokeRepository,
         ITopJokeRepository topJokeRepository,
         IOptions<JokeGenerationOptions> options,
+        IOptions<AppInfoOptions> appInfo,
         IWebHostEnvironment env,
         ILogger<HtmlGeneratorService> logger)
     {
         this.jokeRepository = jokeRepository;
         this.topJokeRepository = topJokeRepository;
         this.options = options;
+        this.appInfo = appInfo;
         this.env = env;
         this.logger = logger;
     }
@@ -40,7 +43,7 @@ public class HtmlGeneratorService
             var jokes = await jokeRepository.GetAllAsync(cancellationToken);
             var topJokes = await topJokeRepository.GetAllAsync(cancellationToken);
 
-            var html = BuildHtml(jokes, topJokes, LanguageCodes(options.Value));
+            var html = BuildHtml(jokes, topJokes, LanguageCodes(options.Value), appInfo.Value);
 
             var wwwroot = Path.Combine(env.ContentRootPath, "wwwroot");
             Directory.CreateDirectory(wwwroot);
@@ -67,7 +70,8 @@ public class HtmlGeneratorService
     internal static string BuildHtml(
         IReadOnlyList<Joke> jokes,
         IReadOnlyList<TopJoke> topJokes,
-        IReadOnlyDictionary<string, string> languageCodes)
+        IReadOnlyDictionary<string, string> languageCodes,
+        AppInfoOptions appInfo)
     {
         var sb = new StringBuilder();
         sb.AppendLine("<!DOCTYPE html>");
@@ -93,10 +97,14 @@ public class HtmlGeneratorService
         sb.AppendLine("    .rank { font-size: 1.3rem; margin-right: 0.4rem; }");
         sb.AppendLine("    .reason { color: #8a7a40; font-size: 0.85rem; font-style: italic; }");
         sb.AppendLine("    .tag-judge { background: #b08a2a; }");
+        // #666 on #fafafa is about 5.5:1, above the WCAG AA 4.5:1 minimum for normal-sized text.
+        sb.AppendLine("    .version { margin: 0 0 0.25rem; color: #666; font-size: 0.8rem; }");
+        sb.AppendLine("    .version a { color: inherit; }");
         sb.AppendLine("  </style>");
         sb.AppendLine("</head>");
         sb.AppendLine("<body>");
         sb.AppendLine("  <h1>LazyDad</h1>");
+        sb.AppendLine($"  <p class=\"version\">{VersionText(appInfo)}</p>");
         sb.AppendLine($"  <p class=\"subtitle\">{jokes.Count} joke{(jokes.Count == 1 ? "" : "s")} generated so far.</p>");
 
         foreach (var group in topJokes.GroupBy(t => t.Language))
@@ -161,6 +169,18 @@ public class HtmlGeneratorService
 
     // The page chrome is English (<html lang="en">); each joke is tagged with its own language
     // so screen readers pronounce it correctly.
+    // "Version 2026.09.25 · e33d99a" (CalVer from the commit date, then the short SHA linked to
+    // the commit), or "Version dev (local build)" when the image wasn't built by the pipeline.
+    internal static string VersionText(AppInfoOptions appInfo)
+    {
+        if (appInfo.CalendarVersion is null)
+            return $"Version {EscapeHtml(appInfo.Version)} (local build)";
+
+        var sha = EscapeHtml(appInfo.Version);
+        var shaHtml = appInfo.CommitUrl is { } url ? $"<a href=\"{EscapeHtml(url)}\">{sha}</a>" : sha;
+        return $"Version {appInfo.CalendarVersion} &middot; {shaHtml}";
+    }
+
     private static string LangAttribute(string language, IReadOnlyDictionary<string, string> languageCodes)
         => languageCodes.TryGetValue(language, out var code) ? $" lang=\"{EscapeHtml(code)}\"" : string.Empty;
 
