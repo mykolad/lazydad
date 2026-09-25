@@ -70,13 +70,35 @@ az containerapp secret remove -n lazydad-app -g $RG --secret-names lazydadacrazu
 az acr update -n lazydadacr --admin-enabled false
 ```
 
-## 5. GitHub: OIDC trust, environments, variables, secrets
+## 5. Staging: allow listed IPs only
+
+Staging is public by default, and every cold start runs a real LLM joke tick, so any visitor or
+crawler would cost tokens. With at least one `Allow` rule, Container Apps denies everyone else
+(`403 RBAC: access denied`, answered at the ingress without waking the app):
 
 ```bash
+az containerapp ingress access-restriction set -n lazydad-app-staging -g $RG \
+  --rule-name home --ip-address <your-public-ip>/32 --action Allow --description "Owner's home IP"
+```
+
+CD adds the runner's IP for the duration of the smoke tests and removes it afterwards
+(`restricted-ingress: true` in `cd.yml`). If your home IP changes, update the `home` rule.
+
+## 6. GitHub: OIDC trust, environments, variables, secrets
+
+The federated credentials use GitHub's **immutable subject** format,
+`repo:<owner>@<owner_id>/<repo>@<repo_id>:environment:<env>`. This repo emits it (it was created
+after 2026-07-15; check with `gh api repos/mykolad/lazydad/actions/oidc/customization/sub`, which
+shows `use_immutable_subject: true`). The numeric IDs never change or get reused, so a renamed,
+transferred or re-created repository can't inherit the trust. The name-based subjects
+(`repo:mykolad/lazydad:...`) would never match this repo's tokens.
+
+```bash
+PREFIX="repo:mykolad@$(gh api users/mykolad --jq .id)/lazydad@$(gh api repos/mykolad/lazydad --jq .id)"
 for env in staging production; do
-  az identity federated-credential create -g $RG --identity-name lazydad-github-cd -n github-$env \
+  az identity federated-credential create -g $RG --identity-name lazydad-github-cd -n github-$env-immutable \
     --issuer https://token.actions.githubusercontent.com \
-    --subject "repo:mykolad/lazydad:environment:$env" --audiences api://AzureADTokenExchange
+    --subject "$PREFIX:environment:$env" --audiences api://AzureADTokenExchange
 
   gh api -X PUT repos/mykolad/lazydad/environments/$env \
     --input - <<< '{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}'

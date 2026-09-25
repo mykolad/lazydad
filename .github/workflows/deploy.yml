@@ -21,6 +21,11 @@ on:
         description: Commit to check out for the smoke tests
         required: true
         type: string
+      restricted-ingress:
+        description: The app only allows listed IPs (staging), so allow this runner's IP during the smoke tests
+        required: false
+        default: false
+        type: boolean
 
 env:
   DOTNET_NOLOGO: true
@@ -65,6 +70,7 @@ jobs:
           az sql server firewall-rule create -g "$RESOURCE_GROUP" -s "$SQL_SERVER" -n "$rule" \
             --start-ip-address "$ip" --end-ip-address "$ip" -o none
           echo "rule=$rule" >> "$GITHUB_OUTPUT"
+          echo "ip=$ip" >> "$GITHUB_OUTPUT"
 
       - name: Apply EF migrations
         env:
@@ -101,6 +107,18 @@ jobs:
           fqdn=$(az containerapp show -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)
           echo "url=https://$fqdn" >> "$GITHUB_OUTPUT"
 
+      # Staging's ingress denies everything but listed IPs; allow this runner only for the smoke tests.
+      # Ingress rules are app-level config, so this doesn't create a revision.
+      - name: Allow this runner through the app's IP restrictions
+        id: ingress
+        if: ${{ inputs.restricted-ingress }}
+        run: |
+          rule="gh-${{ github.run_id }}-${{ github.run_attempt }}"
+          az containerapp ingress access-restriction set -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
+            --rule-name "$rule" --ip-address "${{ steps.firewall.outputs.ip }}/32" --action Allow \
+            --description "CD smoke tests, run ${{ github.run_id }}" -o none
+          echo "rule=$rule" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
@@ -112,6 +130,12 @@ jobs:
           SMOKE_EXPECTED_REVISION: ${{ steps.app.outputs.revision }}
           SMOKE_DEPLOYED_AFTER: ${{ steps.app.outputs.deployed_after }}
         run: dotnet test tests/LazyDad.SmokeTests -c Release --logger "console;verbosity=normal"
+
+      - name: Remove this runner from the app's IP restrictions
+        if: ${{ always() && steps.ingress.outputs.rule != '' }}
+        run: |
+          az containerapp ingress access-restriction remove -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
+            --rule-name "${{ steps.ingress.outputs.rule }}" -o none
 
       - name: Summary
         if: ${{ always() }}

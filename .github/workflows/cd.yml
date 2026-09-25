@@ -94,6 +94,7 @@ jobs:
     with:
       environment: staging
       app-name: lazydad-app-staging
+      restricted-ingress: true
       tag: ${{ needs.build.outputs.tag }}
       ref: ${{ needs.build.outputs.ref }}
     secrets: inherit

@@ -87,6 +87,8 @@ Azure SQL firewall must allow the local machine's public IP.
   - `lazydad-app` (prod): **exactly one replica** (min = max = 1), no health probes yet.
     Scaling out needs the scheduler lock and shared page rendering first; see issue #6.
   - `lazydad-app-staging`: 0–1 replicas (scales to zero when idle). Calls the real LLMs.
+    **Ingress allows listed IPs only** (the owner's `home` rule; CD adds its runner temporarily),
+    so stray visitors can't wake it and spend LLM tokens.
   - Both pull from ACR with the `lazydad-acr-pull` managed identity; the ACR admin user is disabled.
 - Port exposed by the container: **8080** (`ASPNETCORE_URLS=http://+:8080`)
 - `/healthz` returns `{status, version, revision}`: `version` is the image commit (CD sets `App__Version`),
@@ -124,11 +126,13 @@ The unit run excludes `Category=Smoke` (the smoke tests need a deployed app).
    migration bundle (`dotnet-ef`, pinned in `dotnet-tools.json`).
 2. **staging** then **production**: the same reusable `.github/workflows/deploy.yml` in each
    environment. It opens the SQL firewall for the runner, runs the bundle, closes the firewall,
-   rolls the app to the image (with `App__Version`), and runs `tests/LazyDad.SmokeTests`
+   rolls the app to the image (with `App__Version`), allows the runner through staging's IP
+   restrictions, and runs `tests/LazyDad.SmokeTests`
    against it.
 
 Promotion is automatic: production runs only if staging's smoke tests pass. Azure login is
-OIDC through the `lazydad-github-cd` managed identity; nothing secret lives in GitHub except
+OIDC through the `lazydad-github-cd` managed identity, trusted via GitHub's immutable subjects
+(`repo:mykolad@<id>/lazydad@<id>:environment:<env>`); nothing secret lives in GitHub except
 each environment's `SQL_CONNECTION_STRING`. Both environments only accept deployments from
 `master`.
 
