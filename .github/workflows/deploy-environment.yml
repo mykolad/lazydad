@@ -139,10 +139,13 @@ jobs:
           # the configured image again on every replica start, and the weekly purge may delete old
           # commit tags. The digest stays pullable as long as the manifest exists, which the
           # deployed-*/deploying-* tags guarantee (see "Protect the running and the new image").
+          # The version comes from the image itself (see Dockerfile). Removing App__Version drops the
+          # deploy-time override older deploys set (only a warning once it's gone), so a container
+          # setting can never contradict the image.
           suffix="r${{ github.run_id }}-${{ github.run_attempt }}"
           az containerapp update -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
             --image "$REGISTRY/lazydad@${{ inputs.digest }}" \
-            --set-env-vars "App__Version=${{ inputs.tag }}" \
+            --remove-env-vars App__Version \
             --revision-suffix "$suffix" -o none
           echo "revision=${{ inputs.app-name }}--$suffix" >> "$GITHUB_OUTPUT"
           fqdn=$(az containerapp show -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)
