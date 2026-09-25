@@ -62,6 +62,9 @@ jobs:
       - name: Build EF migration bundle
         run: |
           dotnet tool restore
+          # `migrations bundle` reads the projects' assets files but doesn't restore them itself;
+          # restore for the bundle's target runtime (this also restores LazyDad.Data).
+          dotnet restore src/LazyDad.Api -r linux-x64
           dotnet ef migrations bundle --project src/LazyDad.Data --startup-project src/LazyDad.Api \
             --configuration Release --self-contained --target-runtime linux-x64 --output efbundle --force
 
