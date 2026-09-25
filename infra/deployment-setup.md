@@ -151,8 +151,9 @@ What it keeps:
      would fail to restart or scale once purge deleted that tag.
   2. **The running manifest always keeps a non-commit tag.** The filter only matches commit-style
      tags (`^[0-9a-f]{7}`), and Deploy Environment tags in two phases, so the job can stop at any point:
-     - **before the rollout**, it re-tags whatever currently runs as `deployed-<env>` (repairing any
-       earlier interrupted run), and tags the new digest `deploying-<env>`;
+     - **before the rollout**, it re-tags the image of the revision **serving traffic** as `deployed-<env>`
+       (not the app's desired image, which after a failed rollout names the failed one; repairing any
+       earlier interrupted run). This is fatal on failure, and only then does it tag the new digest `deploying-<env>`;
      - **after the rollout**, it moves `deployed-<env>` to the new digest.
 
      Those tags survive the purge, so the manifest is never "untagged" and the pinned digest stays pullable.
