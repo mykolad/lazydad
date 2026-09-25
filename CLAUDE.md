@@ -91,7 +91,7 @@ Azure SQL firewall must allow the local machine's public IP.
     so stray visitors can't wake it and spend LLM tokens.
   - Both pull from ACR with the `lazydad-acr-pull` managed identity; the ACR admin user is disabled.
 - Port exposed by the container: **8080** (`ASPNETCORE_URLS=http://+:8080`)
-- **Version metadata is baked into the image.** Deploy Master passes build args, and the Dockerfile turns
+- **Version metadata is baked into the image.** Build Image (`build-image.yml`) passes build args, and the Dockerfile turns
   them into `App__Version` (short SHA), `App__Revision` (full SHA), `App__CommitDate`, `App__SourceUrl`
   (`AppInfoOptions`) and the standard OCI labels. The top of the page (under the title) shows **CalVer + SHA**,
   e.g. `Version 2026.09.25 · e33d99a`, with the SHA linked to the commit (`Version dev (local build)` otherwise).
@@ -100,7 +100,10 @@ Azure SQL firewall must allow the local machine's public IP.
   `revision` is the platform's `CONTAINER_APP_REVISION`, unique per rollout. Smoke tests wait for both.
 - `/status` returns the version, revision and this process's last scheduler tick per language
   (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details).
-- **Setup runbook:** `infra/deployment-setup.md` has the one-time Azure/GitHub setup behind Deploy Master.
+- **Setup runbook:** `infra/deployment-setup.md` has the one-time Azure/GitHub setup behind Deploy Master,
+  including the weekly registry purge task (`purge-old-images`: keeps the last 30 days, 10 older
+  images, and what each environment runs: revisions are pinned to the image digest, and the manifest
+  stays tagged `deployed-<env>` / `deploying-<env>`, applied in two phases around each rollout).
 
 ## Building and testing
 
@@ -131,11 +134,14 @@ Build and Test still compiles the smoke project, because its build step builds t
 `.github/workflows/deploy-master.yml` (**Deploy Master**) runs after Build and Test succeeds on a push to `master` (or manually via
 *Run workflow*). It builds once and promotes the same image:
 
-1. **build** builds the image `lazydad:<short-sha>` and pushes it to ACR, and builds the EF
-   migration bundle (`dotnet-ef`, pinned in `dotnet-tools.json`).
+1. **build** (the reusable `.github/workflows/build-image.yml`, **Build Image**) builds the image
+   `lazydad:<short-sha>`, pushes it to ACR (outputting its digest), and builds the EF migration bundle
+   (`dotnet-ef`, pinned in `dotnet-tools.json`).
 2. **staging** then **production**: the same reusable `.github/workflows/deploy-environment.yml` (**Deploy Environment**) in each
    environment. It opens the SQL firewall for the runner, runs the bundle, closes the firewall,
-   rolls the app to the image (its version metadata is baked in; any old `App__Version` setting is removed),
+   protects the running and the new image with tags, rolls the app to the image **by digest**
+   (its version metadata is baked in; any old `App__Version` setting is removed), moves
+   `deployed-<environment>` to it,
    allows the runner through staging's IP
    restrictions, and runs `tests/LazyDad.SmokeTests`
    against it.
@@ -157,6 +163,18 @@ $env:SMOKE_BASE_URL = "https://lazydad-app-staging.<env-domain>.westeurope.azure
 # optional: $env:SMOKE_EXPECTED_VERSION, $env:SMOKE_EXPECTED_REVISION
 dotnet test tests/LazyDad.SmokeTests
 ```
+
+### Deploy Branch to Staging (preview a branch before merging)
+
+`.github/workflows/deploy-branch-to-staging.yml` (**Deploy Branch to Staging**) is manual: on GitHub,
+open **Actions → Deploy Branch to Staging → Run workflow** and pick the branch. It runs the same
+Build Image and Deploy Environment steps, smoke tests included, against **staging only**.
+- **Production can't be reached from it:** the `production` environment accepts `master` only.
+  `staging` also accepts `*/*` branches (`feature/…`, `fix/…`).
+- **Migrations are off by default** (the *run-migrations* checkbox). Staging keeps any migration it
+  applies, so only tick it for a branch whose migrations you'll merge unchanged.
+- **It shares the `deploy` concurrency group with Deploy Master,** so the two never interleave on
+  staging. The next Deploy Master run puts staging back on `master`.
 
 `tsg/redeploy.ps1` is only a manual fallback now. It skips staging, migrations and smoke tests.
 

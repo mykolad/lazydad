@@ -12,87 +12,28 @@ on:
 permissions:
   contents: read
 
-# Never cancel a deployment halfway; later runs queue behind it.
+# Shared with Deploy Branch to Staging: both deploy staging, so they queue behind each other.
+# Never cancel a deployment halfway.
 concurrency:
-  group: cd
+  group: deploy
   cancel-in-progress: false
-
-env:
-  DOTNET_NOLOGO: true
-  DOTNET_CLI_TELEMETRY_OPTOUT: true
-  REGISTRY: lazydadacr.azurecr.io
 
 jobs:
   build:
-    name: build image + migration bundle
     # workflow_run also fires for PR runs whose head branch is named "master" (e.g. from a
     # fork), so require a push to this repository. Manual runs are limited to master by the
-    # environment's branch policy.
+    # production environment's branch policy.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    # The staging environment scopes this job's Azure OIDC identity (it only needs AcrPush here).
-    environment: staging
+    uses: ./.github/workflows/build-image.yml
     permissions:
       contents: read
       id-token: write
-    outputs:
-      tag: ${{ steps.meta.outputs.tag }}
-      ref: ${{ steps.meta.outputs.ref }}
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-
-      - name: Resolve tag
-        id: meta
-        run: |
-          echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "tag=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.x
-
-      - name: Build EF migration bundle
-        run: |
-          dotnet tool restore
-          # `migrations bundle` reads the projects' assets files but doesn't restore them itself;
-          # restore for the bundle's target runtime (this also restores LazyDad.Data).
-          dotnet restore src/LazyDad.Api -r linux-x64
-          dotnet ef migrations bundle --project src/LazyDad.Data --startup-project src/LazyDad.Api \
-            --configuration Release --self-contained --target-runtime linux-x64 --output efbundle --force
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: efbundle
-          path: efbundle
-          retention-days: 7
-
-      - uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Build and push image
-        run: |
-          az acr login --name lazydadacr
-          image="$REGISTRY/lazydad:${{ steps.meta.outputs.tag }}"
-          # Version metadata is baked into the image (see Dockerfile): App__* settings + OCI labels.
-          docker build -t "$image" \
-            --build-arg VERSION=${{ steps.meta.outputs.tag }} \
-            --build-arg REVISION=${{ steps.meta.outputs.ref }} \
-            --build-arg COMMIT_DATE="$(git show -s --format=%cI HEAD)" \
-            --build-arg SOURCE_URL="${{ github.server_url }}/${{ github.repository }}" \
-            .
-          docker push "$image"
-          echo "Pushed \`$image\`" >> "$GITHUB_STEP_SUMMARY"
+    with:
+      ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
   staging:
     needs: build
@@ -104,8 +45,10 @@ jobs:
       environment: staging
       app-name: lazydad-app-staging
       restricted-ingress: true
+      run-migrations: true
       tag: ${{ needs.build.outputs.tag }}
       ref: ${{ needs.build.outputs.ref }}
+      digest: ${{ needs.build.outputs.digest }}
     secrets: inherit
 
   production:
@@ -117,6 +60,8 @@ jobs:
     with:
       environment: production
       app-name: lazydad-app
+      run-migrations: true
       tag: ${{ needs.build.outputs.tag }}
       ref: ${{ needs.build.outputs.ref }}
+      digest: ${{ needs.build.outputs.digest }}
     secrets: inherit

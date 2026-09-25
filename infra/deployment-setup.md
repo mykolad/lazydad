@@ -116,3 +116,59 @@ printf '%s' "<prod conn>"    | gh secret set SQL_CONNECTION_STRING --env product
 
 Jobs log in only through an environment (the federated subjects are `environment:staging` and
 `environment:production`), so a workflow that doesn't use one can't get an Azure token.
+
+Branch deploys to staging (Deploy Branch to Staging): `staging` also accepts `*/*` branches, and
+`production` stays master-only. In GitHub's patterns `*` doesn't cross `/`, so `*/*` matches `feature/x`.
+The federated credential matches the environment, not the branch, so nothing changes in Azure:
+
+```bash
+gh api -X POST repos/mykolad/lazydad/environments/staging/deployment-branch-policies -f name='*/*' -f type=branch
+```
+
+## 7. Registry cleanup: weekly purge of old images
+
+Every deploy pushes a new `lazydad:<short-sha>` image. An **ACR Task** (it runs inside the registry,
+on a cron schedule in UTC, and costs fractions of a cent per run) deletes old ones every Sunday at 03:00 UTC:
+
+```bash
+# Git Bash: export MSYS_NO_PATHCONV=1 first, or /dev/null gets rewritten.
+az acr task create --registry lazydadacr --name purge-old-images --schedule "0 3 * * 0" \
+  --cmd "acr purge --filter 'lazydad:^[0-9a-f]{7}.*$' --ago 30d --keep 10 --untagged" --context /dev/null
+```
+
+What it keeps:
+- **every image from the last 30 days** (`--ago 30d`)
+- **plus the 10 newest older images.** `--keep` counts only the tags that would otherwise be
+  deleted, not all tags.
+- `--untagged` removes manifests that nothing references anymore. `--keep` applies to those
+  separately too: the 10 newest eligible untagged manifests are also kept, so a dry run can show fewer
+  manifest deletions than you'd expect. The untagged entries from the April `docker buildx` pushes are
+  still referenced by their index tags, so they're removed once those tags age out.
+- **whatever an environment runs**, even if failed deploys pushed many newer images and no deploy
+  succeeded for over 30 days. That takes two things together:
+  1. **Revisions are pinned to the image digest** (`lazydad@sha256:…`), not the commit tag. Container Apps
+     resolves the configured image again on every replica start, so a revision pointing at a tag
+     would fail to restart or scale once purge deleted that tag.
+  2. **The running manifest always keeps a non-commit tag.** The filter only matches commit-style
+     tags (`^[0-9a-f]{7}`), and Deploy Environment tags in two phases, so the job can stop at any point:
+     - **before the rollout**, it re-tags whatever currently runs as `deployed-<env>` (repairing any
+       earlier interrupted run), and tags the new digest `deploying-<env>`;
+     - **after the rollout**, it moves `deployed-<env>` to the new digest.
+
+     Those tags survive the purge, so the manifest is never "untagged" and the pinned digest stays pullable.
+
+Preview what it would delete, check runs, or run it now:
+
+```bash
+az acr run --registry lazydadacr --cmd "acr purge --filter 'lazydad:^[0-9a-f]{7}.*$' --ago 30d --keep 10 --untagged --dry-run" /dev/null
+az acr task list-runs --registry lazydadacr --name purge-old-images -o table
+az acr task run --registry lazydadacr --name purge-old-images
+```
+
+Deploy Master handles both. For a **manual rollback** outside the pipeline, do the same yourself:
+deploy by digest (`az acr repository show -n lazydadacr --image lazydad:<tag> --query digest -o tsv`, then
+`--image lazydadacr.azurecr.io/lazydad@<digest>`), and move the `deployed-*` tag to it or lock the image
+(`az acr repository update -n lazydadacr --image lazydad:<tag> --delete-enabled false`).
+
+Storage for context: 336 MB of Basic's 10 GB on 2026-09-25. Layers are shared, so each deploy adds
+only a few MB of unique data.

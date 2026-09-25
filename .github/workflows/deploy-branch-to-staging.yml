@@ -1,0 +1,47 @@
+name: Deploy Branch to Staging
+
+# Manual: build the branch picked in "Run workflow" and deploy it to staging only, with the same
+# steps and smoke tests as Deploy Master. Production can't be reached from here (its environment
+# accepts master only). The next Deploy Master run puts staging back on master.
+on:
+  workflow_dispatch:
+    inputs:
+      run-migrations:
+        description: >-
+          Apply this branch's EF migrations to the staging DB. Leave off unless the branch adds
+          migrations you intend to merge unchanged: staging keeps any migration it applies.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Shared with Deploy Master: both deploy staging, so they queue behind each other.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-image.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      ref: ${{ github.sha }}
+
+  staging:
+    needs: build
+    uses: ./.github/workflows/deploy-environment.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      environment: staging
+      app-name: lazydad-app-staging
+      restricted-ingress: true
+      run-migrations: ${{ inputs.run-migrations }}
+      tag: ${{ needs.build.outputs.tag }}
+      ref: ${{ needs.build.outputs.ref }}
+      digest: ${{ needs.build.outputs.digest }}
+    secrets: inherit
