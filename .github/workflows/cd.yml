@@ -1,4 +1,4 @@
-name: CD
+name: Deploy Master
 
 # Build once, promote the same image: staging (migrate, deploy, smoke tests), then production.
 # Runs after CI succeeds on a push to master, or manually (e.g. to redeploy master).
