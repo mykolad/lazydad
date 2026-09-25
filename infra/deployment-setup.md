@@ -117,6 +117,14 @@ printf '%s' "<prod conn>"    | gh secret set SQL_CONNECTION_STRING --env product
 Jobs log in only through an environment (the federated subjects are `environment:staging` and
 `environment:production`), so a workflow that doesn't use one can't get an Azure token.
 
+Branch deploys to staging (Deploy Branch to Staging): `staging` also accepts `*/*` branches, and
+`production` stays master-only. In GitHub's patterns `*` doesn't cross `/`, so `*/*` matches `feature/x`.
+The federated credential matches the environment, not the branch, so nothing changes in Azure:
+
+```bash
+gh api -X POST repos/mykolad/lazydad/environments/staging/deployment-branch-policies -f name='*/*' -f type=branch
+```
+
 ## 7. Registry cleanup: weekly purge of old images
 
 Every deploy pushes a new `lazydad:<short-sha>` image. An **ACR Task** (it runs inside the registry,
