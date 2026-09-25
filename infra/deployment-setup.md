@@ -116,3 +116,36 @@ printf '%s' "<prod conn>"    | gh secret set SQL_CONNECTION_STRING --env product
 
 Jobs log in only through an environment (the federated subjects are `environment:staging` and
 `environment:production`), so a workflow that doesn't use one can't get an Azure token.
+
+## 7. Registry cleanup: weekly purge of old images
+
+Every deploy pushes a new `lazydad:<short-sha>` image. An **ACR Task** (it runs inside the registry,
+on a cron schedule in UTC, and costs fractions of a cent per run) deletes old ones every Sunday at 03:00 UTC:
+
+```bash
+# Git Bash: export MSYS_NO_PATHCONV=1 first, or /dev/null gets rewritten.
+az acr task create --registry lazydadacr --name purge-old-images --schedule "0 3 * * 0" \
+  --cmd "acr purge --filter 'lazydad:.*' --ago 30d --keep 10 --untagged" --context /dev/null
+```
+
+What it keeps:
+- **every image from the last 30 days** (`--ago 30d`)
+- **plus the 10 newest older images.** `--keep` counts only the tags that would otherwise be
+  deleted, not all tags.
+- `--untagged` removes manifests nothing references any more. The untagged entries from the April
+  `docker buildx` pushes are still referenced by their index tags, so they're removed once those tags age out.
+
+Preview what it would delete, check runs, or run it now:
+
+```bash
+az acr run --registry lazydadacr --cmd "acr purge --filter 'lazydad:.*' --ago 30d --keep 10 --untagged --dry-run" /dev/null
+az acr task list-runs --registry lazydadacr --name purge-old-images -o table
+az acr task run --registry lazydadacr --name purge-old-images
+```
+
+Purge doesn't know what's deployed. Deploy Master always runs the newest image, so that's safe, but
+**lock an image before rolling back to an old one**, so a purge can't remove it while it runs:
+`az acr repository update -n lazydadacr --image lazydad:<tag> --delete-enabled false`.
+
+Storage for context: 336 MB of Basic's 10 GB on 2026-09-25. Layers are shared, so each deploy adds
+only a few MB of unique data.
