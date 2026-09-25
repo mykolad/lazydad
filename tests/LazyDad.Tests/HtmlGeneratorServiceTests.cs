@@ -80,7 +80,7 @@ public class HtmlGeneratorServiceTests
     }
 
     [Fact]
-    public void VersionFooter_ForPipelineBuild_ShowsCalVerAndLinkedShortSha()
+    public void VersionText_ForPipelineBuild_ShowsCalVerAndLinkedShortSha()
     {
         var appInfo = new AppInfoOptions
         {
@@ -90,39 +90,43 @@ public class HtmlGeneratorServiceTests
             SourceUrl = "https://github.com/mykolad/lazydad/"
         };
 
-        var footer = HtmlGeneratorService.VersionFooter(appInfo);
+        var text = HtmlGeneratorService.VersionText(appInfo);
 
         Assert.Equal(
             "Version 2026.09.25 &middot; <a href=\"https://github.com/mykolad/lazydad/commit/e33d99a1234567890abcdef1234567890abcdef\">e33d99a</a>",
-            footer);
+            text);
     }
 
     [Fact]
-    public void VersionFooter_UsesTheUtcDate()
+    public void VersionText_UsesTheUtcDate()
     {
         // 00:30 on the 26th in UTC+3 is still the 25th in UTC.
         var appInfo = new AppInfoOptions { Version = "abc1234", CommitDate = new DateTimeOffset(2026, 9, 26, 0, 30, 0, TimeSpan.FromHours(3)) };
 
-        Assert.StartsWith("Version 2026.09.25 &middot; abc1234", HtmlGeneratorService.VersionFooter(appInfo));
+        Assert.StartsWith("Version 2026.09.25 &middot; abc1234", HtmlGeneratorService.VersionText(appInfo));
     }
 
     [Fact]
-    public void VersionFooter_WithoutRepository_ShowsShaWithoutLink()
+    public void VersionText_WithoutRepository_ShowsShaWithoutLink()
     {
         var appInfo = new AppInfoOptions { Version = "abc1234", CommitDate = DateTimeOffset.UtcNow };
 
-        Assert.DoesNotContain("<a ", HtmlGeneratorService.VersionFooter(appInfo));
+        Assert.DoesNotContain("<a ", HtmlGeneratorService.VersionText(appInfo));
     }
 
     [Fact]
-    public void VersionFooter_ForLocalBuild_SaysSo()
-        => Assert.Equal("Version dev (local build)", HtmlGeneratorService.VersionFooter(new AppInfoOptions()));
+    public void VersionText_ForLocalBuild_SaysSo()
+        => Assert.Equal("Version dev (local build)", HtmlGeneratorService.VersionText(new AppInfoOptions()));
 
     [Fact]
-    public void BuildHtml_RendersTheVersionFooter()
+    public void BuildHtml_RendersTheVersionUnderTheTitle()
     {
         var html = HtmlGeneratorService.BuildHtml([], [], new Dictionary<string, string>(), new AppInfoOptions());
 
-        Assert.Contains("<footer>Version dev (local build)</footer>", html);
+        var title = html.IndexOf("<h1>LazyDad</h1>", StringComparison.Ordinal);
+        var version = html.IndexOf("<p class=\"version\">Version dev (local build)</p>", StringComparison.Ordinal);
+        Assert.True(title >= 0 && version > title, "The version line should follow the title.");
+        Assert.True(version < html.IndexOf("class=\"subtitle\"", StringComparison.Ordinal), "The version line should come before the joke count.");
+        Assert.DoesNotContain("<footer>", html);
     }
 }

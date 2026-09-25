@@ -37,24 +37,24 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
     }
 
     [Fact]
-    public async Task HomePage_IsServed_WithTheDeployedVersionInTheFooter()
+    public async Task HomePage_IsServed_WithTheDeployedVersion()
     {
-        // The new revision regenerates the page on startup, so wait until its footer shows the version.
+        // The new revision regenerates the page on startup, so wait until it shows the deployed version.
         var html = await target.PollAsync<(bool Found, string Html)>(async () =>
         {
             using var response = await target.Client.GetAsync("");
             if (response.StatusCode != HttpStatusCode.OK)
                 return null;
             var body = await response.Content.ReadAsStringAsync();
-            // Keep polling until the footer exists: the expected version when one is given, else any version.
+            // Keep polling until the version line exists: the expected version when one is given, else any.
             var ready = target.ExpectedVersion is null
-                ? body.Contains("<footer>Version ")
-                : body.Contains($">{target.ExpectedVersion}</a></footer>");
+                ? body.Contains("<p class=\"version\">Version ")
+                : body.Contains($">{target.ExpectedVersion}</a></p>");
             return ready ? (true, body) : null;
-        }, SmokeTarget.ColdStartTimeout, $"the home page footer to show version '{target.ExpectedVersion}'");
+        }, SmokeTarget.ColdStartTimeout, $"the home page to show version '{target.ExpectedVersion}'");
 
         Assert.Contains("<title>LazyDad</title>", html.Html);
-        Assert.Matches(@"<footer>Version (\d{4}\.\d{2}\.\d{2}|\S+ \(local build\))", html.Html);
+        Assert.Matches(@"<p class=""version"">Version (\d{4}\.\d{2}\.\d{2}|\S+ \(local build\))", html.Html);
     }
 
     [Fact]

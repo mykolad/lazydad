@@ -93,7 +93,7 @@ Azure SQL firewall must allow the local machine's public IP.
 - Port exposed by the container: **8080** (`ASPNETCORE_URLS=http://+:8080`)
 - **Version metadata is baked into the image.** Deploy Master passes build args, and the Dockerfile turns
   them into `App__Version` (short SHA), `App__Revision` (full SHA), `App__CommitDate`, `App__SourceUrl`
-  (`AppInfoOptions`) and the standard OCI labels. The page footer shows **CalVer + SHA**,
+  (`AppInfoOptions`) and the standard OCI labels. The top of the page (under the title) shows **CalVer + SHA**,
   e.g. `Version 2026.09.25 · e33d99a`, with the SHA linked to the commit (`Version dev (local build)` otherwise).
   Deploys remove any `App__Version` container setting, so the image is the only source.
 - `/healthz` returns `{status, version, revision}`: `version` is the image commit (short SHA),

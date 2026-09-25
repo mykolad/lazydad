@@ -98,12 +98,13 @@ public class HtmlGeneratorService
         sb.AppendLine("    .reason { color: #8a7a40; font-size: 0.85rem; font-style: italic; }");
         sb.AppendLine("    .tag-judge { background: #b08a2a; }");
         // #666 on #fafafa is about 5.5:1, above the WCAG AA 4.5:1 minimum for normal-sized text.
-        sb.AppendLine("    footer { margin-top: 2.5rem; color: #666; font-size: 0.8rem; }");
-        sb.AppendLine("    footer a { color: inherit; }");
+        sb.AppendLine("    .version { margin: 0 0 0.25rem; color: #666; font-size: 0.8rem; }");
+        sb.AppendLine("    .version a { color: inherit; }");
         sb.AppendLine("  </style>");
         sb.AppendLine("</head>");
         sb.AppendLine("<body>");
         sb.AppendLine("  <h1>LazyDad</h1>");
+        sb.AppendLine($"  <p class=\"version\">{VersionText(appInfo)}</p>");
         sb.AppendLine($"  <p class=\"subtitle\">{jokes.Count} joke{(jokes.Count == 1 ? "" : "s")} generated so far.</p>");
 
         foreach (var group in topJokes.GroupBy(t => t.Language))
@@ -153,7 +154,6 @@ public class HtmlGeneratorService
             }
         }
 
-        sb.AppendLine($"  <footer>{VersionFooter(appInfo)}</footer>");
         sb.AppendLine("</body>");
         sb.AppendLine("</html>");
         return sb.ToString();
@@ -171,7 +171,7 @@ public class HtmlGeneratorService
     // so screen readers pronounce it correctly.
     // "Version 2026.09.25 · e33d99a" (CalVer from the commit date, then the short SHA linked to
     // the commit), or "Version dev (local build)" when the image wasn't built by the pipeline.
-    internal static string VersionFooter(AppInfoOptions appInfo)
+    internal static string VersionText(AppInfoOptions appInfo)
     {
         if (appInfo.CalendarVersion is null)
             return $"Version {EscapeHtml(appInfo.Version)} (local build)";
