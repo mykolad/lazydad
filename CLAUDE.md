@@ -93,6 +93,8 @@ Azure SQL firewall must allow the local machine's public IP.
 - Port exposed by the container: **8080** (`ASPNETCORE_URLS=http://+:8080`)
 - `/healthz` returns `{status, version, revision}`: `version` is the image commit (CD sets `App__Version`),
   `revision` is the platform's `CONTAINER_APP_REVISION`, unique per rollout. Smoke tests wait for both.
+- `/status` returns the version, revision and this process's last scheduler tick per language
+  (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details).
 - **Setup runbook:** `infra/cd-setup.md` has the one-time Azure/GitHub setup behind CD.
 
 ## Building and testing
@@ -138,12 +140,14 @@ each environment's `SQL_CONNECTION_STRING`. Both environments only accept deploy
 `master`.
 
 The smoke tests check that `/healthz` reports the new version and revision, that the page and API are served,
-that every model configured in `appsettings.json` produced a fresh joke after the rollout, and
-that the leaderboard is populated. To run them against staging locally:
+that the new revision itself saved a joke from every model configured in `appsettings.json` and ran
+the judge (it reports its own last tick on `/status`; DB rows alone could come from the draining
+revision), that those jokes are in `/jokes`, and
+that the leaderboard is populated with valid ranks. To run them against staging locally:
 
 ```
 $env:SMOKE_BASE_URL = "https://lazydad-app-staging.<env-domain>.westeurope.azurecontainerapps.io"
-$env:SMOKE_DEPLOYED_AFTER = "2026-09-24T00:00:00Z"   # optional: SMOKE_EXPECTED_VERSION, SMOKE_EXPECTED_REVISION
+# optional: $env:SMOKE_EXPECTED_VERSION, $env:SMOKE_EXPECTED_REVISION
 dotnet test tests/LazyDad.SmokeTests
 ```
 

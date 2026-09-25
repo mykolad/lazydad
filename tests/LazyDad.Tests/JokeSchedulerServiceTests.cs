@@ -28,6 +28,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     // Tests wait on the scheduler's own "tick completed" / "tick failed" logs: they are
     // written after all tick work, so assertions never race the background loop.
     private readonly CapturingLogger<JokeSchedulerService> schedulerLogger = new();
+    private readonly SchedulerStatus status = new();
     private ServiceProvider? provider;
 
     public JokeSchedulerServiceTests()
@@ -84,7 +85,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         services.AddScoped<HtmlGeneratorService>();
         provider = services.BuildServiceProvider();
 
-        return new JokeSchedulerService(provider.GetRequiredService<IServiceScopeFactory>(), options, schedulerLogger);
+        return new JokeSchedulerService(provider.GetRequiredService<IServiceScopeFactory>(), options, status, schedulerLogger);
     }
 
     private Task TickCompletedAsync() => schedulerLogger.WaitForAsync(LogLevel.Debug, "tick for 'Ukrainian' completed", Timeout);
@@ -117,6 +118,13 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         Assert.Equal("fast", joke.Model);
         Assert.Equal("Ukrainian", joke.Language);
         Assert.Contains("<p lang=\"uk\">Швидкий жарт</p>", await File.ReadAllTextAsync(IndexPath));
+
+        // /status reports exactly what this process saved: the timed-out model is absent.
+        var tick = Assert.Single(status.LastTicks);
+        Assert.True(tick.Succeeded);
+        Assert.Equal([new GeneratedJoke(joke.Id, "fast")], tick.Jokes);
+        Assert.Equal("unchanged", tick.Leaderboard);
+        Assert.Null(tick.Error);
     }
 
     [Fact]
@@ -132,6 +140,9 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         Assert.Contains(schedulerLogger.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("empty response"));
         Assert.Empty(saved);
         Assert.False(File.Exists(IndexPath));
+        var tick = Assert.Single(status.LastTicks);
+        Assert.True(tick.Succeeded);
+        Assert.Empty(tick.Jokes);
     }
 
     [Fact]
@@ -154,6 +165,12 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         // proves little. StopAsync doesn't rethrow a faulted ExecuteTask either. The terminal
         // state does prove it: a loop that survived ends cancelled by shutdown, never faulted.
         Assert.True(scheduler.ExecuteTask!.IsCanceled, $"Expected Canceled, was {scheduler.ExecuteTask.Status}.");
+
+        // Recorded as a failed tick with only the exception type (/status is public).
+        var tick = Assert.Single(status.LastTicks);
+        Assert.False(tick.Succeeded);
+        Assert.Equal("InvalidOperationException", tick.Error);
+        Assert.Empty(tick.Jokes);
         Assert.Single(saved);
     }
 

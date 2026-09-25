@@ -58,25 +58,39 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
     }
 
     [Fact]
-    public async Task EveryConfiguredModel_GeneratesAFreshJoke()
+    public async Task ThisRevision_SavesAJokeFromEveryConfiguredModel_AndJudgesThem()
     {
-        // The new revision generates on startup. A fresh joke per model proves the Azure OpenAI
-        // deployments, keys and DB writes all work in this environment.
-        Assert.NotNull(target.DeployedAfter);
-        var expected = SmokeTarget.ConfiguredModels();
-        Assert.NotEmpty(expected);
+        // The new revision generates on startup and reports its own tick on /status (in-memory,
+        // so only the revision answering can have produced it). DB rows alone can't prove that:
+        // a draining revision's periodic tick could write them. This checks that the Azure OpenAI
+        // deployments, keys, DB writes and the judge all work in this revision.
+        var configured = SmokeTarget.ConfiguredLanguages();
+        Assert.NotEmpty(configured);
 
-        var allFresh = await target.PollAsync<bool>(async () =>
+        var status = await target.PollAsync<JsonElement>(async () =>
         {
-            var jokes = await target.GetJsonAsync("jokes");
-            var freshModels = jokes.EnumerateArray()
-                .Where(j => DateTime.SpecifyKind(j.GetProperty("generatedAt").GetDateTime(), DateTimeKind.Utc) >= target.DeployedAfter)
-                .Select(j => j.GetProperty("model").GetString())
-                .ToHashSet();
-            return expected.All(freshModels.Contains) ? true : null;
-        }, SmokeTarget.GenerationTimeout, $"a joke generated after {target.DeployedAfter:O} from each of: {string.Join(", ", expected)}");
+            var json = await target.GetJsonAsync("status");
+            var isExpectedRevision = target.ExpectedRevision is null || json.GetProperty("revision").GetString() == target.ExpectedRevision;
+            var reported = json.GetProperty("ticks").EnumerateArray().Select(t => t.GetProperty("language").GetString()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            return isExpectedRevision && configured.Keys.All(reported.Contains) ? json : null;
+        }, SmokeTarget.GenerationTimeout, $"revision '{target.ExpectedRevision}' to report a tick for: {string.Join(", ", configured.Keys)}");
 
-        Assert.True(allFresh);
+        var jokes = await target.GetJsonAsync("jokes");
+        var persisted = jokes.EnumerateArray().ToDictionary(j => j.GetProperty("id").GetInt32(), j => j.GetProperty("model").GetString());
+
+        foreach (var tick in status.GetProperty("ticks").EnumerateArray())
+        {
+            var language = tick.GetProperty("language").GetString()!;
+            Assert.True(tick.GetProperty("succeeded").GetBoolean(), $"'{language}' tick failed: {tick.GetProperty("error").GetString()}.");
+            Assert.NotEqual("failed", tick.GetProperty("leaderboard").GetString());
+
+            var saved = tick.GetProperty("jokes").EnumerateArray()
+                .Select(j => (Id: j.GetProperty("id").GetInt32(), Model: j.GetProperty("model").GetString()))
+                .ToList();
+            Assert.All(configured[language], model => Assert.Contains(saved, j => j.Model == model));
+            // What the revision says it saved is really in the DB and served by the API.
+            Assert.All(saved, j => Assert.Equal(j.Model, persisted.GetValueOrDefault(j.Id)));
+        }
     }
 
     [Fact]

@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Net.Http.Json;
 using System.Text.Json;
 
@@ -9,9 +8,8 @@ namespace LazyDad.SmokeTests;
 /// <list type="bullet">
 /// <item><c>SMOKE_BASE_URL</c>: the app's https URL (required).</item>
 /// <item><c>SMOKE_EXPECTED_VERSION</c>: the commit the new revision must report on /healthz.</item>
-/// <item><c>SMOKE_EXPECTED_REVISION</c>: the Container Apps revision /healthz must report; unique per rollout,
-/// so a re-deploy of the same commit can't be satisfied by the draining revision.</item>
-/// <item><c>SMOKE_DEPLOYED_AFTER</c>: ISO-8601 UTC time; jokes generated after it prove the new revision's LLM calls work.</item>
+/// <item><c>SMOKE_EXPECTED_REVISION</c>: the Container Apps revision /healthz and /status must report; unique
+/// per rollout, so neither a re-deploy of the same commit nor the draining revision can satisfy the checks.</item>
 /// </list>
 /// Missing SMOKE_BASE_URL fails loudly: a smoke run that silently tests nothing is worse than none.
 /// </summary>
@@ -29,17 +27,11 @@ public sealed class SmokeTarget : IDisposable
         Client = new HttpClient { BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/"), Timeout = TimeSpan.FromSeconds(30) };
         ExpectedVersion = NullIfBlank(Environment.GetEnvironmentVariable("SMOKE_EXPECTED_VERSION"));
         ExpectedRevision = NullIfBlank(Environment.GetEnvironmentVariable("SMOKE_EXPECTED_REVISION"));
-        DeployedAfter = DateTime.TryParse(
-            Environment.GetEnvironmentVariable("SMOKE_DEPLOYED_AFTER"),
-            CultureInfo.InvariantCulture,
-            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal,
-            out var after) ? after : null;
     }
 
     public HttpClient Client { get; }
     public string? ExpectedVersion { get; }
     public string? ExpectedRevision { get; }
-    public DateTime? DeployedAfter { get; }
 
     /// <summary>
     /// Polls until <paramref name="check"/> returns a value, tolerating transient failures
@@ -68,15 +60,16 @@ public sealed class SmokeTarget : IDisposable
 
     public Task<JsonElement> GetJsonAsync(string path) => Client.GetFromJsonAsync<JsonElement>(path);
 
-    /// <summary>Models configured for enabled languages in the deployed appsettings.json.</summary>
-    public static IReadOnlyList<string> ConfiguredModels()
+    /// <summary>Enabled languages and their models, from the deployed appsettings.json.</summary>
+    public static IReadOnlyDictionary<string, IReadOnlyList<string>> ConfiguredLanguages()
     {
         using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "deployed-appsettings.json")));
         return document.RootElement.GetProperty("JokeGeneration").GetProperty("Languages").EnumerateArray()
             .Where(l => l.GetProperty("Enabled").GetBoolean())
-            .SelectMany(l => l.GetProperty("LlmModels").EnumerateArray().Select(m => m.GetProperty("Model").GetString()!))
-            .Distinct()
-            .ToList();
+            .ToDictionary(
+                l => l.GetProperty("Language").GetString()!,
+                l => (IReadOnlyList<string>)l.GetProperty("LlmModels").EnumerateArray().Select(m => m.GetProperty("Model").GetString()!).ToList(),
+                StringComparer.OrdinalIgnoreCase);
     }
 
     public void Dispose() => Client.Dispose();

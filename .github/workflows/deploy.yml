@@ -93,9 +93,8 @@ jobs:
       - name: Roll out ${{ inputs.tag }}
         id: app
         run: |
-          echo "deployed_after=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           # A unique revision suffix forces a new revision even on a re-run of the same tag, so the
-          # startup tick (and the smoke tests' fresh-joke check) always happens. The resulting
+          # startup tick (which the smoke tests verify via /status) always happens. The resulting
           # revision name is what /healthz reports, so the smoke tests can tell this rollout apart
           # from the draining one even when both run the same commit.
           suffix="r${{ github.run_number }}-${{ github.run_attempt }}"
@@ -128,7 +127,6 @@ jobs:
           SMOKE_BASE_URL: ${{ steps.app.outputs.url }}
           SMOKE_EXPECTED_VERSION: ${{ inputs.tag }}
           SMOKE_EXPECTED_REVISION: ${{ steps.app.outputs.revision }}
-          SMOKE_DEPLOYED_AFTER: ${{ steps.app.outputs.deployed_after }}
         run: dotnet test tests/LazyDad.SmokeTests -c Release --logger "console;verbosity=normal"
 
       - name: Remove this runner from the app's IP restrictions

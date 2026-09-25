@@ -9,15 +9,18 @@ public class JokeSchedulerService : BackgroundService
 {
     private readonly IServiceScopeFactory scopeFactory;
     private readonly IOptions<JokeGenerationOptions> options;
+    private readonly SchedulerStatus status;
     private readonly ILogger<JokeSchedulerService> logger;
 
     public JokeSchedulerService(
         IServiceScopeFactory scopeFactory,
         IOptions<JokeGenerationOptions> options,
+        SchedulerStatus status,
         ILogger<JokeSchedulerService> logger)
     {
         this.scopeFactory = scopeFactory;
         this.options = options;
+        this.status = status;
         this.logger = logger;
     }
 
@@ -69,7 +72,10 @@ public class JokeSchedulerService : BackgroundService
     {
         try
         {
-            await GenerateAndPersistAsync(language, stoppingToken);
+            var (saved, leaderboard) = await GenerateAndPersistAsync(language, stoppingToken);
+            status.Record(new TickStatus(
+                language.Language, DateTime.UtcNow, true,
+                saved.Select(j => new GeneratedJoke(j.Id, j.Model)).ToList(), leaderboard, null));
             logger.LogDebug("Joke tick for '{Language}' completed.", language.Language);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -78,11 +84,12 @@ public class JokeSchedulerService : BackgroundService
         }
         catch (Exception ex)
         {
+            status.Record(new TickStatus(language.Language, DateTime.UtcNow, false, [], "unknown", ex.GetType().Name));
             logger.LogError(ex, "Joke tick for '{Language}' failed; will retry on the next tick.", language.Language);
         }
     }
 
-    private async Task GenerateAndPersistAsync(LanguageOptions language, CancellationToken stoppingToken)
+    private async Task<(IReadOnlyList<Joke> Saved, string Leaderboard)> GenerateAndPersistAsync(LanguageOptions language, CancellationToken stoppingToken)
     {
         // All models for the language are queried in parallel.
         var generated = await Task.WhenAll(language.LlmModels.Select(model => GenerateAsync(language, model, stoppingToken)));
@@ -115,9 +122,12 @@ public class JokeSchedulerService : BackgroundService
 
         // Runs even when nothing new was saved, so an empty leaderboard still gets seeded.
         var topChanged = false;
+        var leaderboard = "unchanged";
         try
         {
             topChanged = await topJokeService.UpdateAsync(language.Language, saved, stoppingToken);
+            if (topChanged)
+                leaderboard = "updated";
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -125,11 +135,14 @@ public class JokeSchedulerService : BackgroundService
         }
         catch (Exception ex)
         {
+            leaderboard = "failed";
             logger.LogError(ex, "Failed to update the top jokes for '{Language}'.", language.Language);
         }
 
         if (saved.Count > 0 || topChanged)
             await htmlGenerator.RegenerateAsync(stoppingToken);
+
+        return (saved, leaderboard);
     }
 
     /// <summary>Generates one joke with one model. Returns <c>null</c> on failure so sibling models are unaffected.</summary>
