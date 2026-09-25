@@ -1,6 +1,6 @@
 # CD one-time setup (Azure + GitHub)
 
-What was set up on 2026-09-24 to support `.github/workflows/cd.yml`. Every step used the `az`
+What was set up on 2026-09-24 to support `.github/workflows/deploy-master.yml` (Deploy Master). Every step used the `az`
 and `gh` CLIs. Keep this in sync with reality until it's replaced by Bicep (IaC is on the plan).
 
 > In Git Bash, `export MSYS_NO_PATHCONV=1` first. Otherwise the `/subscriptions/...` scopes get
@@ -82,7 +82,7 @@ az containerapp ingress access-restriction set -n lazydad-app-staging -g $RG \
 ```
 
 CD adds the runner's IP for the duration of the smoke tests and removes it afterwards
-(`restricted-ingress: true` in `cd.yml`). If your home IP changes, update the `home` rule.
+(`restricted-ingress: true` in `deploy-master.yml`). If your home IP changes, update the `home` rule.
 
 ## 6. GitHub: OIDC trust, environments, variables, secrets
 

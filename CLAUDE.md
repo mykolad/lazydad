@@ -122,12 +122,12 @@ CI still compiles the smoke project, because its build step builds the whole sol
 
 ## CD
 
-`.github/workflows/cd.yml` runs after CI succeeds on a push to `master` (or manually via
+`.github/workflows/deploy-master.yml` (**Deploy Master**) runs after CI succeeds on a push to `master` (or manually via
 *Run workflow*). It builds once and promotes the same image:
 
 1. **build** builds the image `lazydad:<short-sha>` and pushes it to ACR, and builds the EF
    migration bundle (`dotnet-ef`, pinned in `dotnet-tools.json`).
-2. **staging** then **production**: the same reusable `.github/workflows/deploy.yml` in each
+2. **staging** then **production**: the same reusable `.github/workflows/deploy-environment.yml` (**Deploy Environment**) in each
    environment. It opens the SQL firewall for the runner, runs the bundle, closes the firewall,
    rolls the app to the image (with `App__Version`), allows the runner through staging's IP
    restrictions, and runs `tests/LazyDad.SmokeTests`
