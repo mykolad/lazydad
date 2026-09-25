@@ -76,12 +76,14 @@ jobs:
             esac
           }
 
-          # The app's revisions, oldest first (Container Apps keeps the inactive ones).
+          # The app's revisions, oldest first (Container Apps keeps the inactive ones): the provisioned
+          # ones, plus whichever serves traffic whatever its state (e.g. stuck after the smoke tests'
+          # restart), so an automatic rollback still finds it.
           names=(); weights=(); images=()
           while IFS=$'\t' read -r name weight image; do
             names+=("$name"); weights+=("$weight"); images+=("$image")
           done < <(az containerapp revision list -n "$APP_NAME" -g "$RESOURCE_GROUP" --all \
-            --query "sort_by([?properties.provisioningState=='Provisioned'], &properties.createdTime)[].[name, properties.trafficWeight, properties.template.containers[0].image]" -o tsv)
+            --query "sort_by([?properties.provisioningState=='Provisioned' || properties.trafficWeight > \`0\`], &properties.createdTime)[].[name, properties.trafficWeight, properties.template.containers[0].image]" -o tsv)
 
           serving=-1
           for i in "${!names[@]}"; do
