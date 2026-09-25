@@ -166,10 +166,13 @@ az acr task list-runs --registry lazydadacr --name purge-old-images -o table
 az acr task run --registry lazydadacr --name purge-old-images
 ```
 
-Deploy Master handles both. For a **manual rollback** outside the pipeline, do the same yourself:
+Deploy Master and Roll Back Production handle both. For a **manual rollback** outside the pipelines
+(e.g. to an image built before images carried their version, which Roll Back Production refuses), do the same yourself:
 deploy by digest (`az acr repository show -n lazydadacr --image lazydad:<tag> --query digest -o tsv`, then
 `--image lazydadacr.azurecr.io/lazydad@<digest>`), and move the `deployed-*` tag to it or lock the image
-(`az acr repository update -n lazydadacr --image lazydad:<tag> --delete-enabled false`).
+(`az acr repository update -n lazydadacr --image lazydad:<tag> --delete-enabled false`). An image built
+before #17 reports version `dev` unless you also pass `--set-env-vars App__Version=<tag>`; the next pipeline
+deploy removes that setting again.
 
 Storage for context: 336 MB of Basic's 10 GB on 2026-09-25. Layers are shared, so each deploy adds
 only a few MB of unique data.
