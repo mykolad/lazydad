@@ -113,11 +113,17 @@ jobs:
         run: |
           az acr login --name lazydadacr
           retag() { docker pull -q "$1" && docker tag "$1" "$2" && docker push -q "$2"; }
-          current=$(az containerapp show -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
-            --query 'properties.template.containers[0].image' -o tsv)
-          if ! retag "$current" "$REGISTRY/lazydad:deployed-${{ inputs.environment }}"; then
-            echo "::warning::Could not re-tag the currently running image ($current) as deployed-${{ inputs.environment }}."
+          # The image of the revision actually serving traffic, not the app's desired template:
+          # after a failed rollout the template names the failed image while an older one serves.
+          serving=$(az containerapp revision list -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
+            --query '[?properties.trafficWeight > `0`].properties.template.containers[0].image' -o tsv)
+          count=$(printf '%s\n' "$serving" | grep -c . || true)
+          if [ "$count" -ne 1 ]; then
+            echo "::error::Expected exactly one revision serving traffic, found $count; not moving any tags."
+            exit 1
           fi
+          # Fatal on failure (bash -e): never move the candidate tag while the serving image is unprotected.
+          retag "$serving" "$REGISTRY/lazydad:deployed-${{ inputs.environment }}"
           retag "$REGISTRY/lazydad@${{ inputs.digest }}" "$REGISTRY/lazydad:deploying-${{ inputs.environment }}"
 
       - name: Roll out ${{ inputs.tag }}
