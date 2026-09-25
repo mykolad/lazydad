@@ -97,7 +97,9 @@ jobs:
           # startup tick (which the smoke tests verify via /status) always happens. The resulting
           # revision name is what /healthz reports, so the smoke tests can tell this rollout apart
           # from the draining one even when both run the same commit.
-          suffix="r${{ github.run_number }}-${{ github.run_attempt }}"
+          # run_id, not run_number: run numbers restart when a workflow file is renamed, which
+          # would reuse existing revision names (r2-1, ...) and make the rollout fail.
+          suffix="r${{ github.run_id }}-${{ github.run_attempt }}"
           az containerapp update -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
             --image "$REGISTRY/lazydad:${{ inputs.tag }}" \
             --set-env-vars "App__Version=${{ inputs.tag }}" \
