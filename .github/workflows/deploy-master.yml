@@ -43,6 +43,7 @@ jobs:
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
       ref: ${{ steps.meta.outputs.ref }}
+      digest: ${{ steps.push.outputs.digest }}
 
     steps:
       - uses: actions/checkout@v4
@@ -81,12 +82,17 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Build and push image
+        id: push
         run: |
           az acr login --name lazydadacr
           image="$REGISTRY/lazydad:${{ steps.meta.outputs.tag }}"
           docker build -t "$image" .
           docker push "$image"
-          echo "Pushed \`$image\`" >> "$GITHUB_STEP_SUMMARY"
+          # Deployments reference the immutable digest, not the tag (see Deploy Environment).
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$image")
+          digest="${digest#*@}"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "Pushed \`$image\` (\`$digest\`)" >> "$GITHUB_STEP_SUMMARY"
 
   staging:
     needs: build
@@ -100,6 +106,7 @@ jobs:
       restricted-ingress: true
       tag: ${{ needs.build.outputs.tag }}
       ref: ${{ needs.build.outputs.ref }}
+      digest: ${{ needs.build.outputs.digest }}
     secrets: inherit
 
   production:
@@ -113,4 +120,5 @@ jobs:
       app-name: lazydad-app
       tag: ${{ needs.build.outputs.tag }}
       ref: ${{ needs.build.outputs.ref }}
+      digest: ${{ needs.build.outputs.digest }}
     secrets: inherit

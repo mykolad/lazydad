@@ -134,10 +134,14 @@ What it keeps:
   deleted, not all tags.
 - `--untagged` removes manifests that nothing references anymore. The untagged entries from the April
   `docker buildx` pushes are still referenced by their index tags, so they're removed once those tags age out.
-- **whatever an environment runs.** The filter only matches commit-style tags (`^[0-9a-f]{7}`), and
-  Deploy Environment also tags each rollout `deployed-staging` / `deployed-production`. Purge deletes
-  tags, and a manifest that still has a tag is never removed. So the running image survives even if
-  failed deploys pushed many newer images and no deploy succeeded for over 30 days.
+- **whatever an environment runs**, even if failed deploys pushed many newer images and no deploy
+  succeeded for over 30 days. That takes two things together:
+  1. **Revisions are pinned to the image digest** (`lazydad@sha256:…`), not the commit tag. Container Apps
+     resolves the configured image again on every replica start, so a revision pointing at a tag
+     would fail to restart or scale once purge deleted that tag.
+  2. **The running manifest keeps a tag.** Deploy Environment tags each rollout `deployed-staging` /
+     `deployed-production`, and the filter only matches commit-style tags (`^[0-9a-f]{7}`). So that
+     tag survives, the manifest is never "untagged", and the pinned digest stays pullable.
 
 Preview what it would delete, check runs, or run it now:
 
@@ -147,9 +151,10 @@ az acr task list-runs --registry lazydadacr --name purge-old-images -o table
 az acr task run --registry lazydadacr --name purge-old-images
 ```
 
-The `deployed-*` tags cover Deploy Master. For a **manual rollback** outside the pipeline, move the tag
-as well (or lock the image), so a purge can't remove what's running:
-`az acr repository update -n lazydadacr --image lazydad:<tag> --delete-enabled false`.
+Deploy Master handles both. For a **manual rollback** outside the pipeline, do the same yourself:
+deploy by digest (`az acr repository show -n lazydadacr --image lazydad:<tag> --query digest -o tsv`, then
+`--image lazydadacr.azurecr.io/lazydad@<digest>`), and move the `deployed-*` tag to it or lock the image
+(`az acr repository update -n lazydadacr --image lazydad:<tag> --delete-enabled false`).
 
 Storage for context: 336 MB of Basic's 10 GB on 2026-09-25. Layers are shared, so each deploy adds
 only a few MB of unique data.

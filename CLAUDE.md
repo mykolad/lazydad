@@ -97,7 +97,8 @@ Azure SQL firewall must allow the local machine's public IP.
   (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details).
 - **Setup runbook:** `infra/deployment-setup.md` has the one-time Azure/GitHub setup behind Deploy Master,
   including the weekly registry purge task (`purge-old-images`: keeps the last 30 days, 10 older
-  images, and whatever is tagged `deployed-staging` / `deployed-production` by Deploy Environment).
+  images, and what each environment runs: revisions are pinned to the image digest and the manifest
+  stays tagged `deployed-staging` / `deployed-production`).
 
 ## Building and testing
 
@@ -132,7 +133,8 @@ Build and Test still compiles the smoke project, because its build step builds t
    migration bundle (`dotnet-ef`, pinned in `dotnet-tools.json`).
 2. **staging** then **production**: the same reusable `.github/workflows/deploy-environment.yml` (**Deploy Environment**) in each
    environment. It opens the SQL firewall for the runner, runs the bundle, closes the firewall,
-   rolls the app to the image (with `App__Version`), allows the runner through staging's IP
+   rolls the app to the image **by digest** (with `App__Version`), tags it `deployed-<environment>`,
+   allows the runner through staging's IP
    restrictions, and runs `tests/LazyDad.SmokeTests`
    against it.
 
