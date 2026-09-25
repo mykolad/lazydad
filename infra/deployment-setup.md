@@ -153,7 +153,8 @@ What it keeps:
      tags (`^[0-9a-f]{7}`), and Deploy Environment tags in two phases, so the job can stop at any point:
      - **before the rollout**, it re-tags the image of the revision **serving traffic** as `deployed-<env>`
        (not the app's desired image, which after a failed rollout names the failed one; repairing any
-       earlier interrupted run). This is fatal on failure, and only then does it tag the new digest `deploying-<env>`;
+       earlier interrupted run), and also as `previous-<env>` (Deploy Master's automatic rollback target).
+       This is fatal on failure, and only then does it tag the new digest `deploying-<env>`;
      - **after the rollout**, it moves `deployed-<env>` to the new digest.
 
      Those tags survive the purge, so the manifest is never "untagged" and the pinned digest stays pullable.
@@ -166,7 +167,7 @@ az acr task list-runs --registry lazydadacr --name purge-old-images -o table
 az acr task run --registry lazydadacr --name purge-old-images
 ```
 
-Deploy Master and Roll Back Production handle both. For a **manual rollback** outside the pipelines
+Deploy Master and Roll Back Production (both through Deploy Environment) handle both. For a **manual rollback** outside the pipelines
 (e.g. to an image built before images carried their version, which Roll Back Production refuses), do the same yourself:
 deploy by digest (`az acr repository show -n lazydadacr --image lazydad:<tag> --query digest -o tsv`, then
 `--image lazydadacr.azurecr.io/lazydad@<digest>`), and move the `deployed-*` tag to it or lock the image
