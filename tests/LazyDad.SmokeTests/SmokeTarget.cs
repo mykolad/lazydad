@@ -4,7 +4,7 @@ using System.Text.Json;
 namespace LazyDad.SmokeTests;
 
 /// <summary>
-/// The deployed app under test, configured by the CD pipeline:
+/// The deployed app under test, configured by the Deploy Master pipeline:
 /// <list type="bullet">
 /// <item><c>SMOKE_BASE_URL</c>: the app's https URL (required).</item>
 /// <item><c>SMOKE_EXPECTED_VERSION</c>: the commit the new revision must report on /healthz.</item>

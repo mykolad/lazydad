@@ -1,10 +1,10 @@
 name: Deploy Master
 
 # Build once, promote the same image: staging (migrate, deploy, smoke tests), then production.
-# Runs after CI succeeds on a push to master, or manually (e.g. to redeploy master).
+# Runs after "Build and Test" succeeds on a push to master, or manually (e.g. to redeploy master).
 on:
   workflow_run:
-    workflows: [CI]
+    workflows: [Build and Test]
     types: [completed]
     branches: [master]
   workflow_dispatch:
@@ -90,7 +90,7 @@ jobs:
 
   staging:
     needs: build
-    uses: ./.github/workflows/deploy.yml
+    uses: ./.github/workflows/deploy-environment.yml
     permissions:
       contents: read
       id-token: write
@@ -104,7 +104,7 @@ jobs:
 
   production:
     needs: [build, staging]
-    uses: ./.github/workflows/deploy.yml
+    uses: ./.github/workflows/deploy-environment.yml
     permissions:
       contents: read
       id-token: write

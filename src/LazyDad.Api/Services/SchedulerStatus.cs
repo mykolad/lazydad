@@ -5,7 +5,7 @@ namespace LazyDad.Api.Services;
 /// <summary>
 /// In-memory record of this process's most recent scheduler tick per language, served on
 /// <c>/status</c>. Because it lives in the process, it describes only the revision that answers
-/// the request, so CD smoke tests can check that the new revision generated jokes itself
+/// the request, so the deployment smoke tests can check that the new revision generated jokes itself
 /// (DB rows can't say that: a draining revision might have written them).
 /// </summary>
 public class SchedulerStatus

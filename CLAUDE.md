@@ -12,7 +12,7 @@ regenerated after every new joke. Deployed to Azure Container Apps.
 src/LazyDad.Api    — ASP.NET Core Web API (controllers, background services, configuration)
 src/LazyDad.Data   — EF Core DbContext, entities, migrations, repositories
 tests/LazyDad.Tests      — xUnit + Moq unit tests (plus SQLite in-memory for repositories)
-tests/LazyDad.SmokeTests — smoke tests against a deployed app (run by CD, excluded from CI)
+tests/LazyDad.SmokeTests — smoke tests against a deployed app (run by Deploy Master, not by Build and Test)
 ```
 
 ## Code style rules
@@ -80,22 +80,22 @@ Azure SQL firewall must allow the local machine's public IP.
   - Staging: `lazydad-db-staging`, serverless on the **free offer** (100k vCore-s/month). It
     pauses when idle; if the free amount runs out it stays paused until next month, and staging
     deploys fail until then.
-- **Migrations** run in CD as an EF migration bundle, against staging and then prod (see CD).
+- **Migrations** run in Deploy Master as an EF migration bundle, against staging and then prod (see below).
   The app never migrates on startup.
 - **Azure OpenAI** (swedencentral): each `LlmModels[].Model` in config is the Azure deployment name (e.g. `gpt-5.3-chat`)
 - **Container Apps** (environment `lazydad-cae`, Consumption, 0.5 vCPU / 1 GiB):
   - `lazydad-app` (prod): **exactly one replica** (min = max = 1), no health probes yet.
     Scaling out needs the scheduler lock and shared page rendering first; see issue #6.
   - `lazydad-app-staging`: 0–1 replicas (scales to zero when idle). Calls the real LLMs.
-    **Ingress allows listed IPs only** (the owner's `home` rule; CD adds its runner temporarily),
+    **Ingress allows listed IPs only** (the owner's `home` rule; Deploy Master adds its runner temporarily),
     so stray visitors can't wake it and spend LLM tokens.
   - Both pull from ACR with the `lazydad-acr-pull` managed identity; the ACR admin user is disabled.
 - Port exposed by the container: **8080** (`ASPNETCORE_URLS=http://+:8080`)
-- `/healthz` returns `{status, version, revision}`: `version` is the image commit (CD sets `App__Version`),
+- `/healthz` returns `{status, version, revision}`: `version` is the image commit (Deploy Master sets `App__Version`),
   `revision` is the platform's `CONTAINER_APP_REVISION`, unique per rollout. Smoke tests wait for both.
 - `/status` returns the version, revision and this process's last scheduler tick per language
   (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details).
-- **Setup runbook:** `infra/cd-setup.md` has the one-time Azure/GitHub setup behind CD.
+- **Setup runbook:** `infra/deployment-setup.md` has the one-time Azure/GitHub setup behind Deploy Master.
 
 ## Building and testing
 
@@ -104,30 +104,31 @@ dotnet build lazydad.slnx
 dotnet test  lazydad.slnx
 ```
 
-## CI
+## Build and Test
 
-`.github/workflows/ci.yml` runs on every PR and on pushes to `master`: build, then
+`.github/workflows/build-and-test.yml` (**Build and Test**, job `build-and-test`, the required check on `master`)
+runs on every PR and on pushes to `master`: build, then
 `tools/coverage.ps1` for tests, coverage (coverlet → ReportGenerator, pinned in `dotnet-tools.json`),
 and the gate. The job fails if line coverage is below the script's `$MinLineCoverage`.
 Coverage settings (included assemblies, migrations excluded) live in
-`tests/LazyDad.Tests/coverage.runsettings`. CI runs the same script, so a local run reproduces the gate:
+`tests/LazyDad.Tests/coverage.runsettings`. The workflow runs the same script, so a local run reproduces the gate:
 
 ```
 ./tools/coverage.ps1        # HTML report at coverage/index.html
 ```
 
 Raise `$MinLineCoverage` as coverage grows; never lower it to get a PR through.
-The script runs only `tests/LazyDad.Tests` (the smoke tests need a deployed app; CD runs them).
-CI still compiles the smoke project, because its build step builds the whole solution.
+The script runs only `tests/LazyDad.Tests` (the smoke tests need a deployed app; Deploy Master runs them).
+Build and Test still compiles the smoke project, because its build step builds the whole solution.
 
-## CD
+## Deploy Master
 
-`.github/workflows/cd.yml` runs after CI succeeds on a push to `master` (or manually via
+`.github/workflows/deploy-master.yml` (**Deploy Master**) runs after Build and Test succeeds on a push to `master` (or manually via
 *Run workflow*). It builds once and promotes the same image:
 
 1. **build** builds the image `lazydad:<short-sha>` and pushes it to ACR, and builds the EF
    migration bundle (`dotnet-ef`, pinned in `dotnet-tools.json`).
-2. **staging** then **production**: the same reusable `.github/workflows/deploy.yml` in each
+2. **staging** then **production**: the same reusable `.github/workflows/deploy-environment.yml` (**Deploy Environment**) in each
    environment. It opens the SQL firewall for the runner, runs the bundle, closes the firewall,
    rolls the app to the image (with `App__Version`), allows the runner through staging's IP
    restrictions, and runs `tests/LazyDad.SmokeTests`
