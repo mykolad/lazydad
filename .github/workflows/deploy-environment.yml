@@ -1,7 +1,8 @@
 name: Deploy Environment
 
 # Reusable: migrate the environment's DB, roll the app to the image, then smoke-test it.
-# Called by deploy-master.yml for staging and then production, so both get exactly the same steps.
+# Called by Deploy Master (staging, then production) and by Deploy Branch to Staging, so every
+# environment and every deploy path runs exactly the same steps.
 on:
   workflow_call:
     inputs:
@@ -14,7 +15,7 @@ on:
         required: true
         type: string
       tag:
-        description: Image tag (short commit SHA) built by deploy-master.yml
+        description: Image tag (short commit SHA) built by build-image.yml
         required: true
         type: string
       ref:
@@ -29,6 +30,10 @@ on:
         description: The app only allows listed IPs (staging), so allow this runner's IP during the smoke tests
         required: false
         default: false
+        type: boolean
+      run-migrations:
+        description: Apply the EF migration bundle before rolling out (branch deploys to staging opt in)
+        required: true
         type: boolean
 
 env:
@@ -65,18 +70,23 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # The runner's IP is unpredictable, so open the SQL firewall for it only while migrating.
+      # The runner's IP is unpredictable: it's allowed through the SQL firewall only while migrating,
+      # and through staging's ingress only during the smoke tests.
+      - name: Detect runner IP
+        id: runner
+        run: echo "ip=$(curl -fsS https://api.ipify.org)" >> "$GITHUB_OUTPUT"
+
       - name: Open SQL firewall for this runner
         id: firewall
+        if: ${{ inputs.run-migrations }}
         run: |
-          ip=$(curl -fsS https://api.ipify.org)
           rule="gh-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.environment }}"
           az sql server firewall-rule create -g "$RESOURCE_GROUP" -s "$SQL_SERVER" -n "$rule" \
-            --start-ip-address "$ip" --end-ip-address "$ip" -o none
+            --start-ip-address "${{ steps.runner.outputs.ip }}" --end-ip-address "${{ steps.runner.outputs.ip }}" -o none
           echo "rule=$rule" >> "$GITHUB_OUTPUT"
-          echo "ip=$ip" >> "$GITHUB_OUTPUT"
 
       - name: Apply EF migrations
+        if: ${{ inputs.run-migrations }}
         env:
           SQL_CONNECTION_STRING: ${{ secrets.SQL_CONNECTION_STRING }}
         run: |
@@ -147,8 +157,8 @@ jobs:
         run: |
           rule="gh-${{ github.run_id }}-${{ github.run_attempt }}"
           az containerapp ingress access-restriction set -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
-            --rule-name "$rule" --ip-address "${{ steps.firewall.outputs.ip }}/32" --action Allow \
-            --description "Deploy Master smoke tests, run ${{ github.run_id }}" -o none
+            --rule-name "$rule" --ip-address "${{ steps.runner.outputs.ip }}/32" --action Allow \
+            --description "Smoke tests, ${{ github.workflow }} run ${{ github.run_id }}" -o none
           echo "rule=$rule" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-dotnet@v4
