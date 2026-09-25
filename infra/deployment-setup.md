@@ -1,4 +1,4 @@
-# CD one-time setup (Azure + GitHub)
+# Deployment one-time setup (Azure + GitHub)
 
 What was set up on 2026-09-24 to support `.github/workflows/deploy-master.yml` (Deploy Master). Every step used the `az`
 and `gh` CLIs. Keep this in sync with reality until it's replaced by Bicep (IaC is on the plan).
@@ -44,7 +44,7 @@ az sql db create -g $RG -s lazydad-sql-swedencentral -n lazydad-db-staging \
 ```
 
 The connection string is prod's with `Database=lazydad-db-staging` (same server login).
-Apply the schema once with `dotnet ef database update --connection "<staging>"`; CD keeps it current after that.
+Apply the schema once with `dotnet ef database update --connection "<staging>"`; Deploy Master keeps it current after that.
 
 ## 3. Staging Container App
 
@@ -81,7 +81,7 @@ az containerapp ingress access-restriction set -n lazydad-app-staging -g $RG \
   --rule-name home --ip-address <your-public-ip>/32 --action Allow --description "Owner's home IP"
 ```
 
-CD adds the runner's IP for the duration of the smoke tests and removes it afterwards
+Deploy Master adds the runner's IP for the duration of the smoke tests and removes it afterwards
 (`restricted-ingress: true` in `deploy-master.yml`). If your home IP changes, update the `home` rule.
 
 ## 6. GitHub: OIDC trust, environments, variables, secrets

@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
     Runs the tests with coverage and enforces the minimum line coverage.
-    CI runs exactly this script, so a local run reproduces the CI gate.
+    The Build and Test workflow runs exactly this script, so a local run reproduces its gate.
 .EXAMPLE
     ./tools/coverage.ps1
-    ./tools/coverage.ps1 -NoBuild   # as CI runs it, after a Release build
+    ./tools/coverage.ps1 -NoBuild   # as Build and Test runs it, after a Release build
 #>
 param(
-    # Release by default so the numbers match CI (Debug builds have more coverable lines).
+    # Release by default so the numbers match Build and Test (Debug builds have more coverable lines).
     [string] $Configuration = 'Release',
     [switch] $NoBuild,
     # Ratchet this up as tests are added; never lower it to get a PR through.
@@ -23,7 +23,7 @@ dotnet tool restore
 if ($LASTEXITCODE -ne 0) { throw 'dotnet tool restore failed.' }
 
 # Only the unit test project: the smoke tests (tests/LazyDad.SmokeTests) target a deployed app
-# and are run by CD. Running the solution would also start the smoke project, and both projects
+# and are run by Deploy Master. Running the solution would also start the smoke project, and both projects
 # would write the same results.trx, so one could overwrite the other.
 $testArgs = @(
     'test', 'tests/LazyDad.Tests/LazyDad.Tests.csproj', '-c', $Configuration,

@@ -115,7 +115,7 @@ jobs:
           rule="gh-${{ github.run_id }}-${{ github.run_attempt }}"
           az containerapp ingress access-restriction set -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
             --rule-name "$rule" --ip-address "${{ steps.firewall.outputs.ip }}/32" --action Allow \
-            --description "CD smoke tests, run ${{ github.run_id }}" -o none
+            --description "Deploy Master smoke tests, run ${{ github.run_id }}" -o none
           echo "rule=$rule" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-dotnet@v4

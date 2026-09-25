@@ -4,8 +4,9 @@ using System.Text.Json;
 namespace LazyDad.SmokeTests;
 
 /// <summary>
-/// Runs against a deployed environment (staging before promotion, prod after it). Not part of
-/// the unit test run: CI excludes Category=Smoke. The fixture is shared so the cold start is paid once.
+/// Runs against a deployed environment (staging before promotion, prod after it), from Deploy Master.
+/// Not part of the unit test run: tools/coverage.ps1 tests only tests/LazyDad.Tests. The fixture is
+/// shared so the cold start is paid once.
 /// </summary>
 [Trait("Category", "Smoke")]
 public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>

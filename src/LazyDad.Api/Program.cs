@@ -48,7 +48,7 @@ var fileProvider = new PhysicalFileProvider(wwwrootPath);
 app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = fileProvider });
 app.UseStaticFiles(new StaticFileOptions { FileProvider = fileProvider });
 app.MapControllers();
-// version: the image's commit (CD sets App__Version). revision: the Container Apps revision,
+// version: the image's commit (Deploy Master sets App__Version). revision: the Container Apps revision,
 // unique per rollout even when re-deploying the same commit (the platform sets
 // CONTAINER_APP_REVISION). Smoke tests wait for both, so they can't pass against a draining revision.
 var appVersion = app.Configuration["App:Version"] ?? "dev";
