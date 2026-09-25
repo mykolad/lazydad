@@ -1,4 +1,4 @@
-name: Deploy
+name: Deploy Environment
 
 # Reusable: migrate the environment's DB, roll the app to the image, then smoke-test it.
 # Called by cd.yml for staging and then production, so both get exactly the same steps.
