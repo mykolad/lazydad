@@ -115,7 +115,8 @@ Coverage settings (included assemblies, migrations excluded) live in
 ```
 
 Raise `$MinLineCoverage` as coverage grows; never lower it to get a PR through.
-The unit run excludes `Category=Smoke` (the smoke tests need a deployed app).
+The script runs only `tests/LazyDad.Tests` (the smoke tests need a deployed app; CD runs them).
+CI still compiles the smoke project, because its build step builds the whole solution.
 
 ## CD
 
