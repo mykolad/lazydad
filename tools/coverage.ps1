@@ -22,8 +22,11 @@ Remove-Item TestResults, coverage -Recurse -Force -ErrorAction SilentlyContinue
 dotnet tool restore
 if ($LASTEXITCODE -ne 0) { throw 'dotnet tool restore failed.' }
 
+# Only the unit test project: the smoke tests (tests/LazyDad.SmokeTests) target a deployed app
+# and are run by CD. Running the solution would also start the smoke project, and both projects
+# would write the same results.trx, so one could overwrite the other.
 $testArgs = @(
-    'test', 'LazyDad.slnx', '-c', $Configuration,
+    'test', 'tests/LazyDad.Tests/LazyDad.Tests.csproj', '-c', $Configuration,
     '--collect', 'XPlat Code Coverage',
     '--settings', 'tests/LazyDad.Tests/coverage.runsettings',
     '--results-directory', 'TestResults',

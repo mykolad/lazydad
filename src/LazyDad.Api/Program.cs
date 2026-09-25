@@ -34,6 +34,7 @@ builder.Services.AddSingleton<ILlmClientFactory, LlmClientFactory>();
 builder.Services.AddScoped<JokeGenerationService>();
 builder.Services.AddScoped<TopJokeService>();
 builder.Services.AddScoped<HtmlGeneratorService>();
+builder.Services.AddSingleton<SchedulerStatus>();
 builder.Services.AddHostedService<JokeSchedulerService>();
 
 var wwwrootPath = Path.Combine(builder.Environment.ContentRootPath, "wwwroot");
@@ -47,7 +48,14 @@ var fileProvider = new PhysicalFileProvider(wwwrootPath);
 app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = fileProvider });
 app.UseStaticFiles(new StaticFileOptions { FileProvider = fileProvider });
 app.MapControllers();
-app.MapGet("/healthz", () => Results.Ok(new { status = "healthy" }));
+// version: the image's commit (CD sets App__Version). revision: the Container Apps revision,
+// unique per rollout even when re-deploying the same commit (the platform sets
+// CONTAINER_APP_REVISION). Smoke tests wait for both, so they can't pass against a draining revision.
+var appVersion = app.Configuration["App:Version"] ?? "dev";
+var appRevision = app.Configuration["CONTAINER_APP_REVISION"] ?? "local";
+app.MapGet("/healthz", () => Results.Ok(new { status = "healthy", version = appVersion, revision = appRevision }));
+// What this process's scheduler did on its last tick per language (see SchedulerStatus).
+app.MapGet("/status", (SchedulerStatus status) => Results.Ok(new { version = appVersion, revision = appRevision, ticks = status.LastTicks }));
 
 // Regenerate the HTML page from existing jokes once the server is listening, off the startup
 // path: a slow or unreachable DB (including EF's retry delays) must not keep /healthz down.

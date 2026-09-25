@@ -4,6 +4,7 @@
     <Project Path="src/LazyDad.Data/LazyDad.Data.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/LazyDad.SmokeTests/LazyDad.SmokeTests.csproj" />
     <Project Path="tests/LazyDad.Tests/LazyDad.Tests.csproj" />
   </Folder>
 </Solution>

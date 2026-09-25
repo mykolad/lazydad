@@ -1,0 +1,146 @@
+name: Deploy
+
+# Reusable: migrate the environment's DB, roll the app to the image, then smoke-test it.
+# Called by cd.yml for staging and then production, so both get exactly the same steps.
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: GitHub environment (holds SQL_CONNECTION_STRING; scopes the Azure OIDC login)
+        required: true
+        type: string
+      app-name:
+        description: Container App to update
+        required: true
+        type: string
+      tag:
+        description: Image tag (short commit SHA) built by cd.yml
+        required: true
+        type: string
+      ref:
+        description: Commit to check out for the smoke tests
+        required: true
+        type: string
+      restricted-ingress:
+        description: The app only allows listed IPs (staging), so allow this runner's IP during the smoke tests
+        required: false
+        default: false
+        type: boolean
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  RESOURCE_GROUP: lazydad-rg
+  SQL_SERVER: lazydad-sql-swedencentral
+  REGISTRY: lazydadacr.azurecr.io
+
+jobs:
+  deploy:
+    name: deploy (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.app.outputs.url }}
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: efbundle
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # The runner's IP is unpredictable, so open the SQL firewall for it only while migrating.
+      - name: Open SQL firewall for this runner
+        id: firewall
+        run: |
+          ip=$(curl -fsS https://api.ipify.org)
+          rule="gh-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.environment }}"
+          az sql server firewall-rule create -g "$RESOURCE_GROUP" -s "$SQL_SERVER" -n "$rule" \
+            --start-ip-address "$ip" --end-ip-address "$ip" -o none
+          echo "rule=$rule" >> "$GITHUB_OUTPUT"
+          echo "ip=$ip" >> "$GITHUB_OUTPUT"
+
+      - name: Apply EF migrations
+        env:
+          SQL_CONNECTION_STRING: ${{ secrets.SQL_CONNECTION_STRING }}
+        run: |
+          chmod +x ./efbundle
+          # A paused serverless DB (staging) can take a minute to resume; retry the whole bundle.
+          for attempt in 1 2 3; do
+            ./efbundle --connection "$SQL_CONNECTION_STRING" && exit 0
+            echo "::warning::Migration attempt $attempt failed; retrying in 30s."
+            sleep 30
+          done
+          echo "::error::Migrations failed after 3 attempts."
+          exit 1
+
+      - name: Close SQL firewall
+        if: ${{ always() && steps.firewall.outputs.rule != '' }}
+        run: az sql server firewall-rule delete -g "$RESOURCE_GROUP" -s "$SQL_SERVER" -n "${{ steps.firewall.outputs.rule }}"
+
+      - name: Roll out ${{ inputs.tag }}
+        id: app
+        run: |
+          # A unique revision suffix forces a new revision even on a re-run of the same tag, so the
+          # startup tick (which the smoke tests verify via /status) always happens. The resulting
+          # revision name is what /healthz reports, so the smoke tests can tell this rollout apart
+          # from the draining one even when both run the same commit.
+          suffix="r${{ github.run_number }}-${{ github.run_attempt }}"
+          az containerapp update -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
+            --image "$REGISTRY/lazydad:${{ inputs.tag }}" \
+            --set-env-vars "App__Version=${{ inputs.tag }}" \
+            --revision-suffix "$suffix" -o none
+          echo "revision=${{ inputs.app-name }}--$suffix" >> "$GITHUB_OUTPUT"
+          fqdn=$(az containerapp show -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)
+          echo "url=https://$fqdn" >> "$GITHUB_OUTPUT"
+
+      # Staging's ingress denies everything but listed IPs; allow this runner only for the smoke tests.
+      # Ingress rules are app-level config, so this doesn't create a revision.
+      - name: Allow this runner through the app's IP restrictions
+        id: ingress
+        if: ${{ inputs.restricted-ingress }}
+        run: |
+          rule="gh-${{ github.run_id }}-${{ github.run_attempt }}"
+          az containerapp ingress access-restriction set -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
+            --rule-name "$rule" --ip-address "${{ steps.firewall.outputs.ip }}/32" --action Allow \
+            --description "CD smoke tests, run ${{ github.run_id }}" -o none
+          echo "rule=$rule" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Smoke tests
+        env:
+          SMOKE_BASE_URL: ${{ steps.app.outputs.url }}
+          SMOKE_EXPECTED_VERSION: ${{ inputs.tag }}
+          SMOKE_EXPECTED_REVISION: ${{ steps.app.outputs.revision }}
+        run: dotnet test tests/LazyDad.SmokeTests -c Release --logger "console;verbosity=normal"
+
+      - name: Remove this runner from the app's IP restrictions
+        if: ${{ always() && steps.ingress.outputs.rule != '' }}
+        run: |
+          az containerapp ingress access-restriction remove -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
+            --rule-name "${{ steps.ingress.outputs.rule }}" -o none
+
+      - name: Summary
+        if: ${{ always() }}
+        run: |
+          {
+            echo "### ${{ inputs.environment }}"
+            echo "- App: \`${{ inputs.app-name }}\`, image \`lazydad:${{ inputs.tag }}\`, revision \`${{ steps.app.outputs.revision }}\`"
+            echo "- URL: ${{ steps.app.outputs.url }}"
+            echo "- Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
