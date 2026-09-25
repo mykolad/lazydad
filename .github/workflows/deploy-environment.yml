@@ -94,6 +94,22 @@ jobs:
         if: ${{ always() && steps.firewall.outputs.rule != '' }}
         run: az sql server firewall-rule delete -g "$RESOURCE_GROUP" -s "$SQL_SERVER" -n "${{ steps.firewall.outputs.rule }}"
 
+      # Two-phase protection from the weekly purge (which deletes only commit-style tags, then
+      # untagged manifests), so the job can stop at any point and whatever runs is still tagged:
+      #   1. before the rollout: re-tag what currently runs as deployed-<env> (this also repairs an
+      #      earlier interrupted run), and tag the new digest deploying-<env>;
+      #   2. after the rollout: move deployed-<env> to the new digest.
+      - name: Protect the running and the new image
+        run: |
+          az acr login --name lazydadacr
+          retag() { docker pull -q "$1" && docker tag "$1" "$2" && docker push -q "$2"; }
+          current=$(az containerapp show -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
+            --query 'properties.template.containers[0].image' -o tsv)
+          if ! retag "$current" "$REGISTRY/lazydad:deployed-${{ inputs.environment }}"; then
+            echo "::warning::Could not re-tag the currently running image ($current) as deployed-${{ inputs.environment }}."
+          fi
+          retag "$REGISTRY/lazydad@${{ inputs.digest }}" "$REGISTRY/lazydad:deploying-${{ inputs.environment }}"
+
       - name: Roll out ${{ inputs.tag }}
         id: app
         run: |
@@ -106,7 +122,7 @@ jobs:
           # The revision is pinned to the immutable digest, not the commit tag: Container Apps resolves
           # the configured image again on every replica start, and the weekly purge may delete old
           # commit tags. The digest stays pullable as long as the manifest exists, which the
-          # deployed-* tag below guarantees.
+          # deployed-*/deploying-* tags guarantee (see "Protect the running and the new image").
           suffix="r${{ github.run_id }}-${{ github.run_attempt }}"
           az containerapp update -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
             --image "$REGISTRY/lazydad@${{ inputs.digest }}" \
@@ -116,16 +132,11 @@ jobs:
           fqdn=$(az containerapp show -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)
           echo "url=https://$fqdn" >> "$GITHUB_OUTPUT"
 
-      # Keep the running manifest tagged. The weekly purge deletes only commit-style tags
-      # (^[0-9a-f]{7}) and then untagged manifests, so the digest this environment is pinned to
-      # stays pullable even after its commit tag is purged or failed deploys pushed newer images.
+      # Phase 2: the new digest now runs, so it becomes deployed-<env> (it was pulled in phase 1).
       - name: Tag the image as deployed-${{ inputs.environment }}
         run: |
-          az acr login --name lazydadacr
-          src="$REGISTRY/lazydad@${{ inputs.digest }}"
           dst="$REGISTRY/lazydad:deployed-${{ inputs.environment }}"
-          docker pull -q "$src"
-          docker tag "$src" "$dst"
+          docker tag "$REGISTRY/lazydad@${{ inputs.digest }}" "$dst"
           docker push -q "$dst"
 
       # Staging's ingress denies everything but listed IPs; allow this runner only for the smoke tests.

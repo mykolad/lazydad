@@ -132,16 +132,22 @@ What it keeps:
 - **every image from the last 30 days** (`--ago 30d`)
 - **plus the 10 newest older images.** `--keep` counts only the tags that would otherwise be
   deleted, not all tags.
-- `--untagged` removes manifests that nothing references anymore. The untagged entries from the April
-  `docker buildx` pushes are still referenced by their index tags, so they're removed once those tags age out.
+- `--untagged` removes manifests that nothing references anymore. `--keep` applies to those
+  separately too: the 10 newest eligible untagged manifests are also kept, so a dry run can show fewer
+  manifest deletions than you'd expect. The untagged entries from the April `docker buildx` pushes are
+  still referenced by their index tags, so they're removed once those tags age out.
 - **whatever an environment runs**, even if failed deploys pushed many newer images and no deploy
   succeeded for over 30 days. That takes two things together:
   1. **Revisions are pinned to the image digest** (`lazydad@sha256:…`), not the commit tag. Container Apps
      resolves the configured image again on every replica start, so a revision pointing at a tag
      would fail to restart or scale once purge deleted that tag.
-  2. **The running manifest keeps a tag.** Deploy Environment tags each rollout `deployed-staging` /
-     `deployed-production`, and the filter only matches commit-style tags (`^[0-9a-f]{7}`). So that
-     tag survives, the manifest is never "untagged", and the pinned digest stays pullable.
+  2. **The running manifest always keeps a non-commit tag.** The filter only matches commit-style
+     tags (`^[0-9a-f]{7}`), and Deploy Environment tags in two phases, so the job can stop at any point:
+     - **before the rollout**, it re-tags whatever currently runs as `deployed-<env>` (repairing any
+       earlier interrupted run), and tags the new digest `deploying-<env>`;
+     - **after the rollout**, it moves `deployed-<env>` to the new digest.
+
+     Those tags survive the purge, so the manifest is never "untagged" and the pinned digest stays pullable.
 
 Preview what it would delete, check runs, or run it now:
 
