@@ -55,3 +55,7 @@ nunit-*.xml
 # Test & coverage output
 TestResults/
 coverage/
+
+# Written by the app at startup (HtmlGeneratorService)
+src/LazyDad.Api/wwwroot/index.html
+src/LazyDad.Api/wwwroot/index.html.tmp

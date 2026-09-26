@@ -3,8 +3,9 @@
 ## Project
 
 LLM-powered dad joke generator. A background service calls Azure OpenAI on a
-per-language schedule and persists jokes to Azure SQL. A static HTML page is
-regenerated after every new joke. Deployed to Azure Container Apps.
+per-language schedule and persists jokes to Azure SQL. The page (a shell written at startup plus
+`wwwroot/app.js` / `app.css`) loads the jokes, the Top 3 and the votes from the API.
+Deployed to Azure Container Apps.
 
 ## Solution layout
 
@@ -25,14 +26,27 @@ tests/LazyDad.SmokeTests — smoke tests against a deployed app (run by Deploy M
 ## Key design decisions
 
 - `JokeGenerationService` only generates text — the caller (`JokeSchedulerService`)
-  is responsible for persisting and for triggering HTML regen. Keeps responsibilities
+  is responsible for persisting and for updating the leaderboard. Keeps responsibilities
   small and scoped.
 - `JokeSchedulerService` is a singleton `BackgroundService`; it uses
   `IServiceScopeFactory` to resolve scoped services (`JokeGenerationService`,
-  `IJokeRepository`, `HtmlGeneratorService`) per operation.
-- `HtmlGeneratorService.RegenerateAsync` rewrites `wwwroot/index.html` in full each
-  time — simple and stateless.
-- One `PeriodicTimer` loop per enabled language runs concurrently via `Task.WhenAll`.
+  `IJokeRepository`, `TopJokeService`) per operation. It records each language's next tick
+  in `SchedulerStatus`, which the page's countdown reads via `/jokes/summary`.
+- **The page** (design handoff "direction 2b"): `HtmlGeneratorService` writes `wwwroot/index.html`
+  once, before the server listens. It holds only what depends on the build: the header, the version
+  link, the loading skeleton, a pre-paint script that sets `data-theme` (no flash of the wrong theme),
+  and a JSON config (language codes). `wwwroot/app.js` (plain JS, no build step) renders everything
+  live: Top 3 spotlight (rotates every 7 s, paused on hover/focus or reduced motion), the "All jokes"
+  feed (infinite scroll, pages of 20, sort Newest / Top voted), votes, copy/share, the countdown,
+  UA/EN interface (jokes stay Ukrainian), and light/dark/system theme. Preferences and the reader's
+  votes live in `localStorage`. `wwwroot/app.css` has the Organic design tokens (dark = reversed ramps).
+- **API for the page:** `GET /jokes/feed?sort=new|top&limit=(≤ 50)[&after=<next>]` → `{total, items, next}` (keyset cursor, so new jokes don't shift pages);
+  `GET /jokes/summary` → `{count, nextBatchAt}`; `POST /jokes/{id}/vote {value, previous}` → `{up, down}`.
+- **Votes are anonymous.** The browser remembers its vote and sends it as `previous`, so switching or
+  removing adjusts the counts; the update is one atomic SQL `UPDATE` that never goes below zero. The
+  endpoint is rate-limited to 30 votes per minute per client IP (from `X-Forwarded-For`, set by the
+  Container Apps ingress). Server-side dedupe needs sign-in, which doesn't exist yet.
+- One loop per enabled language (a delay to each due time, every `IntervalHours`) runs concurrently via `Task.WhenAll`.
   Within a tick, all of a language's `LlmModels` are called in parallel, each in its
   own DI scope (a `DbContext` must not be shared across concurrent calls); jokes are
   then persisted sequentially.
@@ -85,7 +99,7 @@ Azure SQL firewall must allow the local machine's public IP.
 - **Azure OpenAI** (swedencentral): each `LlmModels[].Model` in config is the Azure deployment name (e.g. `gpt-5.3-chat`)
 - **Container Apps** (environment `lazydad-cae`, Consumption, 0.5 vCPU / 1 GiB):
   - `lazydad-app` (prod): **exactly one replica** (min = max = 1), no health probes yet.
-    Scaling out needs the scheduler lock and shared page rendering first; see issue #6.
+    Scaling out needs the scheduler lock first (see issue #6); the vote rate limit is per replica.
   - `lazydad-app-staging`: 0–1 replicas (scales to zero when idle). Calls the real LLMs.
     **Ingress allows listed IPs only** (the owner's `home` rule; Deploy Master adds its runner temporarily),
     so stray visitors can't wake it and spend LLM tokens.
@@ -93,8 +107,8 @@ Azure SQL firewall must allow the local machine's public IP.
 - Port exposed by the container: **8080** (`ASPNETCORE_URLS=http://+:8080`)
 - **Version metadata is baked into the image.** Build Image (`build-image.yml`) passes build args, and the Dockerfile turns
   them into `App__Version` (short SHA), `App__Revision` (full SHA), `App__CommitDate`, `App__SourceUrl`
-  (`AppInfoOptions`) and the standard OCI labels. The top of the page (under the title) shows **CalVer + SHA**,
-  e.g. `Version 2026.09.25 · e33d99a`, with the SHA linked to the commit (`Version dev (local build)` otherwise).
+  (`AppInfoOptions`) and the standard OCI labels. The page shows **CalVer + SHA** under the Top 3,
+  e.g. `v2026.09.25 e33d99a`, linked to the commit (`vdev (local build)` otherwise).
   Deploys remove any `App__Version` container setting, so the image is the only source.
 - `/healthz` returns `{status, version, revision}`: `version` is the image commit (short SHA),
   `revision` is the platform's `CONTAINER_APP_REVISION`, unique per rollout. Smoke tests wait for both.
@@ -161,8 +175,10 @@ each environment's `SQL_CONNECTION_STRING`. Both environments only accept deploy
 The smoke tests check that `/healthz` reports the new version and revision, that the page and API are served,
 that the new revision itself saved a joke from every model configured in `appsettings.json` and ran
 the judge (it reports its own last tick on `/status`; DB rows alone could come from the draining
-revision), that those jokes are in `/jokes`, and
-that the leaderboard is populated with valid ranks. To run them against staging locally:
+revision), that those jokes are in `/jokes`, that
+the leaderboard is populated with valid ranks, that `app.js`/`app.css`, `/jokes/feed` and `/jokes/summary`
+are served, and that the vote endpoint answers (with a no-op vote, so it never changes the counts).
+To run them against staging locally:
 
 ```
 $env:SMOKE_BASE_URL = "https://lazydad-app-staging.<env-domain>.westeurope.azurecontainerapps.io"
