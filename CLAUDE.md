@@ -211,10 +211,12 @@ Its second job, **`clean-database-migrations`**, runs against a throwaway SQL Se
    the run still ends as failed, so GitHub notifies you.
 
 Promotion is automatic: production runs only if staging's smoke tests pass. Azure login is
-OIDC through the `lazydad-github-cd` managed identity, trusted via GitHub's immutable subjects
-(`repo:mykolad@<id>/lazydad@<id>:environment:<env>`); nothing secret lives in GitHub except
-each environment's `SQL_CONNECTION_STRING`. Both environments only accept deployments from
-`master`.
+OIDC through a managed identity per environment, each trusted via GitHub's immutable subject for its environment
+only (`repo:mykolad@<id>/lazydad@<id>:environment:<env>`), with `AZURE_CLIENT_ID` set per environment:
+`lazydad-github-cd` deploys production, `lazydad-github-staging` staging and the builds (runbook section 11). The
+staging identity can't change production, since branch previews run as it. Nothing secret lives in GitHub except
+each environment's `SQL_CONNECTION_STRING` (until the Entra ID switch, runbook section 9). Production only accepts
+deployments from `master`.
 
 The smoke tests check that `/healthz` reports the new version and revision, that the page and API are served,
 that the new revision itself saved a joke from every model configured in `appsettings.json` and ran
@@ -236,7 +238,9 @@ dotnet test tests/LazyDad.SmokeTests
 open **Actions → Deploy Branch to Staging → Run workflow** and pick the branch. It runs the same
 Build Image and Deploy Environment steps, smoke tests included, against **staging only**.
 - **Production can't be reached from it:** the `production` environment accepts `master` only.
-  `staging` also accepts `*/*` branches (`feature/…`, `fix/…`).
+  `staging` also accepts `*/*` branches (`feature/…`, `fix/…`). The branch's own code (workflows, build) runs
+  with staging's identity, which has no rights on production (runbook section 11), and Roll Back only trusts
+  images production's own revisions ran, since staging can push images too.
 - **Migrations are off by default** (the *run-migrations* checkbox). Staging keeps any migration it
   applies, so only tick it for a branch whose migrations you'll merge unchanged.
 - **It shares the `deploy` concurrency group with Deploy Master,** so the two never interleave on

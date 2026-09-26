@@ -104,6 +104,15 @@ jobs:
           fi
           serving_digest=$(digest_of "${images[$serving]}")
 
+          # The digests production's own revisions were pinned to: the only images trusted as a rollback
+          # target. Tags are mutable, and staging's identity (which branch previews run as) can push to the
+          # registry too, so a tag alone could point production at an image it never ran. Only production's
+          # identity creates production revisions. (Revisions from before digest pinning named a tag; not trusted.)
+          ran=()
+          for image in "${images[@]}"; do
+            case "$image" in *@sha256:*) ran+=("${image#*@}") ;; esac
+          done
+
           # Ends the job successfully without a rollout (the production job is skipped).
           skip() {
             echo "$1"
@@ -160,6 +169,10 @@ jobs:
 
           if [ "$digest" = "$serving_digest" ]; then
             echo "::error::Production already runs that image (revision ${names[$serving]})."
+            exit 1
+          fi
+          if ! printf '%s\n' "${ran[@]}" | grep -qxF "$digest"; then
+            echo "::error::$digest never ran in production (it's not in the app's revision history), so it isn't trusted as a rollback target. Roll back by hand if you're sure (infra/deployment-setup.md, section 7)."
             exit 1
           fi
 

@@ -103,7 +103,8 @@ jobs:
         run: |
           # While the environment still has a SQL_CONNECTION_STRING secret (SQL login), use it. Without
           # one, log in with Entra ID (issue #11) as this job's identity: azure/login left the runner signed
-          # in as lazydad-github-cd, which "Active Directory Default" picks up through the Azure CLI.
+          # in as the environment's deploy identity (lazydad-github-cd for production, lazydad-github-staging
+          # for staging), which "Active Directory Default" picks up through the Azure CLI.
           if [ -z "$SQL_CONNECTION_STRING" ]; then
             case "${{ inputs.environment }}" in
               production) database=lazydad-db ;;
