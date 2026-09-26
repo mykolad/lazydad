@@ -95,6 +95,12 @@ public class HtmlGeneratorService
               <title>LazyDad</title>
               <meta name="description" content="Українські батьківські жарти від ШІ: нова партія кожні 4 години, найкращі три обирає ШІ-суддя.">
               <meta name="color-scheme" content="light dark">
+              <meta name="theme-color" content="#f5ead8" media="(prefers-color-scheme: light)">
+              <meta name="theme-color" content="#1d1a16" media="(prefers-color-scheme: dark)">
+              <link rel="icon" href="/favicon.ico" sizes="48x48">
+              <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+              <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+              <link rel="manifest" href="/site.webmanifest">
               <script>{{ThemeBootstrap}}</script>
               <link rel="preconnect" href="https://fonts.googleapis.com">
               <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -106,7 +112,8 @@ public class HtmlGeneratorService
             <div class="ld-root">
               <header class="ld-header">
                 <div class="ld-brand">
-                  <div class="ld-logo" aria-hidden="true">LD</div>
+                  <img class="ld-logo ld-logo--light" src="logo.svg" width="46" height="46" alt="">
+                  <img class="ld-logo ld-logo--dark" src="logo-dark.svg" width="46" height="46" alt="">
                   <div class="ld-brand-text">
                     <h1 class="ld-wordmark">LazyDad</h1>
                     <span class="ld-count" id="ld-count"></span>

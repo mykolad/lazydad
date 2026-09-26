@@ -87,11 +87,9 @@ svg { display: block; flex: none; }
   padding: 22px var(--gutter) 18px;
 }
 .ld-brand { display: flex; align-items: center; gap: 12px; margin-right: auto; }
-.ld-logo {
-  width: 46px; height: 46px; border-radius: 50% 50% 46% 54%;
-  background: var(--color-accent); color: var(--color-bg);
-  display: grid; place-items: center; font-family: var(--font-brand); font-size: 19px;
-}
+/* The sloth logo: one image per theme, swapped with the resolved theme (decorative next to the wordmark). */
+.ld-logo { display: block; width: 46px; height: 46px; flex: none; }
+[data-theme="dark"] .ld-logo--light, :root:not([data-theme="dark"]) .ld-logo--dark { display: none; }
 .ld-brand-text { display: flex; flex-direction: column; }
 .ld-wordmark { margin: 0; font-family: var(--font-brand); font-weight: 400; font-size: 24px; line-height: 1.1; }
 .ld-count { min-height: 20px; font-size: 13px; color: color-mix(in srgb, var(--color-text) 64%, transparent); }

@@ -31,6 +31,13 @@ public class HtmlGeneratorServiceTests
         Assert.Contains("<html lang=\"uk\" data-theme=\"light\">", html);
         Assert.Contains("<link rel=\"stylesheet\" href=\"app.css?v=e33d99a\">", html);
         Assert.Contains("<script src=\"app.js?v=e33d99a\" defer></script>", html);
+        // Brand: favicons, manifest, and the logo in both theme variants.
+        Assert.Contains("<link rel=\"icon\" href=\"/favicon.ico\" sizes=\"48x48\">", html);
+        Assert.Contains("<link rel=\"icon\" href=\"/favicon.svg\" type=\"image/svg+xml\">", html);
+        Assert.Contains("<link rel=\"apple-touch-icon\" href=\"/apple-touch-icon.png\">", html);
+        Assert.Contains("<link rel=\"manifest\" href=\"/site.webmanifest\">", html);
+        Assert.Contains("src=\"logo.svg\"", html);
+        Assert.Contains("src=\"logo-dark.svg\"", html);
         // Every element app.js looks up by id is in the shell.
         foreach (var id in new[] { "ld-count", "ld-next", "ld-countdown", "ld-loading", "ld-loading-text", "ld-empty", "ld-empty-text",
                      "ld-aside", "ld-spotlight", "ld-toplist", "ld-feed", "ld-list", "ld-sentinel", "ld-more", "ld-end", "ld-config" })

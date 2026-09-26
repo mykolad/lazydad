@@ -21,7 +21,7 @@ A redesign of the LazyDad site: AI‑generated Ukrainian dad jokes, a new batch 
 ## Layout
 - The page background is `--color-bg`. Horizontal padding is `clamp(18px, 4vw, 48px)`.
 - **Header** (a wrapping flex row, 14/18px gap, padding 22px top and 18px bottom):
-  - Left: a 46px blob logo "LD" (Caprasimo 19px, accent fill, radius `50% 50% 46% 54%`). Next to it, "LazyDad" (Caprasimo 24px) with the joke count underneath (13px, text at 64% opacity).
+  - Left: the 46px sloth logo (`logo.svg` in the light theme, `logo-dark.svg` in the dark theme). Next to it, "LazyDad" (Caprasimo 24px) with the joke count underneath (13px, text at 64% opacity).
   - Pushed right with `margin-right:auto` on the brand:
     - Countdown pill: sage‑100 background, sage‑800 text, 13px/600, clock icon.
     - Language segmented control (UA | EN): surface background, 32px‑high pills. The active pill is filled with bg‑colored text (fill: see Deviations).
@@ -121,11 +121,32 @@ Dates are shown as "23 вер" or "23 Sep". Strings added in the build (errors, 
 Fonts:
 - Headings and numbers: **Nunito 900**, letter-spacing −.01em.
 - Body: **Nunito** 400/600/700, loaded from Google Fonts with the `cyrillic` subset.
-- The "LD" logo and the "LazyDad" wordmark use **Caprasimo**. It is Latin‑only, so it's used only for the wordmark.
+- The "LazyDad" wordmark uses **Caprasimo**. It is Latin‑only, so it's used only for the wordmark.
 
 Radii: containers 26–40px, controls 999px, tooltips and pills 999px.
 
 Icons: Lucide at stroke‑width 2.75 (clock, monitor, sun, moon, chevron‑up/down, copy, check, share‑2, git‑commit, pause, play).
+
+### Brand
+The logo is a sloth with a chevron mustache, winking. The files are in `src/LazyDad.Api/wwwroot` (served from the site root):
+- `logo.svg` / `logo-dark.svg`: the header logo, 64×64 viewBox, transparent background. Both are in the page, and CSS shows the one for the resolved theme (no flash, no script).
+  - Light: fur #b2622d, mask #f5ead8, ink #2e2b25.
+  - Dark: fur #d67f48, mask #f3e8d6, ink #1d1a16.
+- `favicon.svg`: one file that switches to the dark variant through `prefers-color-scheme`.
+- `favicon.ico`: 16, 32 and 48px images.
+- `apple-touch-icon.png`: 180px, on cream #f5ead8.
+- `icon-192.png`, `icon-512.png`, `icon-512-maskable.png`, referenced from `site.webmanifest`.
+
+In `<head>`:
+```html
+<link rel="icon" href="/favicon.ico" sizes="48x48">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<meta name="theme-color" content="#f5ead8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1d1a16" media="(prefers-color-scheme: dark)">
+```
+The separate `favicon-16/32/48.png` files from the handoff aren't used: `favicon.ico` holds the same images.
 
 Focus: `outline: 2px solid var(--color-accent); outline-offset: 2px` on `:focus-visible`.
 
