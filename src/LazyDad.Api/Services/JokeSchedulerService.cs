@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using LazyDad.Api.Configuration;
+using LazyDad.Api.Telemetry;
 using LazyDad.Data.Entities;
 using LazyDad.Data.Repositories;
 using Microsoft.Extensions.Options;
@@ -10,6 +12,7 @@ public class JokeSchedulerService : BackgroundService
     private readonly IServiceScopeFactory scopeFactory;
     private readonly IOptions<JokeGenerationOptions> options;
     private readonly SchedulerStatus status;
+    private readonly SchedulerMetrics metrics;
     private readonly ILogger<JokeSchedulerService> logger;
     // Identifies this process in SchedulerLocks: the machine (the Container Apps replica) plus a per-process part.
     private readonly string instanceId =
@@ -19,11 +22,13 @@ public class JokeSchedulerService : BackgroundService
         IServiceScopeFactory scopeFactory,
         IOptions<JokeGenerationOptions> options,
         SchedulerStatus status,
+        SchedulerMetrics metrics,
         ILogger<JokeSchedulerService> logger)
     {
         this.scopeFactory = scopeFactory;
         this.options = options;
         this.status = status;
+        this.metrics = metrics;
         this.logger = logger;
     }
 
@@ -93,11 +98,16 @@ public class JokeSchedulerService : BackgroundService
     /// </summary>
     internal async Task RunTickAsync(LanguageOptions language, bool startup, CancellationToken stoppingToken)
     {
+        // One trace per tick: the lease, the LLM calls, the SQL commands and the judge show up under it.
+        using var activity = LazyDadTelemetry.ActivitySource.StartActivity("joke tick");
+        activity?.SetTag("language", language.Language);
+        activity?.SetTag("startup", startup);
         try
         {
             if (!await TakeTurnAsync(language, startup, stoppingToken))
             {
                 status.Record(new TickStatus(language.Language, DateTime.UtcNow, true, [], "skipped", null));
+                metrics.RecordTick(language.Language, "skipped");
                 logger.LogInformation("Skipped the '{Language}' tick: another replica generated this period.", language.Language);
                 return;
             }
@@ -106,6 +116,8 @@ public class JokeSchedulerService : BackgroundService
             status.Record(new TickStatus(
                 language.Language, DateTime.UtcNow, true,
                 saved.Select(j => new GeneratedJoke(j.Id, j.Model)).ToList(), leaderboard, null));
+            metrics.RecordTick(language.Language, "succeeded");
+            metrics.RecordLeaderboard(language.Language, leaderboard);
             logger.LogDebug("Joke tick for '{Language}' completed.", language.Language);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -115,6 +127,9 @@ public class JokeSchedulerService : BackgroundService
         catch (Exception ex)
         {
             status.Record(new TickStatus(language.Language, DateTime.UtcNow, false, [], "unknown", ex.GetType().Name));
+            metrics.RecordTick(language.Language, "failed");
+            activity?.SetStatus(ActivityStatusCode.Error, ex.GetType().Name);
+            activity?.AddException(ex);
             logger.LogError(ex, "Joke tick for '{Language}' failed; will retry on the next tick.", language.Language);
         }
     }
@@ -161,6 +176,7 @@ public class JokeSchedulerService : BackgroundService
             {
                 await jokeRepository.AddAsync(joke, stoppingToken);
                 saved.Add(joke);
+                metrics.RecordJoke(joke.Language, joke.Model, "saved");
 
                 logger.LogInformation("Joke saved for '{Language}' ({Model}): {Text}", joke.Language, joke.Model, joke.Text);
             }
@@ -170,6 +186,7 @@ public class JokeSchedulerService : BackgroundService
             }
             catch (Exception ex)
             {
+                metrics.RecordJoke(joke.Language, joke.Model, "failed");
                 logger.LogError(ex, "Failed to persist joke for '{Language}' ({Model}).", joke.Language, joke.Model);
             }
         }
@@ -209,6 +226,7 @@ public class JokeSchedulerService : BackgroundService
 
             if (string.IsNullOrWhiteSpace(text))
             {
+                metrics.RecordJoke(language.Language, model.Model, "empty");
                 logger.LogWarning("LLM returned an empty response for '{Language}' ({Model}). Skipping.", language.Language, model.Model);
                 return null;
             }
@@ -229,6 +247,7 @@ public class JokeSchedulerService : BackgroundService
         }
         catch (Exception ex)
         {
+            metrics.RecordJoke(language.Language, model.Model, "failed");
             logger.LogError(ex, "Failed to generate joke for '{Language}' ({Model}).", language.Language, model.Model);
             return null;
         }

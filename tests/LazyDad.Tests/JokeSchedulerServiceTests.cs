@@ -1,9 +1,13 @@
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using LazyDad.Api.Configuration;
 using LazyDad.Api.Services;
+using LazyDad.Api.Telemetry;
 using LazyDad.Data.Entities;
 using LazyDad.Data.Repositories;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -29,6 +33,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     // written after all tick work, so assertions never race the background loop.
     private readonly CapturingLogger<JokeSchedulerService> schedulerLogger = new();
     private readonly SchedulerStatus status = new();
+    private readonly ServiceProvider metricsProvider = new ServiceCollection().AddMetrics().BuildServiceProvider();
     private ServiceProvider? provider;
     // Leaving TopJokeService out of DI makes the whole tick throw, not just one step of it.
     private bool omitTopJokeService;
@@ -44,7 +49,21 @@ public sealed class JokeSchedulerServiceTests : IDisposable
             .Returns(Task.CompletedTask);
     }
 
-    public void Dispose() => provider?.Dispose();
+    public void Dispose()
+    {
+        provider?.Dispose();
+        metricsProvider.Dispose();
+    }
+
+    /// <summary>Collects one of the scheduler's counters (only this test's meter factory, so parallel tests don't mix in).</summary>
+    private MetricCollector<long> Collect(string instrument)
+        => new(metricsProvider.GetRequiredService<IMeterFactory>(), LazyDadTelemetry.Name, instrument);
+
+    /// <summary>Each measurement's tag values, e.g. "fast/saved" for the tags model and outcome, in order.</summary>
+    private static IEnumerable<string> Measured(MetricCollector<long> collector, params string[] tags)
+        => collector.GetMeasurementSnapshot()
+            .Select(m => string.Join('/', tags.Select(t => m.Tags[t])))
+            .Order(StringComparer.Ordinal);
 
     private static LanguageOptions Ukrainian(params string[] models)
         => new()
@@ -73,7 +92,9 @@ public sealed class JokeSchedulerServiceTests : IDisposable
             services.AddScoped<TopJokeService>();
         provider = services.BuildServiceProvider();
 
-        return new JokeSchedulerService(provider.GetRequiredService<IServiceScopeFactory>(), options, status, schedulerLogger);
+        return new JokeSchedulerService(
+            provider.GetRequiredService<IServiceScopeFactory>(), options, status,
+            new SchedulerMetrics(metricsProvider.GetRequiredService<IMeterFactory>()), schedulerLogger);
     }
 
     private Task TickCompletedAsync() => schedulerLogger.WaitForAsync(LogLevel.Debug, "tick for 'Ukrainian' completed", Timeout);
@@ -97,6 +118,9 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         // A provider timeout is an OperationCanceledException that isn't caused by shutdown.
         SetupModel("slow", () => Task.FromException<ChatResponse>(new TaskCanceledException("HTTP timeout")));
         var scheduler = CreateScheduler(Ukrainian("fast", "slow"));
+        using var jokes = Collect("lazydad.jokes");
+        using var ticks = Collect("lazydad.scheduler.ticks");
+        using var leaderboard = Collect("lazydad.leaderboard.updates");
 
         await scheduler.StartAsync(CancellationToken.None);
         await TickCompletedAsync();
@@ -112,6 +136,11 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         Assert.Equal([new GeneratedJoke(joke.Id, "fast")], tick.Jokes);
         Assert.Equal("unchanged", tick.Leaderboard);
         Assert.Null(tick.Error);
+
+        // The metrics count the same outcomes, for charts and alerts.
+        Assert.Equal(["Ukrainian/fast/saved", "Ukrainian/slow/failed"], Measured(jokes, "language", "model", "outcome"));
+        Assert.Equal(["Ukrainian/succeeded"], Measured(ticks, "language", "outcome"));
+        Assert.Equal(["Ukrainian/unchanged"], Measured(leaderboard, "language", "outcome"));
     }
 
     [Fact]
@@ -119,6 +148,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     {
         SetupModel("blank", () => Reply("   "));
         var scheduler = CreateScheduler(Ukrainian("blank"));
+        using var jokes = Collect("lazydad.jokes");
 
         await scheduler.StartAsync(CancellationToken.None);
         await TickCompletedAsync();
@@ -129,6 +159,26 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         var tick = Assert.Single(status.LastTicks);
         Assert.True(tick.Succeeded);
         Assert.Empty(tick.Jokes);
+        Assert.Equal(["blank/empty"], Measured(jokes, "model", "outcome"));
+    }
+
+    [Fact]
+    public async Task Tick_WhenSavingAJokeFails_CountsItAsFailed()
+    {
+        SetupModel("fast", () => Reply("Жарт"));
+        jokeRepositoryMock
+            .Setup(r => r.AddAsync(It.IsAny<Joke>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("database is down"));
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+        using var jokes = Collect("lazydad.jokes");
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await TickCompletedAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Contains(schedulerLogger.Entries, e => e.Level == LogLevel.Error && e.Message.Contains("Failed to persist joke"));
+        Assert.Empty(Assert.Single(status.LastTicks).Jokes);
+        Assert.Equal(["fast/failed"], Measured(jokes, "model", "outcome"));
     }
 
     [Fact]
@@ -137,6 +187,16 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         SetupModel("fast", () => Reply("Жарт"));
         omitTopJokeService = true;
         var scheduler = CreateScheduler(Ukrainian("fast"));
+        using var ticks = Collect("lazydad.scheduler.ticks");
+        using var leaderboard = Collect("lazydad.leaderboard.updates");
+        var spans = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == LazyDadTelemetry.Name,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activity => { lock (spans) spans.Add(activity); },
+        };
+        ActivitySource.AddActivityListener(listener);
 
         await scheduler.StartAsync(CancellationToken.None);
         // Logged by the tick's catch block, i.e. after the exception has been handled.
@@ -156,6 +216,16 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         Assert.Equal("InvalidOperationException", tick.Error);
         Assert.Empty(tick.Jokes);
         Assert.Empty(saved);
+
+        // Counted as failed, and the tick's trace is marked as an error. The leaderboard never ran.
+        Assert.Equal(["Ukrainian/failed"], Measured(ticks, "language", "outcome"));
+        Assert.Empty(leaderboard.GetMeasurementSnapshot());
+        Activity span;
+        lock (spans) span = Assert.Single(spans, s => s.OperationName == "joke tick");
+        Assert.Equal(ActivityStatusCode.Error, span.Status);
+        Assert.Equal("Ukrainian", span.GetTagItem("language"));
+        Assert.Equal(true, span.GetTagItem("startup"));
+        Assert.Contains(span.Events, e => e.Name == "exception");
     }
 
     [Fact]
@@ -234,6 +304,8 @@ public sealed class JokeSchedulerServiceTests : IDisposable
             .Setup(r => r.TryAcquireAsync("jokes:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
         var scheduler = CreateScheduler(Ukrainian("fast"));
+        using var ticks = Collect("lazydad.scheduler.ticks");
+        using var leaderboard = Collect("lazydad.leaderboard.updates");
 
         await scheduler.RunTickAsync(Ukrainian("fast"), false, CancellationToken.None);
 
@@ -243,6 +315,8 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         Assert.True(tick.Succeeded);
         Assert.Equal("skipped", tick.Leaderboard);
         Assert.Empty(tick.Jokes);
+        Assert.Equal(["Ukrainian/skipped"], Measured(ticks, "language", "outcome"));
+        Assert.Empty(leaderboard.GetMeasurementSnapshot());
     }
 
     [Fact]

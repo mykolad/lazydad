@@ -67,6 +67,14 @@ tests/LazyDad.SmokeTests — smoke tests against a deployed app (run by Deploy M
   atomic `UPDATE`, and the first insert is guarded by the primary key. The **startup tick always runs** and takes
   the lease: a new revision proves itself with it (smoke tests), while the old revision usually still holds it.
   So a replica start (deploy, restart, scale-out) still means one extra batch.
+- **Telemetry** (`src/LazyDad.Api/Telemetry`): OpenTelemetry traces, metrics and logs over OTLP to Grafana Cloud
+  (EU), on only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (the Container Apps settings; runbook section 10). The standard
+  `OTEL_*` variables apply, with `http/protobuf` as the default protocol. A trace per request (not `/healthz`) and per
+  scheduler tick (`joke tick`); `SchedulerMetrics` counts ticks, jokes and leaderboard updates by outcome, next to
+  `/status`. **No visitor data:** `PersonalDataFilter` strips IPs and user agents from spans before export (a test
+  checks the exported bytes), and LLM prompts/responses aren't captured. Keep metric tags bounded (no joke ids).
+- `LlmClientFactory` keeps **one chat client per model** for the app's lifetime (wrapped with `UseOpenTelemetry()`);
+  callers may still dispose theirs (a no-op). Creating one per call would restart the LLM metrics every tick.
 
 ## EF Core migrations
 
@@ -93,6 +101,14 @@ dotnet user-secrets set "LlmProviders:AzureOpenAI:Endpoint"  "<endpoint>"       
 ```
 
 Azure SQL firewall must allow the local machine's public IP.
+
+Telemetry is off locally. To see traces, metrics and logs while developing, run the .NET Aspire dashboard and point the
+app at it (don't point a local run at Grafana: it would mix with production's data):
+
+```
+docker run --rm -p 18888:18888 -p 4318:18890 -e DOTNET_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS=true mcr.microsoft.com/dotnet/aspire-dashboard
+$env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; the UI is http://localhost:18888
+```
 
 ## Azure resources
 
@@ -125,6 +141,9 @@ Azure SQL firewall must allow the local machine's public IP.
   `revision` is the platform's `CONTAINER_APP_REVISION`, unique per rollout. Smoke tests wait for both.
 - `/status` returns the version, revision and this process's last scheduler tick per language
   (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details).
+- **Monitoring:** a Grafana Cloud stack (free tier, `eu-north`) gets both apps' telemetry, one service per app
+  (`job="lazydad-app"`, `"lazydad-app-staging"`), with the uptime check and email alerts on prod. Console logs also stay in
+  the environment's Log Analytics workspace (30 days, daily cap) as the fallback.
 - **Setup runbook:** `infra/deployment-setup.md` has the one-time Azure/GitHub setup behind Deploy Master,
   including the weekly registry purge task (`purge-old-images`: keeps the last 30 days, 10 older
   images, and what each environment runs: revisions are pinned to the image digest, and the manifest
