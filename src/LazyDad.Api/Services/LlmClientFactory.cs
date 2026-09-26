@@ -17,7 +17,7 @@ namespace LazyDad.Api.Services;
 public sealed class LlmClientFactory : ILlmClientFactory, IDisposable
 {
     private readonly IOptions<Dictionary<string, LlmProviderOptions>> providers;
-    private readonly ConcurrentDictionary<(string Provider, string Model), IChatClient> clients = new();
+    private readonly ConcurrentDictionary<(string Provider, string Model), Lazy<IChatClient>> clients = new();
     // Entra ID when no API key is configured: the app's managed identity in Azure, the developer's
     // `az login` locally. Created on first use; one per factory (a singleton), so its token cache is shared.
     private readonly Lazy<TokenCredential> entraCredential;
@@ -44,18 +44,30 @@ public sealed class LlmClientFactory : ILlmClientFactory, IDisposable
         if (!providers.Value.TryGetValue(providerName, out var options))
             throw new InvalidOperationException($"LLM provider '{providerName}' is not configured.");
 
-        var client = clients.GetOrAdd((providerName, modelName), key => key.Provider switch
+        // GetOrAdd may run its factory more than once for concurrent first callers; only the Lazy it stores
+        // gets created, so exactly one client per model exists.
+        var key = (providerName, modelName);
+        var client = clients.GetOrAdd(key, _ => new Lazy<IChatClient>(() => providerName switch
         {
-            "AzureOpenAI" => CreateAzureOpenAIClient(options, key.Model),
-            _ => throw new NotSupportedException($"LLM provider '{key.Provider}' is not supported.")
-        });
-        return new SharedChatClient(client);
+            "AzureOpenAI" => CreateAzureOpenAIClient(options, modelName),
+            _ => throw new NotSupportedException($"LLM provider '{providerName}' is not supported.")
+        }));
+        try
+        {
+            return new SharedChatClient(client.Value);
+        }
+        catch
+        {
+            // Lazy would keep the exception for good; drop it, so the next call tries again.
+            clients.TryRemove(new KeyValuePair<(string, string), Lazy<IChatClient>>(key, client));
+            throw;
+        }
     }
 
     public void Dispose()
     {
-        foreach (var client in clients.Values)
-            client.Dispose();
+        foreach (var client in clients.Values.Where(c => c.IsValueCreated))
+            client.Value.Dispose();
         clients.Clear();
     }
 

@@ -319,28 +319,44 @@ older images send nothing. What goes out, and what doesn't:
 Each app reports as its own service (`service.name` = the Container App's name, so `job="lazydad-app"` in PromQL).
 The console logs still go to Log Analytics as the fallback (step 4).
 
-**1. Token.** In Grafana Cloud: *Connections → OpenTelemetry (OTLP) → View connection details*, generate a token
-(it can write metrics, logs and traces). The instance ID is shown there too. Keep the token out of the repo and chat.
-
-**2. Per app, staging first.** Deploys keep these settings (Deploy Environment only swaps the image), and images
-from before this change ignore them, so rollbacks are fine.
+**1. Token, into Key Vault.** In Grafana Cloud: *Connections → OpenTelemetry (OTLP) → View connection details*,
+generate a token (it can write metrics, logs and traces); the instance ID is shown there too. Keep the token out of
+the repo and chat. The one copy lives in Key Vault as `OtlpHeaders` (a placeholder since the original setup), in
+`OTEL_EXPORTER_OTLP_HEADERS`'s format: basic auth `<instance id>:<token>`, the space URL-encoded (per the OTLP spec).
+Both apps reference it, so a new token is one update.
 
 ```bash
+KV_ID=$(az keyvault show -n lazydad-kv --query id -o tsv)
 INSTANCE_ID=<instance id from the connection details>
 read -rs TOKEN   # paste the token; not echoed, not in the shell history
 AUTH=$(printf '%s:%s' "$INSTANCE_ID" "$TOKEN" | base64 -w0); unset TOKEN
 # Check the credentials first (the app doesn't log export failures): 200 = accepted, 401 = wrong token or instance ID.
 curl -s -o /dev/null -w '%{http_code}\n' -X POST -H "Authorization: Basic $AUTH" -H 'Content-Type: application/json' \
   -d '{"resourceLogs":[]}' https://otlp-gateway-prod-eu-north-0.grafana.net/otlp/v1/logs
+az keyvault secret set --vault-name lazydad-kv -n OtlpHeaders --value "Authorization=Basic%20$AUTH" -o none
+unset AUTH
+```
+
+**2. Per app, staging first.** Deploys keep these settings (Deploy Environment only swaps the image), and images
+from before this change ignore them, so rollbacks are fine. Each app reads the secret with its system-assigned
+identity: prod's already reads the vault (`Key Vault Secrets User` on all of it); staging gets that role on this
+one secret only, so it can't read prod's other secrets.
+
+```bash
+# Staging only: its identity (section 8 or 9 may have assigned it already; this is then a no-op) and access to the secret.
+az containerapp identity assign -n lazydad-app-staging -g $RG --system-assigned -o none
+STAGING_ID=$(az containerapp show -n lazydad-app-staging -g $RG --query identity.principalId -o tsv)
+az role assignment create --assignee-object-id $STAGING_ID --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets User" --scope "$KV_ID/secrets/OtlpHeaders" -o none
+# Wait a few minutes for the role to apply: a reference the identity can't read fails the new revision (the old one keeps serving).
 
 APP=lazydad-app-staging; ENV=staging     # then: lazydad-app / production
-# Basic auth "<instance id>:<token>", in OTEL_EXPORTER_OTLP_HEADERS's format: the space URL-encoded (per the OTLP spec).
-az containerapp secret set -n $APP -g $RG --secrets "otlp-headers=Authorization=Basic%20$AUTH"
+az containerapp secret set -n $APP -g $RG \
+  --secrets "otlp-headers=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/OtlpHeaders,identityref:system"
 az containerapp update -n $APP -g $RG -o none --set-env-vars \
   OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-eu-north-0.grafana.net/otlp \
   OTEL_EXPORTER_OTLP_HEADERS=secretref:otlp-headers \
   OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=$ENV
-unset AUTH   # after both apps
 ```
 
 Check in Grafana's *Explore*: logs `{service_name="lazydad-app-staging"}`, a `joke tick` trace from the new
@@ -349,8 +365,23 @@ compare the app's settings with the commands above (`az containerapp show -n $AP
 properties.template.containers[0].env`). To switch telemetry off again:
 `az containerapp update -n $APP -g $RG --remove-env-vars OTEL_EXPORTER_OTLP_ENDPOINT -o none`.
 
-A new token later (expired or leaked): repeat the `secret set`, then restart the active revision
-(`az containerapp revision restart`); secrets are read at startup. Revoke the old token in Grafana.
+Then, on prod only, remove the placeholders from the original setup (the app never read them; the endpoint isn't secret):
+
+```bash
+az containerapp update -n lazydad-app -g $RG --remove-env-vars OpenTelemetry__Endpoint OpenTelemetry__Headers -o none
+az containerapp secret remove -n lazydad-app -g $RG --secret-names otlp-endpoint
+az keyvault secret delete --vault-name lazydad-kv -n OtlpEndpoint
+```
+
+A new token later (expired or leaked): update `OtlpHeaders` as in step 1, then restart each app's active revision;
+the value is read when a replica starts. Revoke the old token in Grafana.
+
+```bash
+for app in lazydad-app-staging lazydad-app; do
+  az containerapp revision restart -n $app -g $RG \
+    --revision "$(az containerapp show -n $app -g $RG --query properties.latestReadyRevisionName -o tsv)"
+done
+```
 
 **3. Uptime check and alerts (prod only).** Staging's ingress admits listed IPs only, and it scales to zero, so it
 would look down and idle all the time.

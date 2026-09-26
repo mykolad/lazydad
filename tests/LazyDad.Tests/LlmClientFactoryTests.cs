@@ -69,6 +69,54 @@ public class LlmClientFactoryTests
     }
 
     [Fact]
+    public async Task CreateClient_ForConcurrentFirstCallers_CreatesOneClient()
+    {
+        var created = 0;
+        using var factory = new LlmClientFactory(
+            Options.Create(new Dictionary<string, LlmProviderOptions>
+            {
+                ["AzureOpenAI"] = new() { Endpoint = "https://example.openai.azure.com/", ApiKey = "test-key" }
+            }),
+            new Lazy<TokenCredential>(() => new FakeCredential()),
+            () =>
+            {
+                Interlocked.Increment(ref created);
+                // Slow creation widens the window in which the other callers ask for the same model.
+                Thread.Sleep(50);
+                return new AzureOpenAIClientOptions();
+            });
+        using var start = new Barrier(8);
+
+        var clients = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
+        {
+            start.SignalAndWait();
+            return factory.CreateClient("AzureOpenAI", "gpt-6-luna");
+        })));
+
+        Assert.Equal(1, created);
+        Assert.Single(clients.Select(c => c.GetService<OpenTelemetryChatClient>()).Distinct());
+    }
+
+    [Fact]
+    public void CreateClient_WhenCreatingFails_TriesAgainNextTime()
+    {
+        var attempts = 0;
+        using var factory = new LlmClientFactory(
+            Options.Create(new Dictionary<string, LlmProviderOptions>
+            {
+                ["AzureOpenAI"] = new() { Endpoint = "https://example.openai.azure.com/", ApiKey = "test-key" }
+            }),
+            new Lazy<TokenCredential>(() => new FakeCredential()),
+            () => ++attempts == 1 ? throw new InvalidOperationException("first attempt fails") : new AzureOpenAIClientOptions());
+
+        Assert.Throws<InvalidOperationException>(() => factory.CreateClient("AzureOpenAI", "gpt-6-luna"));
+        using var client = factory.CreateClient("AzureOpenAI", "gpt-6-luna");
+
+        Assert.NotNull(client.GetService<OpenTelemetryChatClient>());
+        Assert.Equal(2, attempts);
+    }
+
+    [Fact]
     public async Task CreateClient_TracesEachCall_WithoutThePromptOrTheResponse()
     {
         var spans = new List<Activity>();
