@@ -35,6 +35,8 @@ public class HtmlGeneratorServiceTests
         foreach (var id in new[] { "ld-count", "ld-next", "ld-countdown", "ld-loading", "ld-loading-text", "ld-empty", "ld-empty-text",
                      "ld-aside", "ld-spotlight", "ld-toplist", "ld-feed", "ld-list", "ld-sentinel", "ld-more", "ld-end", "ld-config" })
             Assert.Contains($"id=\"{id}\"", html);
+        // app.js replaces its text with the retryable error: a live region, so that's announced.
+        Assert.Contains("id=\"ld-loading-text\" role=\"status\" aria-live=\"polite\"", html);
     }
 
     [Fact]

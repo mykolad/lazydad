@@ -137,7 +137,7 @@ public class HtmlGeneratorService
                   {{Skeleton("92%")}}
                   {{Skeleton("78%")}}
                   {{Skeleton("86%")}}
-                  <span class="ld-muted" id="ld-loading-text" style="font-size:13px"><span data-i18n="loading">Завантажуємо жарти…</span></span>
+                  <span class="ld-muted" id="ld-loading-text" role="status" aria-live="polite" style="font-size:13px"><span data-i18n="loading">Завантажуємо жарти…</span></span>
                 </div>
                 <section class="ld-state ld-empty" id="ld-empty" hidden>
                   <div class="ld-empty-blob" aria-hidden="true">z z</div>
