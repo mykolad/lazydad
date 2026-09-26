@@ -199,7 +199,14 @@
     showView(state.view);
     const page = await getJson(`jokes/feed?sort=new&limit=${PAGE_SIZE}`);
     if (generation !== state.generation) return;
-    page.items.filter(j => !state.feed.includes(j.id)).forEach(j => placeInFeed(remember(j)));
+    const fresh = page.items.filter(j => !state.feed.includes(j.id));
+    // A whole page of new jokes with more behind it (a tab suspended for many batches): the rest
+    // can't be reached from here, so start the feed over.
+    if (fresh.length === page.items.length && page.next !== null && state.feed.length > 0) {
+      await resetFeed();
+      return;
+    }
+    fresh.forEach(j => placeInFeed(remember(j)));
   }
 
   // The feed's order: [net score,] time, id, all descending (as the API sorts).
@@ -227,13 +234,7 @@
   }
 
   async function showFirstBatch() {
-    state.generation++;
-    state.feed = [];
-    state.cursor = null;
-    state.done = false;
-    state.loadingPage = false;
-    $('ld-list').innerHTML = '';
-    await Promise.all([loadTop(), loadPage()]);
+    await Promise.all([loadTop(), resetFeed()]);
     showView('feed');
   }
 
@@ -554,6 +555,11 @@
   function setSort(sort) {
     if (sort === state.sort) return;
     state.sort = sort;
+    resetFeed().catch(() => { /* shown in the footer */ });
+  }
+
+  // Empties the feed and loads its first page again (in-flight pages of the old one are ignored).
+  function resetFeed() {
     state.generation++;
     state.feed = [];
     state.cursor = null;
@@ -561,7 +567,7 @@
     state.loadingPage = false;
     state.pageFailed = false;
     $('ld-list').innerHTML = '';
-    loadPage().catch(() => { /* shown in the footer */ });
+    return loadPage();
   }
 
   // The observer only reports changes, so re-observe after each page: if the sentinel is still
