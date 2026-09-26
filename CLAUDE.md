@@ -60,9 +60,13 @@ tests/LazyDad.SmokeTests — smoke tests against a deployed app (run by Deploy M
   discarded; an unchanged ranking skips the DB write. `ReplaceAsync` does
   delete + insert in one transaction.
 - Russian language support was removed (migration `RemoveRussianJokes` purges its rows).
-- Distributed lock (`SchedulerLock` table) is scaffolded in the DB but not yet wired
-  up. That's safe only because the app runs a single replica; it must be wired up
-  before scaling out (issue #5).
+- **One batch per language per period across replicas** (`SchedulerLocks` table, `SchedulerLockRepository`):
+  a tick takes a lease `jokes:<language>` that lasts until just before the next due time (period minus
+  min(5 min, period/10)). A replica whose timer fires while another holds it skips (`/status` leaderboard
+  `skipped`); if the holder dies, the next replica whose timer fires takes over. Taking an expired lease is one
+  atomic `UPDATE`, and the first insert is guarded by the primary key. The **startup tick always runs** and takes
+  the lease: a new revision proves itself with it (smoke tests), while the old revision usually still holds it.
+  So a replica start (deploy, restart, scale-out) still means one extra batch.
 
 ## EF Core migrations
 
@@ -103,7 +107,7 @@ Azure SQL firewall must allow the local machine's public IP.
 - **Azure OpenAI** (swedencentral): each `LlmModels[].Model` in config is the Azure deployment name (e.g. `gpt-5.3-chat`)
 - **Container Apps** (environment `lazydad-cae`, Consumption, 0.5 vCPU / 1 GiB):
   - `lazydad-app` (prod): **exactly one replica** (min = max = 1), no health probes yet.
-    Scaling out needs the scheduler lock first (see issue #6); the vote rate limit is per replica.
+    Scaling out (issue #6) is safe for joke generation (the scheduler lease); the vote rate limit is per replica.
   - `lazydad-app-staging`: 0–1 replicas (scales to zero when idle). Calls the real LLMs.
     **Ingress allows listed IPs only** (the owner's `home` rule; Deploy Master adds its runner temporarily),
     so stray visitors can't wake it and spend LLM tokens.
