@@ -635,23 +635,33 @@ az keyvault secret delete --vault-name lazydad-kv -n OtlpEndpoint
 
 *PowerShell 7: the same commands.*
 
-A new token later (expired or leaked): update `OtlpHeaders` as in step 1, then restart each app's active revision;
+A new token later (expired or leaked), per environment: each app has its own secret once section 11 is done
+(`OtlpHeaders` for `lazydad-app`, `OtlpHeadersStaging` for `lazydad-app-staging`; before that, both use
+`OtlpHeaders`). Store the new token in that app's secret as in step 1, then restart that app's active revision:
 the value is read when a replica starts. Revoke the old token in Grafana.
 
 ```bash
-for app in lazydad-app-staging lazydad-app; do
-  az containerapp revision restart -n $app -g $RG \
-    --revision "$(az containerapp show -n $app -g $RG --query properties.latestReadyRevisionName -o tsv)"
-done
+APP=lazydad-app; SECRET=OtlpHeaders     # or: lazydad-app-staging / OtlpHeadersStaging
+# INSTANCE_ID as in step 1; the curl check there works for the new token too.
+read -rs TOKEN
+AUTH=$(printf '%s:%s' "$INSTANCE_ID" "$TOKEN" | base64 -w0); unset TOKEN
+az keyvault secret set --vault-name lazydad-kv -n $SECRET --value "Authorization=Basic%20$AUTH" -o none
+unset AUTH
+az containerapp revision restart -n $APP -g $RG \
+  --revision "$(az containerapp show -n $APP -g $RG --query properties.latestReadyRevisionName -o tsv)"
 ```
 
 <details><summary>PowerShell 7</summary>
 
 ```powershell
-foreach ($name in 'lazydad-app-staging', 'lazydad-app') {
-  az containerapp revision restart -n $name -g $RG `
-    --revision (az containerapp show -n $name -g $RG --query properties.latestReadyRevisionName -o tsv)
-}
+$APP = 'lazydad-app'; $SECRET = 'OtlpHeaders'     # or: lazydad-app-staging / OtlpHeadersStaging
+# $INSTANCE_ID as in step 1; the Invoke-WebRequest check there works for the new token too.
+$TOKEN = Read-Host 'Grafana token' -MaskInput
+$AUTH = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("${INSTANCE_ID}:$TOKEN")); Remove-Variable TOKEN
+az keyvault secret set --vault-name lazydad-kv -n $SECRET --value "Authorization=Basic%20$AUTH" -o none
+Remove-Variable AUTH
+az containerapp revision restart -n $APP -g $RG `
+  --revision (az containerapp show -n $APP -g $RG --query properties.latestReadyRevisionName -o tsv)
 ```
 
 </details>
