@@ -177,7 +177,8 @@ html[data-theme="dark"] .ld-panel { background: #3d472b; }
 .ld-version {
   display: inline-flex; align-items: center; gap: 6px; margin: 14px 0 0 8px;
   font-size: 12px; font-variant-numeric: tabular-nums; text-decoration: none;
-  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  /* 64%, not the design's 60%: ~4.7:1 on the light background, above WCAG AA for 12px text. */
+  color: color-mix(in srgb, var(--color-text) 64%, transparent);
 }
 a.ld-version:hover { color: var(--color-text); }
 .ld-sha { font-family: ui-monospace, Menlo, Consolas, monospace; }

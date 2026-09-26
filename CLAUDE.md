@@ -46,7 +46,7 @@ tests/LazyDad.SmokeTests — smoke tests against a deployed app (run by Deploy M
   removing adjusts the counts; the update is one atomic SQL `UPDATE` that never goes below zero. The
   endpoint is rate-limited to 30 votes per minute per client IP (from `X-Forwarded-For`, set by the
   Container Apps ingress). Server-side dedupe needs sign-in, which doesn't exist yet.
-- One `PeriodicTimer` loop per enabled language runs concurrently via `Task.WhenAll`.
+- One loop per enabled language (a delay to each due time, every `IntervalHours`) runs concurrently via `Task.WhenAll`.
   Within a tick, all of a language's `LlmModels` are called in parallel, each in its
   own DI scope (a `DbContext` must not be shared across concurrent calls); jokes are
   then persisted sequentially.

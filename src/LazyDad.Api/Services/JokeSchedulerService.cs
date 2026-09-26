@@ -56,19 +56,24 @@ public class JokeSchedulerService : BackgroundService
         // Generate immediately on startup, then on each period.
         await RunTickAsync(language, stoppingToken);
 
+        // Ticks are due every period from here (the page's countdown to the next batch). A delay to
+        // each due time rather than a PeriodicTimer: a timer keeps a tick that fell due during an
+        // overrunning one and fires it at once, while the published due time is already in the future.
         var period = TimeSpan.FromHours(language.IntervalHours);
-        using var timer = new PeriodicTimer(period);
-        // The timer fires every period from its creation, so the due times are known in advance
-        // (the page's countdown to the next batch).
         var nextTick = DateTime.UtcNow + period;
         status.RecordNextTick(language.Language, nextTick);
 
-        while (await timer.WaitForNextTickAsync(stoppingToken))
+        while (true)
         {
+            var wait = nextTick - DateTime.UtcNow;
+            if (wait > TimeSpan.Zero)
+                await Task.Delay(wait, stoppingToken);
+            stoppingToken.ThrowIfCancellationRequested();
+
             await RunTickAsync(language, stoppingToken);
             // Advance only once the tick (jokes and leaderboard) is done: until then the due time
-            // stays in the past, which tells the page to keep polling for the batch. Skips periods
-            // the timer coalesced if a tick overran.
+            // stays in the past, which tells the page to keep polling for the batch. Due times that
+            // passed while an overrunning tick ran are skipped, not run back to back.
             do nextTick += period; while (nextTick <= DateTime.UtcNow);
             status.RecordNextTick(language.Language, nextTick);
         }

@@ -375,8 +375,9 @@
       shiftCounts(joke, value, state.votes[joke.id] || 0);
       paintVotes(joke);
     } catch {
-      // Roll back to what the server has counted.
-      setShownVote(joke, previous);
+      // Roll back to what the server has counted, unless the reader has clicked again since: that
+      // newer vote stays, and the next queued request sends it (with the counted vote as previous).
+      if ((state.votes[joke.id] || 0) === value) setShownVote(joke, previous);
     }
   }
 

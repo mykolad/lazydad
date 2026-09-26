@@ -13,7 +13,7 @@ namespace LazyDad.Tests;
 /// <summary>
 /// Drives the real scheduler through one tick, with real generation/leaderboard services
 /// resolved from DI scopes, and mocks only at the edges (repositories, LLM clients).
-/// The PeriodicTimer interval is an hour, so only the immediate startup tick runs in a test.
+/// The interval is an hour, so only the immediate startup tick runs in a test.
 /// </summary>
 public sealed class JokeSchedulerServiceTests : IDisposable
 {
