@@ -94,28 +94,42 @@ public class JokesControllerTests
     [Theory]
     [InlineData("new", JokeSort.Newest)]
     [InlineData("top", JokeSort.TopVoted)]
-    public async Task GetFeed_ReturnsThePageAndTheTotal(string sort, JokeSort expected)
+    public async Task GetFeed_ReturnsThePage_TheTotal_AndACursorAfterItsLastJoke(string sort, JokeSort expected)
     {
-        List<Joke> page = [MakeJoke(4), MakeJoke(3)];
+        var last = new Joke { Id = 3, Text = "Joke 3", GeneratedAt = new DateTime(2026, 9, 23, 4, 0, 0, DateTimeKind.Utc), Up = 7, Down = 2 };
+        List<Joke> page = [MakeJoke(4), last];
         jokeRepositoryMock.Setup(r => r.CountAsync(It.IsAny<CancellationToken>())).ReturnsAsync(42);
-        jokeRepositoryMock.Setup(r => r.GetPageAsync(expected, 20, 2, It.IsAny<CancellationToken>())).ReturnsAsync(page);
+        jokeRepositoryMock.Setup(r => r.GetPageAsync(expected, null, 2, It.IsAny<CancellationToken>())).ReturnsAsync(page);
 
-        var json = Json(await CreateController().GetFeed(sort, 20, 2, CancellationToken.None));
+        var json = Json(await CreateController().GetFeed(sort, null, 2, CancellationToken.None));
 
         Assert.Equal(42, json.GetProperty("total").GetInt32());
         Assert.Equal([4, 3], json.GetProperty("items").EnumerateArray().Select(j => j.GetProperty("id").GetInt32()));
-        Assert.Equal(["total", "items"], json.EnumerateObject().Select(p => p.Name));
+        Assert.Equal(new JokeCursor(5, last.GeneratedAt, 3).ToString(), json.GetProperty("next").GetString());
+        Assert.Equal(["total", "items", "next"], json.EnumerateObject().Select(p => p.Name));
+    }
+
+    [Fact]
+    public async Task GetFeed_PassesTheCursorOn_AndEndsWithoutANextCursor()
+    {
+        var after = new JokeCursor(5, new DateTime(2026, 9, 23, 4, 0, 0, DateTimeKind.Utc), 3);
+        jokeRepositoryMock.Setup(r => r.GetPageAsync(JokeSort.TopVoted, after, 20, It.IsAny<CancellationToken>())).ReturnsAsync([MakeJoke(1)]);
+
+        var json = Json(await CreateController().GetFeed("top", after.ToString(), 20, CancellationToken.None));
+
+        // Fewer jokes than the limit: that was the last page.
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("next").ValueKind);
     }
 
     [Theory]
-    [InlineData("best", 0, 20)]
-    [InlineData("new", -1, 20)]
-    [InlineData("new", 0, 0)]
-    [InlineData("new", 0, JokesController.MaxPageSize + 1)]
-    public async Task GetFeed_RejectsBadArguments(string sort, int offset, int limit)
+    [InlineData("best", null, 20)]
+    [InlineData("new", null, 0)]
+    [InlineData("new", null, JokesController.MaxPageSize + 1)]
+    [InlineData("new", "not-a-cursor", 20)]
+    public async Task GetFeed_RejectsBadArguments(string sort, string? after, int limit)
     {
-        Assert.IsType<BadRequestObjectResult>(await CreateController().GetFeed(sort, offset, limit, CancellationToken.None));
-        jokeRepositoryMock.Verify(r => r.GetPageAsync(It.IsAny<JokeSort>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.IsType<BadRequestObjectResult>(await CreateController().GetFeed(sort, after, limit, CancellationToken.None));
+        jokeRepositoryMock.Verify(r => r.GetPageAsync(It.IsAny<JokeSort>(), It.IsAny<JokeCursor?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

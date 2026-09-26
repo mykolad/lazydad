@@ -42,15 +42,26 @@ public class JokeRepository : IJokeRepository
     public async Task<int> CountAsync(CancellationToken cancellationToken)
         => await context.Jokes.CountAsync(cancellationToken);
 
-    public async Task<List<Joke>> GetPageAsync(JokeSort sort, int offset, int limit, CancellationToken cancellationToken)
+    public async Task<List<Joke>> GetPageAsync(JokeSort sort, JokeCursor? after, int limit, CancellationToken cancellationToken)
     {
+        IQueryable<Joke> jokes = context.Jokes;
+
+        // Keyset pagination: everything strictly after the cursor in the page's own order.
+        if (after is not null)
+        {
+            var (score, generatedAt, id) = (after.Score, after.GeneratedAt, after.Id);
+            jokes = sort == JokeSort.TopVoted
+                ? jokes.Where(j => j.Up - j.Down < score
+                    || (j.Up - j.Down == score && (j.GeneratedAt < generatedAt || (j.GeneratedAt == generatedAt && j.Id < id))))
+                : jokes.Where(j => j.GeneratedAt < generatedAt || (j.GeneratedAt == generatedAt && j.Id < id));
+        }
+
         var ordered = sort == JokeSort.TopVoted
-            ? context.Jokes.OrderByDescending(j => j.Up - j.Down).ThenByDescending(j => j.GeneratedAt)
-            : context.Jokes.OrderByDescending(j => j.GeneratedAt);
+            ? jokes.OrderByDescending(j => j.Up - j.Down).ThenByDescending(j => j.GeneratedAt)
+            : jokes.OrderByDescending(j => j.GeneratedAt);
 
         return await ordered
             .ThenByDescending(j => j.Id)
-            .Skip(offset)
             .Take(limit)
             .AsNoTracking()
             .ToListAsync(cancellationToken);

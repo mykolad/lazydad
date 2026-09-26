@@ -45,11 +45,14 @@ public class JokesController : ControllerBase
         }));
     }
 
-    /// <summary>One page of the page's "All jokes" list: <c>sort</c> is <c>new</c> or <c>top</c> (net score).</summary>
+    /// <summary>
+    /// One page of the page's "All jokes" list: <c>sort</c> is <c>new</c> or <c>top</c> (net score).
+    /// Omit <c>after</c> for the first page, then pass the previous page's <c>next</c> (null on the last page).
+    /// </summary>
     [HttpGet("feed")]
     public async Task<IActionResult> GetFeed(
         [FromQuery] string sort,
-        [FromQuery] int offset,
+        [FromQuery] string? after,
         [FromQuery] int limit,
         CancellationToken cancellationToken)
     {
@@ -61,12 +64,16 @@ public class JokesController : ControllerBase
         };
         if (order is null)
             return BadRequest("sort must be 'new' or 'top'.");
-        if (offset < 0 || limit < 1 || limit > MaxPageSize)
-            return BadRequest($"offset must be at least 0 and limit between 1 and {MaxPageSize}.");
+        if (limit < 1 || limit > MaxPageSize)
+            return BadRequest($"limit must be between 1 and {MaxPageSize}.");
+        JokeCursor? cursor = null;
+        if (after is not null && !JokeCursor.TryParse(after, out cursor))
+            return BadRequest("after must be a 'next' value from a previous page.");
 
         var total = await jokeRepository.CountAsync(cancellationToken);
-        var items = await jokeRepository.GetPageAsync(order.Value, offset, limit, cancellationToken);
-        return Ok(new { total, items });
+        var items = await jokeRepository.GetPageAsync(order.Value, cursor, limit, cancellationToken);
+        var next = items.Count == limit ? JokeCursor.After(items[^1]).ToString() : null;
+        return Ok(new { total, items, next });
     }
 
     /// <summary>The page header: how many jokes exist, and when this revision's scheduler runs next (UTC, or null before it's scheduled).</summary>

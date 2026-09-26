@@ -82,7 +82,7 @@
     paused: false,
     sort: 'new',
     feed: [],
-    offset: 0,
+    cursor: null,             // the last page's "next" (keyset pagination)
     total: 0,
     loadingPage: false,
     done: false,
@@ -169,6 +169,19 @@
     state.nextBatchAt = summary.nextBatchAt;
     renderCount();
     renderCountdown();
+    // The first batch has landed while the empty state was showing: load it.
+    if (state.view === 'empty' && summary.count > 0) await showFirstBatch();
+  }
+
+  async function showFirstBatch() {
+    state.generation++;
+    state.feed = [];
+    state.cursor = null;
+    state.done = false;
+    state.loadingPage = false;
+    $('ld-list').innerHTML = '';
+    await Promise.all([loadTop(), loadPage()]);
+    showView('feed');
   }
 
   async function loadTop() {
@@ -191,15 +204,16 @@
     state.pageFailed = false;
     renderFeedFooter();
     try {
-      const page = await getJson(`jokes/feed?sort=${state.sort}&offset=${state.offset}&limit=${PAGE_SIZE}`);
+      const after = state.cursor ? `&after=${encodeURIComponent(state.cursor)}` : '';
+      const page = await getJson(`jokes/feed?sort=${state.sort}&limit=${PAGE_SIZE}${after}`);
       if (generation !== state.generation) return;
-      state.offset += page.items.length;
+      state.cursor = page.next;
       state.total = page.total;
       // Votes can reorder "top" between pages; skip jokes that are already listed.
       const fresh = page.items.filter(j => !state.feed.includes(j.id)).map(remember);
       state.feed.push(...fresh.map(j => j.id));
       $('ld-list').insertAdjacentHTML('beforeend', fresh.map(rowHtml).join(''));
-      state.done = page.items.length < PAGE_SIZE || state.offset >= page.total;
+      state.done = page.next === null;
     } catch (error) {
       if (generation !== state.generation) return;
       state.pageFailed = true;
@@ -264,13 +278,16 @@
   }
 
   // — votes —
+  // The up/down split is visible on hover or keyboard focus; for screen readers it describes both buttons.
+  let splitIds = 0;
   function voteHtml(joke, vertical) {
     const strings = t();
+    const splitId = `ld-split-${++splitIds}`;
     return `<div class="ld-vote${vertical ? ' ld-vote--v' : ''}" data-vote-for="${joke.id}">` +
-      `<button type="button" data-vote="1" aria-label="${esc(strings.upA)}" aria-pressed="false">${ICON.up}</button>` +
+      `<button type="button" data-vote="1" aria-label="${esc(strings.upA)}" aria-describedby="${splitId}" aria-pressed="false">${ICON.up}</button>` +
       '<span class="ld-score"></span>' +
-      `<button type="button" data-vote="-1" aria-label="${esc(strings.downA)}" aria-pressed="false">${ICON.down}</button>` +
-      '<span class="ld-split" aria-hidden="true"></span></div>';
+      `<button type="button" data-vote="-1" aria-label="${esc(strings.downA)}" aria-describedby="${splitId}" aria-pressed="false">${ICON.down}</button>` +
+      `<span class="ld-split" id="${splitId}" role="tooltip"></span></div>`;
   }
 
   function paintVotes(joke) {
@@ -370,7 +387,13 @@
     const joke = state.jokes.get(id);
     if (!joke) return;
     const copied = state.copied === id;
-    document.querySelectorAll(`[data-copy="${id}"]`).forEach(b => { b.innerHTML = copyButtonInner(joke); });
+    // The accessible name and tooltip follow the visible state.
+    const label = copied ? t().copied : t().copy;
+    document.querySelectorAll(`[data-copy="${id}"]`).forEach(b => {
+      b.innerHTML = copyButtonInner(joke);
+      b.setAttribute('aria-label', label);
+      b.title = label;
+    });
     document.querySelectorAll(`[data-share="${id}"]`).forEach(b => {
       b.innerHTML = copied ? ICON.check(17) : ICON.share;
       b.setAttribute('aria-label', copied ? t().copied : t().share);
@@ -424,12 +447,12 @@
 
   // — feed —
   function rowHtml(joke) {
-    const strings = t();
+    const copyLabel = state.copied === joke.id ? t().copied : t().copy;
     return `<article class="ld-joke">${voteHtml(joke, true)}` +
       '<div class="ld-joke-body">' +
       `<p class="ld-joke-text"${langAttr(joke)}>${esc(joke.text)}</p>` +
       `<div class="ld-joke-foot"><span class="ld-joke-meta">${esc(shortDate(joke.generatedAt))} · ${esc(joke.model)}</span>` +
-      `<button type="button" class="ld-copy" data-copy="${joke.id}" aria-label="${esc(strings.copy)}" title="${esc(strings.copy)}">${copyButtonInner(joke)}</button></div>` +
+      `<button type="button" class="ld-copy" data-copy="${joke.id}" aria-label="${esc(copyLabel)}" title="${esc(copyLabel)}">${copyButtonInner(joke)}</button></div>` +
       '</div></article>';
   }
 
@@ -466,7 +489,7 @@
     state.sort = sort;
     state.generation++;
     state.feed = [];
-    state.offset = 0;
+    state.cursor = null;
     state.done = false;
     state.loadingPage = false;
     state.pageFailed = false;

@@ -72,7 +72,7 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
     [Fact]
     public async Task FeedAndSummary_ServeThePagesData()
     {
-        var feed = await target.PollAsync<JsonElement>(async () => await target.GetJsonAsync("jokes/feed?sort=top&offset=0&limit=5"), SmokeTarget.ColdStartTimeout, "/jokes/feed");
+        var feed = await target.PollAsync<JsonElement>(async () => await target.GetJsonAsync("jokes/feed?sort=top&limit=5"), SmokeTarget.ColdStartTimeout, "/jokes/feed");
         var summary = await target.GetJsonAsync("jokes/summary");
 
         Assert.True(feed.GetProperty("total").GetInt32() > 0, "The feed reports no jokes.");
@@ -90,7 +90,7 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
     {
         // value = previous = 0 changes nothing, so this checks the endpoint (routing, rate limiter,
         // DB read) without casting a vote in the environment.
-        var feed = await target.PollAsync<JsonElement>(async () => await target.GetJsonAsync("jokes/feed?sort=new&offset=0&limit=1"), SmokeTarget.ColdStartTimeout, "/jokes/feed");
+        var feed = await target.PollAsync<JsonElement>(async () => await target.GetJsonAsync("jokes/feed?sort=new&limit=1"), SmokeTarget.ColdStartTimeout, "/jokes/feed");
         var joke = feed.GetProperty("items")[0];
 
         using var response = await target.Client.PostAsync(

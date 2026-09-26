@@ -95,20 +95,34 @@ public sealed class JokeRepositoryTests : IDisposable
     }
 
     [Fact]
-    public async Task GetPageAsync_Newest_PagesNewestFirst()
+    public async Task GetPageAsync_Newest_PagesNewestFirst_AfterTheCursor()
     {
         await using var context = CreateContext();
         var repository = new JokeRepository(context);
 
-        var first = await repository.GetPageAsync(JokeSort.Newest, 0, 2, CancellationToken.None);
-        var second = await repository.GetPageAsync(JokeSort.Newest, 2, 2, CancellationToken.None);
+        var first = await repository.GetPageAsync(JokeSort.Newest, null, 2, CancellationToken.None);
+        var second = await repository.GetPageAsync(JokeSort.Newest, JokeCursor.After(first[^1]), 2, CancellationToken.None);
 
         Assert.Equal(["uk-new", "en"], first.Select(j => j.Text));
         Assert.Equal(["uk-mid", "uk-old"], second.Select(j => j.Text));
     }
 
     [Fact]
-    public async Task GetPageAsync_TopVoted_OrdersByNetScore_ThenNewest()
+    public async Task GetPageAsync_Newest_ANewJokeDoesNotShiftTheNextPage()
+    {
+        await using var context = CreateContext();
+        var repository = new JokeRepository(context);
+        var first = await repository.GetPageAsync(JokeSort.Newest, null, 2, CancellationToken.None);
+
+        // A batch lands while the reader scrolls: with offsets, "en" would come again on the next page.
+        await repository.AddAsync(new Joke { Language = "Ukrainian", Model = "m", Text = "brand-new", GeneratedAt = Now.AddHours(1) }, CancellationToken.None);
+        var second = await repository.GetPageAsync(JokeSort.Newest, JokeCursor.After(first[^1]), 2, CancellationToken.None);
+
+        Assert.Equal(["uk-mid", "uk-old"], second.Select(j => j.Text));
+    }
+
+    [Fact]
+    public async Task GetPageAsync_TopVoted_OrdersByNetScore_ThenNewest_AndPagesAfterTheCursor()
     {
         await using (var setup = CreateContext())
         {
@@ -116,11 +130,35 @@ public sealed class JokeRepositoryTests : IDisposable
             await setup.Jokes.Where(j => j.Text == "uk-mid").ExecuteUpdateAsync(s => s.SetProperty(j => j.Up, 1).SetProperty(j => j.Down, 4));
         }
         await using var context = CreateContext();
+        var repository = new JokeRepository(context);
 
-        var page = await new JokeRepository(context).GetPageAsync(JokeSort.TopVoted, 0, 10, CancellationToken.None);
+        var all = await repository.GetPageAsync(JokeSort.TopVoted, null, 10, CancellationToken.None);
+        var first = await repository.GetPageAsync(JokeSort.TopVoted, null, 2, CancellationToken.None);
+        var second = await repository.GetPageAsync(JokeSort.TopVoted, JokeCursor.After(first[^1]), 2, CancellationToken.None);
 
         // +4, then the two zeros newest first, then −3 (net scores can be negative).
-        Assert.Equal(["uk-old", "uk-new", "en", "uk-mid"], page.Select(j => j.Text));
+        Assert.Equal(["uk-old", "uk-new", "en", "uk-mid"], all.Select(j => j.Text));
+        Assert.Equal(["en", "uk-mid"], second.Select(j => j.Text));
+    }
+
+    [Fact]
+    public async Task GetPageAsync_BreaksTiesById_SoPagesNeverRepeatAJoke()
+    {
+        await using (var setup = CreateContext())
+        {
+            setup.Jokes.AddRange(
+                new Joke { Language = "Ukrainian", Model = "m", Text = "twin-1", GeneratedAt = Now.AddHours(1) },
+                new Joke { Language = "Ukrainian", Model = "m", Text = "twin-2", GeneratedAt = Now.AddHours(1) });
+            await setup.SaveChangesAsync();
+        }
+        await using var context = CreateContext();
+        var repository = new JokeRepository(context);
+
+        var first = await repository.GetPageAsync(JokeSort.Newest, null, 1, CancellationToken.None);
+        var second = await repository.GetPageAsync(JokeSort.Newest, JokeCursor.After(first[^1]), 1, CancellationToken.None);
+
+        Assert.Equal(["twin-2"], first.Select(j => j.Text));
+        Assert.Equal(["twin-1"], second.Select(j => j.Text));
     }
 
     [Fact]
