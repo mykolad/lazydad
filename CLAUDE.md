@@ -153,6 +153,15 @@ Raise `$MinLineCoverage` as coverage grows; never lower it to get a PR through.
 The script runs only `tests/LazyDad.Tests` (the smoke tests need a deployed app; Deploy Master runs them).
 Build and Test still compiles the smoke project, because its build step builds the whole solution.
 
+Its second job, **`clean-database-migrations`**, runs against a throwaway SQL Server 2022 service container
+(SQL auth; the password is not a secret). It checks the database side that neither the SQLite unit tests
+(`EnsureCreated()`) nor staging (incremental upgrades only) exercise:
+1. `dotnet ef migrations has-pending-model-changes`: a model change without a migration fails the PR.
+2. The deploys' migration bundle applies the **whole chain to an empty database**, rolls every migration back
+   (`efbundle 0`), and applies them again. `RemoveRussianJokes.Down` is a deliberate no-op.
+3. The repository tests (`*RepositoryTests`) run against SQL Server: with `SQLSERVER_TEST_CONNECTION` set,
+   `TestDatabase` gives each test class its own database built by the migrations (SQLite otherwise).
+
 ## Deploy Master
 
 `.github/workflows/deploy-master.yml` (**Deploy Master**) runs after Build and Test succeeds on a push to `master` (or manually via

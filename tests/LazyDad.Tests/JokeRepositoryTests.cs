@@ -1,23 +1,20 @@
 using LazyDad.Data;
 using LazyDad.Data.Entities;
 using LazyDad.Data.Repositories;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace LazyDad.Tests;
 
-/// <summary>Runs against a real (SQLite in-memory) database so the LINQ queries are actually translated and executed.</summary>
+/// <summary>Runs against a real database (SQLite in memory, or SQL Server with the migrations in CI; see TestDatabase) so the LINQ queries are actually translated and executed.</summary>
 public sealed class JokeRepositoryTests : IDisposable
 {
     private static readonly DateTime Now = new(2026, 9, 24, 12, 0, 0, DateTimeKind.Utc);
 
-    private readonly SqliteConnection connection = new("DataSource=:memory:");
+    private readonly TestDatabase database = new();
 
     public JokeRepositoryTests()
     {
-        connection.Open();
         using var context = CreateContext();
-        context.Database.EnsureCreated();
 
         context.Jokes.AddRange(
             new Joke { Language = "Ukrainian", Model = "m", Text = "uk-old", GeneratedAt = Now.AddHours(-8) },
@@ -27,10 +24,9 @@ public sealed class JokeRepositoryTests : IDisposable
         context.SaveChanges();
     }
 
-    public void Dispose() => connection.Dispose();
+    public void Dispose() => database.Dispose();
 
-    private LazyDadDbContext CreateContext()
-        => new(new DbContextOptionsBuilder<LazyDadDbContext>().UseSqlite(connection).Options);
+    private LazyDadDbContext CreateContext() => database.CreateContext();
 
     [Fact]
     public async Task GetAllAsync_ReturnsAllJokesNewestFirst()
