@@ -176,8 +176,9 @@
     if (changed) state.refreshPending = true;
     renderCount();
     renderCountdown();
-    if (state.view === 'empty' && summary.count > 0) {
-      await showFirstBatch();
+    if (state.view === 'empty') {
+      // Nothing to refresh until jokes exist; a batch that saved none mustn't keep the page polling.
+      if (summary.count > 0) await showFirstBatch();
       state.refreshPending = false;
     } else if (state.view === 'feed' && state.refreshPending) {
       await showLatest();
