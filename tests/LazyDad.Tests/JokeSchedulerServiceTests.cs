@@ -21,6 +21,8 @@ public sealed class JokeSchedulerServiceTests : IDisposable
 
     private readonly Mock<IJokeRepository> jokeRepositoryMock = new();
     private readonly Mock<ITopJokeRepository> topJokeRepositoryMock = new();
+    // Loose mock: AcquireAsync completes, TryAcquireAsync returns false unless a test sets it up.
+    private readonly Mock<ISchedulerLockRepository> lockRepositoryMock = new();
     private readonly Mock<ILlmClientFactory> llmClientFactoryMock = new();
     private readonly List<Joke> saved = [];
     // Tests wait on the scheduler's own "tick completed" / "tick failed" logs: they are
@@ -64,6 +66,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         services.AddSingleton(Options.Create(new TopJokesOptions { Enabled = false }));
         services.AddSingleton(jokeRepositoryMock.Object);
         services.AddSingleton(topJokeRepositoryMock.Object);
+        services.AddSingleton(lockRepositoryMock.Object);
         services.AddSingleton(llmClientFactoryMock.Object);
         services.AddScoped<JokeGenerationService>();
         if (!omitTopJokeService)
@@ -203,6 +206,58 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         while (!(status.NextTickAt > threshold) && DateTime.UtcNow < deadline)
             await Task.Delay(10);
         Assert.True(status.NextTickAt > threshold, $"NextTickAt was {status.NextTickAt:o}, expected after {threshold:o}.");
+    }
+
+    [Fact]
+    public async Task StartupTick_TakesTheLease_EvenIfAnotherReplicaHoldsIt()
+    {
+        SetupModel("fast", () => Reply("Жарт"));
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+        var before = DateTime.UtcNow;
+
+        await scheduler.RunTickAsync(Ukrainian("fast"), true, CancellationToken.None);
+
+        Assert.Single(saved);
+        // Until just before the next due time: 1h minus a margin (a tenth of the period, at most 5 min).
+        lockRepositoryMock.Verify(r => r.AcquireAsync(
+            "jokes:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(),
+            It.Is<DateTime>(expires => expires >= before.AddMinutes(55) && expires <= DateTime.UtcNow.AddMinutes(55)),
+            It.IsAny<CancellationToken>()), Times.Once);
+        lockRepositoryMock.Verify(r => r.TryAcquireAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task PeriodicTick_WhenAnotherReplicaHoldsTheLease_SkipsWithoutCallingTheModels()
+    {
+        SetupModel("fast", () => Reply("Жарт"));
+        lockRepositoryMock
+            .Setup(r => r.TryAcquireAsync("jokes:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+
+        await scheduler.RunTickAsync(Ukrainian("fast"), false, CancellationToken.None);
+
+        Assert.Empty(saved);
+        llmClientFactoryMock.Verify(f => f.CreateClient(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        var tick = Assert.Single(status.LastTicks);
+        Assert.True(tick.Succeeded);
+        Assert.Equal("skipped", tick.Leaderboard);
+        Assert.Empty(tick.Jokes);
+    }
+
+    [Fact]
+    public async Task PeriodicTick_WithTheLease_Generates()
+    {
+        SetupModel("fast", () => Reply("Жарт"));
+        lockRepositoryMock
+            .Setup(r => r.TryAcquireAsync("jokes:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+
+        await scheduler.RunTickAsync(Ukrainian("fast"), false, CancellationToken.None);
+
+        Assert.Single(saved);
+        Assert.Equal("unchanged", Assert.Single(status.LastTicks).Leaderboard);
     }
 
     [Fact]
