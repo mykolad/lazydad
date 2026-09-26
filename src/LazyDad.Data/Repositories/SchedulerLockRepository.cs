@@ -26,9 +26,12 @@ public class SchedulerLockRepository : ISchedulerLockRepository
         if (taken == 1)
             return true;
 
-        // No row yet (the first run for this key), or a current lease.
-        if (await context.SchedulerLocks.AnyAsync(l => l.LockKey == lockKey, cancellationToken))
-            return false;
+        // No row yet (the first run for this key), or a current lease: possibly our own. If the UPDATE
+        // committed but the connection dropped before the count came back, EF's retry updates nothing
+        // (the new expiry is in the future), and exactly what we wrote is there.
+        var current = await ReadAsync(lockKey, cancellationToken);
+        if (current is not null)
+            return IsOurs(current, holder, expiresAt);
 
         return await TryInsertAsync(lockKey, holder, now, expiresAt, cancellationToken);
     }
@@ -66,9 +69,11 @@ public class SchedulerLockRepository : ISchedulerLockRepository
         }
         catch (DbUpdateException)
         {
-            // Provider-neutral check for a key conflict: the row we failed to insert exists.
-            if (await RowExistsAsync(lockKey, cancellationToken))
-                return false;
+            // Provider-neutral check for a key conflict: the row we failed to insert exists. It's ours if
+            // an earlier attempt of this insert committed before a retry hit the key.
+            var current = await ReadAsync(lockKey, cancellationToken);
+            if (current is not null)
+                return IsOurs(current, holder, expiresAt);
             throw;
         }
         finally
@@ -77,6 +82,10 @@ public class SchedulerLockRepository : ISchedulerLockRepository
         }
     }
 
-    private async Task<bool> RowExistsAsync(string lockKey, CancellationToken cancellationToken)
-        => await context.SchedulerLocks.AsNoTracking().AnyAsync(l => l.LockKey == lockKey, cancellationToken);
+    private async Task<SchedulerLock?> ReadAsync(string lockKey, CancellationToken cancellationToken)
+        => await context.SchedulerLocks.AsNoTracking().SingleOrDefaultAsync(l => l.LockKey == lockKey, cancellationToken);
+
+    // Exactly the lease this call tried to write: same holder and the same expiry (unique per attempt).
+    private static bool IsOurs(SchedulerLock lease, string holder, DateTime expiresAt)
+        => lease.HolderInstanceId == holder && lease.ExpiresAt == expiresAt;
 }

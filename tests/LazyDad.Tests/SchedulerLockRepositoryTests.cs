@@ -107,6 +107,26 @@ public sealed class SchedulerLockRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task TryAcquire_WhenItsOwnUpdateAlreadyCommitted_Succeeds()
+    {
+        // A retried attempt after an ambiguous commit: the lease is already exactly what this call writes,
+        // so the UPDATE matches nothing, but the lease is ours.
+        await TryAcquireAsync("a", Now, Now.AddHours(4));
+
+        Assert.True(await TryAcquireAsync("a", Now, Now.AddHours(4)));
+        Assert.False(await TryAcquireAsync("b", Now, Now.AddHours(4)));
+    }
+
+    [Fact]
+    public async Task TryInsert_WhenItsOwnInsertAlreadyCommitted_Succeeds()
+    {
+        await TryAcquireAsync("a", Now, Now.AddHours(4));
+        await using var context = CreateContext();
+
+        Assert.True(await new SchedulerLockRepository(context).TryInsertAsync(Key, "a", Now, Now.AddHours(4), CancellationToken.None));
+    }
+
+    [Fact]
     public async Task TryInsert_WhenTheInsertFailsForAnotherReason_Throws()
     {
         // Not a key conflict (no row exists): a failure must fail the tick, not pass for lost contention.
