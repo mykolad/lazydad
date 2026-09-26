@@ -189,18 +189,41 @@
     }
   }
 
-  // After a batch: the leaderboard may have changed, and the newest jokes sort before the feed's
-  // cursor, so prepend them (the browser's scroll anchoring keeps the reader's place).
+  // After a batch: the leaderboard may have changed, and the new jokes can sort before the feed's
+  // cursor (always for Newest; for Top voted once the reader has scrolled past their score), where
+  // paging can't reach them. Put each at its place among the loaded rows (the browser's scroll
+  // anchoring keeps the reader's place).
   async function showLatest() {
     const generation = state.generation;
     await loadTop();
     showView(state.view);
-    if (state.sort !== 'new') return;
     const page = await getJson(`jokes/feed?sort=new&limit=${PAGE_SIZE}`);
     if (generation !== state.generation) return;
-    const fresh = page.items.filter(j => !state.feed.includes(j.id)).map(remember);
-    state.feed.unshift(...fresh.map(j => j.id));
-    $('ld-list').insertAdjacentHTML('afterbegin', fresh.map(rowHtml).join(''));
+    page.items.filter(j => !state.feed.includes(j.id)).forEach(j => placeInFeed(remember(j)));
+  }
+
+  // The feed's order: [net score,] time, id, all descending (as the API sorts).
+  function sortsBefore(a, b) {
+    const key = j => {
+      const time = parseUtc(j.generatedAt).getTime();
+      return state.sort === 'top' ? [net(j), time, j.id] : [time, j.id];
+    };
+    const ka = key(a), kb = key(b);
+    const i = ka.findIndex((value, n) => value !== kb[n]);
+    return i >= 0 && ka[i] > kb[i];
+  }
+
+  function placeInFeed(joke) {
+    const index = state.feed.findIndex(id => sortsBefore(joke, state.jokes.get(id)));
+    if (index >= 0) {
+      state.feed.splice(index, 0, joke.id);
+      $('ld-list').children[index].insertAdjacentHTML('beforebegin', rowHtml(joke));
+    } else if (state.done) {
+      // After every loaded row of a complete list: it goes last.
+      state.feed.push(joke.id);
+      $('ld-list').insertAdjacentHTML('beforeend', rowHtml(joke));
+    }
+    // Otherwise it sorts after the loaded rows, and the next page brings it.
   }
 
   async function showFirstBatch() {
