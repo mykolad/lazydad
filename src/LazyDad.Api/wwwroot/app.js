@@ -8,7 +8,7 @@
   const COPIED_MS = 1600;
   const CLOCK_MS = 15000;
   const MINUS = '\u2212';
-  const KEYS = { theme: 'lazydad.theme', lang: 'lazydad.lang', votes: 'lazydad.votes' };
+  const KEYS = { theme: 'lazydad.theme', lang: 'lazydad.lang', votes: 'lazydad.votes', rotation: 'lazydad.rotation' };
 
   const MONTHS = {
     ua: ['січ', 'лют', 'бер', 'кві', 'тра', 'чер', 'лип', 'сер', 'вер', 'жов', 'лис', 'гру'],
@@ -26,7 +26,7 @@
       emptyB: 'Перша партія жартів з’явиться через', emptySoon: 'Перша партія жартів ось-ось з’явиться.',
       loading: 'Завантажуємо жарти…', failed: 'Не вдалося завантажити жарти.', retry: 'Спробувати ще раз',
       themeSystem: 'Як у системі', themeLight: 'Світла тема', themeDark: 'Темна тема', build: 'Версія збірки',
-      place: 'Місце', langGroup: 'Мова', themeGroup: 'Тема', sort: 'Порядок',
+      place: 'Місце', stopRotation: 'Зупинити зміну Топ-3', startRotation: 'Відновити зміну Топ-3', langGroup: 'Мова', themeGroup: 'Тема', sort: 'Порядок',
       dur: (h, m) => `${h} год ${m} хв`
     },
     en: {
@@ -38,7 +38,7 @@
       emptyB: 'The first batch of jokes lands in', emptySoon: 'The first batch of jokes is on its way.',
       loading: 'Loading jokes…', failed: 'Couldn’t load the jokes.', retry: 'Try again',
       themeSystem: 'Follow system', themeLight: 'Light theme', themeDark: 'Dark theme', build: 'Build version',
-      place: 'Place', langGroup: 'Language', themeGroup: 'Theme', sort: 'Sort',
+      place: 'Place', stopRotation: 'Pause the Top 3 rotation', startRotation: 'Resume the Top 3 rotation', langGroup: 'Language', themeGroup: 'Theme', sort: 'Sort',
       dur: (h, m) => `${h}h ${m}m`
     }
   };
@@ -50,7 +50,9 @@
     down: svg(18, '<path d="m6 9 6 6 6-6"/>'),
     copy: svg(15, '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>'),
     check: size => svg(size, '<path d="M20 6 9 17l-5-5"/>'),
-    share: svg(17, '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.59 13.51 6.83 3.98M15.41 6.51l-6.82 3.98"/>')
+    share: svg(17, '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.59 13.51 6.83 3.98M15.41 6.51l-6.82 3.98"/>'),
+    pause: svg(14, '<rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/>'),
+    play: svg(14, '<polygon points="6 3 20 12 6 21 6 3"/>')
   };
 
   // localStorage can be unavailable (private mode, blocked storage): the page still works, it just forgets.
@@ -71,6 +73,7 @@
   const state = {
     theme: ['light', 'dark'].includes(storedTheme) ? storedTheme : 'system',
     lang: storage.get(KEYS.lang) === 'en' ? 'en' : 'ua',
+    rotationStopped: storage.get(KEYS.rotation) === 'off', // the reader paused the spotlight (persisted)
     view: 'loading',
     count: null,
     nextBatchAt: null,
@@ -263,6 +266,8 @@
       const label = $('ld-loading-text');
       // Tagged, so switching UA/EN translates the error too.
       label.innerHTML = `<span data-i18n="failed">${esc(t().failed)}</span> <button type="button" class="ld-link-btn" data-retry data-i18n="retry">${esc(t().retry)}</button>`;
+      // A terminal state now, not a pending one: assistive technology may read it.
+      $('ld-loading').setAttribute('aria-busy', 'false');
     }
   }
 
@@ -441,11 +446,20 @@
     const strings = t();
     const joke = entry.joke;
     const copied = state.copied === joke.id;
-    const refocusTab = panel.contains(document.activeElement) && document.activeElement.matches('[data-spot]');
+    // Re-rendering replaces the buttons: put focus back on the equivalent one.
+    const focused = panel.contains(document.activeElement) ? document.activeElement : null;
+    const refocus = focused?.matches('[data-rotation]') ? '[data-rotation]'
+      : focused?.matches('[data-spot]') ? `[data-spot="${state.spot}"]` : null;
     const tabs = state.top.map((e, i) =>
       `<button type="button" data-spot="${i}" aria-label="${esc(strings.place)} ${e.rank}" aria-current="${i === state.spot}">${e.rank}</button>`).join('');
+    // A persistent pause for the auto-rotation (WCAG 2.2.2): hover and focus only pause it while
+    // they last. Hidden under reduced motion, where the spotlight never rotates.
+    const rotation = state.top.length > 1 && !reducedMotion.matches
+      ? `<button type="button" data-rotation aria-label="${esc(state.rotationStopped ? strings.startRotation : strings.stopRotation)}" ` +
+        `title="${esc(state.rotationStopped ? strings.startRotation : strings.stopRotation)}">${state.rotationStopped ? ICON.play : ICON.pause}</button>`
+      : '';
     panel.innerHTML =
-      `<div class="ld-panel-head"><h2 class="ld-panel-title">${esc(strings.top)}</h2><div class="ld-tabs">${tabs}</div></div>` +
+      `<div class="ld-panel-head"><h2 class="ld-panel-title">${esc(strings.top)}</h2><div class="ld-tabs">${tabs}${rotation}</div></div>` +
       `<div class="ld-rank" aria-hidden="true">${entry.rank}</div>` +
       `<p class="ld-spot-text"${langAttr(joke)}>${esc(joke.text)}</p>` +
       `<div class="ld-note"><span class="ld-label">${esc(strings.why)}</span><p lang="en">${esc(entry.reason)}</p></div>` +
@@ -453,7 +467,7 @@
       `<div class="ld-spot-actions">${voteHtml(joke, false)}` +
       `<button type="button" class="ld-round" data-share="${joke.id}" aria-label="${esc(copied ? strings.copied : strings.share)}">${copied ? ICON.check(17) : ICON.share}</button></div>`;
     paintVotes(joke);
-    if (refocusTab) panel.querySelector(`[data-spot="${state.spot}"]`).focus();
+    if (refocus) panel.querySelector(refocus)?.focus();
   }
 
   function renderTopList() {
@@ -556,6 +570,10 @@
       state.theme = target.dataset.setTheme;
       storage.set(KEYS.theme, state.theme);
       applyTheme();
+    } else if (target.hasAttribute('data-rotation')) {
+      state.rotationStopped = !state.rotationStopped;
+      storage.set(KEYS.rotation, state.rotationStopped ? 'off' : 'on');
+      renderSpotlight();
     } else if (target.dataset.spot !== undefined) {
       selectSpot(Number(target.dataset.spot));
     } else if (target.dataset.copy) {
@@ -584,7 +602,7 @@
   aside.addEventListener('focusin', updatePause);
   aside.addEventListener('focusout', () => setTimeout(updatePause, 0));
   setInterval(() => {
-    if (!state.paused && !reducedMotion.matches && state.view === 'feed' && state.top.length > 1) {
+    if (!state.paused && !state.rotationStopped && !reducedMotion.matches && state.view === 'feed' && state.top.length > 1) {
       selectSpot(state.spot + 1);
     }
   }, ROTATE_MS);

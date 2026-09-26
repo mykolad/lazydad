@@ -5,8 +5,10 @@ namespace LazyDad.Data.Repositories;
 
 /// <summary>
 /// Where a feed page ends: the sort key of its last joke. The next page starts strictly after it, so
-/// new jokes (and, for the top sort, votes on jokes elsewhere in the list) can't shift pages the way
-/// an offset would. <see cref="Score"/> is only used by <see cref="JokeSort.TopVoted"/>.
+/// new jokes can't shift pages the way an offset would, and ties can't repeat. For
+/// <see cref="JokeSort.Newest"/> that's a stable order. For <see cref="JokeSort.TopVoted"/> the score
+/// is mutable: a joke voted across the cursor can still be skipped or repeated (no snapshot).
+/// <see cref="Score"/> is only used by <see cref="JokeSort.TopVoted"/>.
 /// </summary>
 public sealed record JokeCursor(int Score, DateTime GeneratedAt, int Id)
 {

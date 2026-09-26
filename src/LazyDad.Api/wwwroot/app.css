@@ -137,7 +137,7 @@ html[data-theme="dark"] .ld-panel { background: #3d472b; }
 .ld-panel-title { margin: 0; font: 900 22px/1.2 var(--font-heading); letter-spacing: -.01em; }
 .ld-tabs { display: flex; gap: 6px; }
 .ld-tabs button {
-  width: 32px; height: 32px; border: 0; border-radius: 50%; cursor: pointer;
+  width: 32px; height: 32px; border: 0; border-radius: 50%; cursor: pointer; display: grid; place-items: center;
   font: 900 14px var(--font-heading); background: var(--color-accent-2-100); color: var(--color-accent-2-900);
 }
 .ld-tabs button[aria-current="true"] { background: var(--color-accent-2-700); color: var(--color-bg); }
