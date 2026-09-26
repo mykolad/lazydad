@@ -24,6 +24,26 @@ public class LlmClientFactoryTests
     }
 
     [Fact]
+    public void CreateClient_WithoutAnApiKey_UsesEntraId()
+    {
+        // DefaultAzureCredential only fetches a token on the first request, so this makes no network call either.
+        var options = new LlmProviderOptions { Endpoint = "https://example.openai.azure.com/" };
+        var factory = CreateFactory(new() { ["AzureOpenAI"] = options });
+
+        using var client = factory.CreateClient("AzureOpenAI", "gpt-6-luna");
+
+        Assert.NotNull(client);
+        Assert.True(LlmClientFactory.UsesEntraId(options));
+    }
+
+    [Theory]
+    [InlineData("", true)]
+    [InlineData("   ", true)]
+    [InlineData("a-key", false)]
+    public void UsesEntraId_OnlyWhenNoApiKeyIsConfigured(string apiKey, bool expected)
+        => Assert.Equal(expected, LlmClientFactory.UsesEntraId(new LlmProviderOptions { ApiKey = apiKey }));
+
+    [Fact]
     public void CreateClient_ForUnconfiguredProvider_Throws()
     {
         var factory = CreateFactory([]);

@@ -83,7 +83,8 @@ Credentials are stored in user secrets (never committed):
 ```
 dotnet user-secrets set "ConnectionStrings:DefaultConnection" "<azure-sql-conn-string>" --project src/LazyDad.Api
 dotnet user-secrets set "LlmProviders:AzureOpenAI:Endpoint"  "<endpoint>"              --project src/LazyDad.Api
-dotnet user-secrets set "LlmProviders:AzureOpenAI:ApiKey"    "<key>"                   --project src/LazyDad.Api
+# No API key: the app uses Entra ID (your `az login`; needs the "Foundry User" role on lazydad-openai-resource).
+# dotnet user-secrets set "LlmProviders:AzureOpenAI:ApiKey" "<key>" --project src/LazyDad.Api  # only while key auth is on
 ```
 
 Azure SQL firewall must allow the local machine's public IP.

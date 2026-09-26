@@ -177,3 +177,34 @@ deploy removes that setting again.
 
 Storage for context: 336 MB of Basic's 10 GB on 2026-09-25. Layers are shared, so each deploy adds
 only a few MB of unique data.
+
+## 8. Azure OpenAI with managed identities, no API key (issue #10)
+
+The app uses the API key while `LlmProviders:AzureOpenAI:ApiKey` is set, and Entra ID when it's empty:
+`DefaultAzureCredential` picks the app's managed identity in Azure and your `az login` locally. So each
+environment switches when its key setting is removed, with no code change. Do staging first.
+
+```bash
+OPENAI_ID=$(az cognitiveservices account show -n lazydad-openai-resource -g $RG --query id -o tsv)
+
+# 1. A system-assigned identity per app (data access stays per environment), with inference rights.
+#    "Foundry User" covers the OpenAI and the non-OpenAI deployments (Kimi-K2.5); verified with a user account.
+#    "Cognitive Services OpenAI User" is narrower, but may not cover non-OpenAI models.
+for app in lazydad-app-staging lazydad-app; do
+  az containerapp identity assign -n $app -g $RG --system-assigned -o none
+  PID=$(az containerapp show -n $app -g $RG --query identity.principalId -o tsv)
+  az role assignment create --assignee-object-id $PID --assignee-principal-type ServicePrincipal \
+    --role "Foundry User" --scope "$OPENAI_ID"
+done
+# Your own account needs the same role for local runs without a key.
+
+# 2. Switch an environment to Entra ID: drop the key setting (a new revision; wait a few minutes after the
+#    role assignment first, since RBAC takes a while to apply). Check its startup tick on /status before prod.
+az containerapp update -n lazydad-app-staging -g $RG --remove-env-vars LlmProviders__AzureOpenAI__ApiKey -o none
+az containerapp secret remove -n lazydad-app-staging -g $RG --secret-names openai-key
+
+# 3. Once both apps run without it: remove the other copies, then turn key auth off for good.
+az keyvault secret delete --vault-name lazydad-kv -n AzureOpenAIApiKey
+dotnet user-secrets remove "LlmProviders:AzureOpenAI:ApiKey" --project src/LazyDad.Api
+az resource update --ids "$OPENAI_ID" --set properties.disableLocalAuth=true
+```
