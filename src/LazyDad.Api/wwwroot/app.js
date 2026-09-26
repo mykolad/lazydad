@@ -126,6 +126,8 @@
   function applyTheme() {
     const resolved = state.theme === 'system' ? (darkQuery.matches ? 'dark' : 'light') : state.theme;
     document.documentElement.setAttribute('data-theme', resolved);
+    // The browser chrome (mobile address bar, installed app) follows the page's theme.
+    $('ld-theme-color')?.setAttribute('content', resolved === 'dark' ? '#1d1a16' : '#f5ead8');
     $$('[data-set-theme]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.setTheme === state.theme)));
   }
 

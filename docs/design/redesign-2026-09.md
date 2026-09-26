@@ -143,9 +143,12 @@ In `<head>`:
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="manifest" href="/site.webmanifest">
-<meta name="theme-color" content="#f5ead8" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#1d1a16" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f5ead8" id="ld-theme-color">
 ```
+`theme-color` follows the page's resolved theme (#f5ead8 light, #1d1a16 dark): the pre-paint script and the theme switch set it, so a manual choice applies to the browser chrome too. The handoff's two `media`-based tags would follow only the OS setting.
+
+The favicon follows the browser's colour scheme (a favicon can't see the page's manual theme). The handoff's `favicon.svg` had both variants but no rule to switch them, so it always showed the dark one; the build adds that `<style>`.
+
 The separate `favicon-16/32/48.png` files from the handoff aren't used: `favicon.ico` holds the same images.
 
 Focus: `outline: 2px solid var(--color-accent); outline-offset: 2px` on `:focus-visible`.

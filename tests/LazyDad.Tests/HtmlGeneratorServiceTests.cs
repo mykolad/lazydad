@@ -38,6 +38,10 @@ public class HtmlGeneratorServiceTests
         Assert.Contains("<link rel=\"manifest\" href=\"/site.webmanifest\">", html);
         Assert.Contains("src=\"logo.svg\"", html);
         Assert.Contains("src=\"logo-dark.svg\"", html);
+        // One theme-color, which the bootstrap sets from the resolved theme (a manual choice too).
+        Assert.Single(Regex.Matches(html, "name=\"theme-color\""));
+        Assert.Contains("<meta name=\"theme-color\" content=\"#f5ead8\" id=\"ld-theme-color\">", html);
+        Assert.Contains("getElementById('ld-theme-color')", html);
         // Every element app.js looks up by id is in the shell.
         foreach (var id in new[] { "ld-count", "ld-next", "ld-countdown", "ld-loading", "ld-loading-text", "ld-empty", "ld-empty-text",
                      "ld-aside", "ld-spotlight", "ld-toplist", "ld-feed", "ld-list", "ld-sentinel", "ld-more", "ld-end", "ld-config" })

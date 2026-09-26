@@ -29,7 +29,9 @@ public class HtmlGeneratorService
         "(function(){var d=document.documentElement,t=null,l=null;" +
         "try{t=localStorage.getItem('lazydad.theme');l=localStorage.getItem('lazydad.lang')}catch(e){}" +
         "if(t!=='light'&&t!=='dark')t=window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';" +
-        "d.setAttribute('data-theme',t);if(l==='en')d.lang='en'})();";
+        "d.setAttribute('data-theme',t);if(l==='en')d.lang='en';" +
+        // The browser chrome follows the page's theme, including a manual choice.
+        "var m=document.getElementById('ld-theme-color');if(m)m.content=t==='dark'?'#1d1a16':'#f5ead8'})();";
 
     private readonly IOptions<JokeGenerationOptions> options;
     private readonly IOptions<AppInfoOptions> appInfo;
@@ -95,8 +97,7 @@ public class HtmlGeneratorService
               <title>LazyDad</title>
               <meta name="description" content="Українські батьківські жарти від ШІ: нова партія кожні 4 години, найкращі три обирає ШІ-суддя.">
               <meta name="color-scheme" content="light dark">
-              <meta name="theme-color" content="#f5ead8" media="(prefers-color-scheme: light)">
-              <meta name="theme-color" content="#1d1a16" media="(prefers-color-scheme: dark)">
+              <meta name="theme-color" content="#f5ead8" id="ld-theme-color">
               <link rel="icon" href="/favicon.ico" sizes="48x48">
               <link rel="icon" href="/favicon.svg" type="image/svg+xml">
               <link rel="apple-touch-icon" href="/apple-touch-icon.png">
