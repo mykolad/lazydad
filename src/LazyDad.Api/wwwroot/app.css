@@ -1,0 +1,284 @@
+/* LazyDad: Organic design system tokens (light, and the reversed dark ramps) and the page layout.
+   The design handoff (direction 2b) is the source for every value here. */
+:root {
+  --color-bg: #f5ead8;
+  --color-surface: #ebddc5;
+  --color-text: #201e1d;
+  --color-accent: #c67139;
+  --color-accent-2: #7a8a5e;
+  --color-divider: color-mix(in srgb, #201e1d 16%, transparent);
+
+  --color-neutral-100: #f9f4ed; --color-neutral-200: #eee7db; --color-neutral-300: #dcd3c4;
+  --color-neutral-400: #c0b6a5; --color-neutral-500: #a19786; --color-neutral-600: #82796a;
+  --color-neutral-700: #645c50; --color-neutral-800: #474238; --color-neutral-900: #2e2b25;
+
+  --color-accent-100: #fff2eb; --color-accent-200: #ffe1d0; --color-accent-300: #ffc6a5;
+  --color-accent-400: #f6a06b; --color-accent-500: #d67f48; --color-accent-600: #b2622d;
+  --color-accent-700: #8c491a; --color-accent-800: #643312; --color-accent-900: #402310;
+
+  --color-accent-2-100: #f0fae1; --color-accent-2-200: #e1eecc; --color-accent-2-300: #ccdbb2;
+  --color-accent-2-400: #aebf92; --color-accent-2-500: #8fa073; --color-accent-2-600: #728157;
+  --color-accent-2-700: #56633f; --color-accent-2-800: #3d472b; --color-accent-2-900: #272e1b;
+
+  --shadow-md: 0 3px 10px color-mix(in srgb, #2e2b25 16%, transparent);
+  /* Fill of selected pills (language, theme, sort). The light theme darkens the design's accent,
+     so their small light labels reach WCAG AA contrast (~5.7:1 instead of ~3:1). */
+  --color-selected: #8c491a;
+
+  /* Nunito everywhere (it has Cyrillic); Caprasimo is Latin-only, so only the wordmark uses it. */
+  --font-body: "Nunito", system-ui, sans-serif;
+  --font-heading: "Nunito", system-ui, sans-serif;
+  --font-brand: "Caprasimo", Georgia, serif;
+  --gutter: clamp(18px, 4vw, 48px);
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --color-bg: #1d1a16;
+  --color-surface: #29241f;
+  --color-text: #f3e8d6;
+  --color-accent: #d67f48;
+  --color-accent-2: #8fa073;
+  --color-divider: color-mix(in srgb, #f3e8d6 16%, transparent);
+
+  --color-neutral-100: #2e2b25; --color-neutral-200: #474238; --color-neutral-300: #645c50;
+  --color-neutral-400: #82796a; --color-neutral-500: #a19786; --color-neutral-600: #c0b6a5;
+  --color-neutral-700: #dcd3c4; --color-neutral-800: #eee7db; --color-neutral-900: #f9f4ed;
+
+  --color-accent-100: #402310; --color-accent-200: #643312; --color-accent-300: #8c491a;
+  --color-accent-400: #b2622d; --color-accent-500: #d67f48; --color-accent-600: #f6a06b;
+  --color-accent-700: #ffc6a5; --color-accent-800: #ffe1d0; --color-accent-900: #fff2eb;
+
+  --color-accent-2-100: #272e1b; --color-accent-2-200: #3d472b; --color-accent-2-300: #56633f;
+  --color-accent-2-400: #728157; --color-accent-2-500: #8fa073; --color-accent-2-600: #aebf92;
+  --color-accent-2-700: #ccdbb2; --color-accent-2-800: #e1eecc; --color-accent-2-900: #f0fae1;
+
+  --shadow-md: 0 0 0 1px color-mix(in srgb, #f3e8d6 8%, transparent), 0 4px 14px rgba(0, 0, 0, .35);
+  --color-selected: #d67f48;
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { background: var(--color-bg); }
+body {
+  margin: 0; min-height: 100vh;
+  background: var(--color-bg); color: var(--color-text);
+  font-family: var(--font-body); font-size: 15px; line-height: 1.55;
+  transition: background .25s, color .25s;
+}
+h2 { margin: 0; font-family: var(--font-heading); font-weight: 900; letter-spacing: -.01em; line-height: 1.12; }
+button { font: inherit; color: inherit; }
+a { color: var(--color-accent-700); text-underline-offset: 3px; }
+a:hover { color: var(--color-accent-600); }
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+::selection { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
+svg { display: block; flex: none; }
+.ld-num { font-variant-numeric: tabular-nums; }
+.ld-muted { color: color-mix(in srgb, var(--color-text) 62%, transparent); }
+
+/* The root is the container the ≥760px rules query, so they follow the page's width. */
+.ld-root { container-type: inline-size; }
+
+/* — header — */
+.ld-header {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 14px 18px;
+  padding: 22px var(--gutter) 18px;
+}
+.ld-brand { display: flex; align-items: center; gap: 12px; margin-right: auto; }
+.ld-logo {
+  width: 46px; height: 46px; border-radius: 50% 50% 46% 54%;
+  background: var(--color-accent); color: var(--color-bg);
+  display: grid; place-items: center; font-family: var(--font-brand); font-size: 19px;
+}
+.ld-brand-text { display: flex; flex-direction: column; }
+.ld-wordmark { margin: 0; font-family: var(--font-brand); font-weight: 400; font-size: 24px; line-height: 1.1; }
+.ld-count { min-height: 20px; font-size: 13px; color: color-mix(in srgb, var(--color-text) 64%, transparent); }
+.ld-next {
+  display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px 7px 11px; border-radius: 999px;
+  background: var(--color-accent-2-100); color: var(--color-accent-2-800); font-size: 13px; font-weight: 600;
+}
+.ld-controls { display: flex; align-items: center; gap: 8px; }
+.ld-pills { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--color-surface); }
+.ld-pills button {
+  min-width: 40px; height: 32px; padding: 0 10px; border: 0; border-radius: 999px; cursor: pointer;
+  font: 600 12px var(--font-body); letter-spacing: .04em; background: transparent; color: var(--color-text);
+}
+.ld-pills .ld-icon-btn { min-width: 0; width: 32px; padding: 0; display: grid; place-items: center; }
+.ld-pills button[aria-pressed="true"] { background: var(--color-selected); color: var(--color-bg); }
+
+/* — layout — */
+.ld-main {
+  display: flex; flex-wrap: wrap; align-items: flex-start; gap: 32px 44px;
+  padding: 6px var(--gutter) 72px;
+}
+.ld-aside { position: relative; top: 20px; flex: 1 1 320px; max-width: 420px; min-width: 0; }
+.ld-feed { flex: 2 1 440px; max-width: 720px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.ld-toplist { display: none; flex-direction: column; gap: 8px; margin-top: 14px; }
+@container (min-width: 760px) {
+  .ld-aside { position: sticky; }
+  .ld-toplist { display: flex; }
+}
+
+/* — Top 3 spotlight: always the dark token set (data-theme="dark" on the panel) — */
+.ld-panel {
+  position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 20px;
+  padding: clamp(24px, 3vw, 34px); border-radius: 38px;
+  background: #56633f; color: var(--color-accent-2-900);
+}
+html[data-theme="dark"] .ld-panel { background: #3d472b; }
+.ld-panel::before {
+  content: ""; position: absolute; left: -60px; bottom: -80px; width: 220px; height: 220px;
+  border-radius: 50%; background: var(--color-accent-2-100); opacity: .8;
+}
+.ld-panel > * { position: relative; }
+.ld-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ld-panel-title { margin: 0; font: 900 22px/1.2 var(--font-heading); letter-spacing: -.01em; }
+.ld-tabs { display: flex; gap: 6px; }
+.ld-tabs button {
+  width: 32px; height: 32px; border: 0; border-radius: 50%; cursor: pointer; display: grid; place-items: center;
+  font: 900 14px var(--font-heading); background: var(--color-accent-2-100); color: var(--color-accent-2-900);
+}
+.ld-tabs button[aria-current="true"] { background: var(--color-accent-2-700); color: var(--color-bg); }
+.ld-rank { font: 900 88px/.8 var(--font-heading); letter-spacing: -.01em; color: var(--color-accent-2-800); }
+.ld-spot-text {
+  margin: 0; font: 900 clamp(22px, 2.4vw, 27px)/1.25 var(--font-heading); letter-spacing: -.01em; text-wrap: pretty;
+}
+.ld-note {
+  display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; border-radius: 22px;
+  background: var(--color-accent-2-100);
+}
+.ld-label { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--color-accent-2-700); }
+.ld-note p { margin: 0; font-size: 14px; text-wrap: pretty; }
+.ld-spot-meta { font-size: 13px; }
+.ld-spot-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.ld-round {
+  width: 40px; height: 40px; border: 0; border-radius: 999px; cursor: pointer;
+  display: grid; place-items: center; background: var(--color-bg); color: var(--color-text);
+}
+
+/* — Top 3 list (wide layouts only) — */
+.ld-toprow {
+  display: flex; align-items: flex-start; gap: 12px; width: 100%; padding: 12px 16px 12px 12px;
+  border: 0; border-radius: 24px; cursor: pointer; text-align: left;
+  background: transparent; color: var(--color-text); font: inherit;
+}
+.ld-toprow:hover, .ld-toprow[aria-current="true"] { background: var(--color-surface); }
+.ld-badge {
+  flex: none; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
+  font: 900 14px var(--font-heading); background: var(--color-accent-2-200); color: var(--color-accent-2-800);
+}
+.ld-toprow[aria-current="true"] .ld-badge { background: var(--color-accent-2-700); color: var(--color-bg); }
+.ld-toprow-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.ld-toprow-text { font-size: 14px; line-height: 1.4; text-wrap: pretty; }
+.ld-toprow-meta { font-size: 12px; font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--color-text) 64%, transparent); }
+
+.ld-version {
+  display: inline-flex; align-items: center; gap: 6px; margin: 14px 0 0 8px;
+  font-size: 12px; font-variant-numeric: tabular-nums; text-decoration: none;
+  /* 64%, not the design's 60%: ~4.7:1 on the light background, above WCAG AA for 12px text. */
+  color: color-mix(in srgb, var(--color-text) 64%, transparent);
+}
+a.ld-version:hover { color: var(--color-text); }
+.ld-sha { font-family: ui-monospace, Menlo, Consolas, monospace; }
+
+/* — feed — */
+.ld-feed-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+.ld-feed-head h2 { font-size: 28px; }
+.ld-seg { display: inline-flex; overflow: hidden; border-radius: 999px; background: var(--color-surface); }
+.ld-seg-opt {
+  position: relative; display: inline-flex; align-items: center; padding: 8px 16px; cursor: pointer;
+  font-size: 13px; font-weight: 600; white-space: nowrap;
+}
+.ld-seg-opt + .ld-seg-opt { border-left: 1px solid var(--color-divider); }
+.ld-seg-opt input { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; }
+.ld-seg-opt:has(input:checked) { background: var(--color-selected); color: var(--color-bg); }
+.ld-seg-opt:not(:has(input:checked)):hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
+.ld-seg-opt:has(input:focus-visible) { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+
+.ld-list { display: flex; flex-direction: column; gap: 16px; }
+.ld-joke { display: flex; align-items: flex-start; gap: 16px; padding: 14px 16px 14px 10px; border-radius: 26px; }
+.ld-joke:hover { background: var(--color-surface); }
+.ld-joke-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
+.ld-joke-text { margin: 0; font-size: 17px; line-height: 1.5; text-wrap: pretty; }
+.ld-joke-foot { display: flex; align-items: center; gap: 8px; }
+.ld-joke-meta { margin-right: auto; font-size: 12.5px; color: color-mix(in srgb, var(--color-text) 64%, transparent); }
+.ld-copy {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 32px; min-width: 32px; padding: 0 8px; border: 0; border-radius: 999px; cursor: pointer;
+  background: transparent; color: color-mix(in srgb, var(--color-text) 70%, transparent); font: 600 12px var(--font-body);
+}
+.ld-copy:hover { background: color-mix(in srgb, var(--color-text) 8%, transparent); }
+
+.ld-sentinel { height: 1px; }
+.ld-more {
+  display: flex; align-items: center; gap: 12px; padding: 18px 22px; border-radius: 28px;
+  background: var(--color-surface); font-size: 14px;
+}
+.ld-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--color-accent); }
+.ld-dot:nth-child(2) { background: var(--color-accent-400); }
+.ld-dot:nth-child(3) { background: var(--color-accent-300); margin-right: 4px; }
+.ld-end {
+  margin: 12px 0 0; font: 900 18px/1.3 var(--font-heading); letter-spacing: -.01em;
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
+}
+.ld-link-btn {
+  padding: 0; border: 0; background: none; cursor: pointer; font-weight: 700;
+  color: var(--color-accent-700); text-decoration: underline; text-underline-offset: 3px;
+}
+
+/* — vote control — */
+.ld-vote {
+  position: relative; display: inline-flex; align-items: center; gap: 2px; padding: 3px;
+  border-radius: 999px; background: var(--color-bg);
+}
+.ld-vote--v { flex: none; flex-direction: column; gap: 0; background: var(--color-surface); }
+.ld-vote button {
+  width: 34px; height: 34px; border: 0; border-radius: 999px; cursor: pointer;
+  display: grid; place-items: center; background: transparent; color: var(--color-neutral-700);
+}
+.ld-vote button[data-vote="1"][aria-pressed="true"] { background: var(--color-accent); color: var(--color-bg); }
+.ld-vote button[data-vote="-1"][aria-pressed="true"] { background: var(--color-accent-2); color: var(--color-bg); }
+.ld-score {
+  min-width: 40px; text-align: center; font: 900 17px/1.2 var(--font-heading); letter-spacing: -.01em;
+  font-variant-numeric: tabular-nums; color: var(--color-neutral-700);
+}
+.ld-vote--v .ld-score { min-width: 0; padding: 2px 0; font-size: 16px; }
+.ld-score[data-sign="1"] { color: var(--color-accent-700); }
+.ld-score[data-sign="-1"] { color: var(--color-accent-2-700); }
+.ld-split {
+  display: none; position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+  z-index: 2; padding: 5px 12px; border-radius: 999px; white-space: nowrap; pointer-events: none;
+  background: var(--color-text); color: var(--color-bg); font-size: 12px; font-weight: 600; box-shadow: var(--shadow-md);
+}
+.ld-vote--v .ld-split { bottom: auto; top: 50%; left: calc(100% + 8px); transform: translateY(-50%); }
+/* Hover, or keyboard focus (a mouse click also focuses the button, and must not pin the tooltip). */
+.ld-vote:hover .ld-split, .ld-vote:has(:focus-visible) .ld-split { display: block; }
+
+/* — states — */
+.ld-state { flex: 1 1 100%; display: flex; flex-direction: column; }
+/* While loading or empty, the aside holds only the version link: put it on its own row, below. */
+.ld-state:not([hidden]) ~ .ld-aside { flex-basis: 100%; max-width: none; }
+.ld-loading { max-width: 880px; gap: 18px; }
+.ld-skel { display: flex; flex-direction: column; gap: 12px; padding: 22px; border-radius: 28px; background: var(--color-surface); max-width: 760px; }
+.ld-skel--hero { gap: 16px; padding: 32px; border-radius: 32px; max-width: none; }
+.ld-bar { height: 14px; border-radius: 999px; background: var(--color-neutral-300); }
+.ld-bar--soft { background: var(--color-neutral-200); }
+.ld-skel-row { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; }
+.ld-empty {
+  max-width: 720px; align-items: flex-start; gap: 18px; padding: clamp(28px, 5vw, 56px);
+  border-radius: 36px; background: var(--color-surface);
+}
+.ld-empty-blob {
+  width: 120px; height: 120px; border-radius: 52% 48% 55% 45%; display: grid; place-items: center;
+  background: var(--color-accent-2-200); color: var(--color-accent-2-800);
+  font: 900 40px var(--font-heading); letter-spacing: -.01em;
+}
+.ld-empty h2 { font-size: clamp(28px, 4vw, 40px); }
+.ld-empty p { margin: 0; max-width: 460px; font-size: 17px; text-wrap: pretty; }
+.ld-empty strong { color: var(--color-accent-700); }
+
+@media (prefers-reduced-motion: reduce) {
+  body { transition: none; }
+}

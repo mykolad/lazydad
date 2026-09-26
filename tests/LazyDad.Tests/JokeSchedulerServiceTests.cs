@@ -2,7 +2,6 @@ using LazyDad.Api.Configuration;
 using LazyDad.Api.Services;
 using LazyDad.Data.Entities;
 using LazyDad.Data.Repositories;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -12,9 +11,9 @@ using Moq;
 namespace LazyDad.Tests;
 
 /// <summary>
-/// Drives the real scheduler through one tick, with real generation/leaderboard/HTML services
+/// Drives the real scheduler through one tick, with real generation/leaderboard services
 /// resolved from DI scopes, and mocks only at the edges (repositories, LLM clients).
-/// The PeriodicTimer interval is an hour, so only the immediate startup tick runs in a test.
+/// The interval is an hour, so only the immediate startup tick runs in a test.
 /// </summary>
 public sealed class JokeSchedulerServiceTests : IDisposable
 {
@@ -23,13 +22,14 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     private readonly Mock<IJokeRepository> jokeRepositoryMock = new();
     private readonly Mock<ITopJokeRepository> topJokeRepositoryMock = new();
     private readonly Mock<ILlmClientFactory> llmClientFactoryMock = new();
-    private readonly string contentRoot = Directory.CreateTempSubdirectory("lazydad-tests-").FullName;
     private readonly List<Joke> saved = [];
     // Tests wait on the scheduler's own "tick completed" / "tick failed" logs: they are
     // written after all tick work, so assertions never race the background loop.
     private readonly CapturingLogger<JokeSchedulerService> schedulerLogger = new();
     private readonly SchedulerStatus status = new();
     private ServiceProvider? provider;
+    // Leaving TopJokeService out of DI makes the whole tick throw, not just one step of it.
+    private bool omitTopJokeService;
 
     public JokeSchedulerServiceTests()
     {
@@ -40,21 +40,9 @@ public sealed class JokeSchedulerServiceTests : IDisposable
             .Setup(r => r.AddAsync(It.IsAny<Joke>(), It.IsAny<CancellationToken>()))
             .Callback<Joke, CancellationToken>((joke, _) => { lock (saved) { joke.Id = saved.Count + 1; saved.Add(joke); } })
             .Returns(Task.CompletedTask);
-        jokeRepositoryMock
-            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(() => { lock (saved) { return saved.ToList(); } });
-        topJokeRepositoryMock
-            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync([]);
     }
 
-    public void Dispose()
-    {
-        provider?.Dispose();
-        Directory.Delete(contentRoot, recursive: true);
-    }
-
-    private string IndexPath => Path.Combine(contentRoot, "wwwroot", "index.html");
+    public void Dispose() => provider?.Dispose();
 
     private static LanguageOptions Ukrainian(params string[] models)
         => new()
@@ -69,21 +57,17 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     private JokeSchedulerService CreateScheduler(params LanguageOptions[] languages)
     {
         var options = Options.Create(new JokeGenerationOptions { UniquenessSampleSize = 20, Languages = [.. languages] });
-        var env = new Mock<IWebHostEnvironment>();
-        env.Setup(e => e.ContentRootPath).Returns(contentRoot);
 
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton(options);
         services.AddSingleton(Options.Create(new TopJokesOptions { Enabled = false }));
-        services.AddSingleton(Options.Create(new AppInfoOptions()));
         services.AddSingleton(jokeRepositoryMock.Object);
         services.AddSingleton(topJokeRepositoryMock.Object);
         services.AddSingleton(llmClientFactoryMock.Object);
-        services.AddSingleton(env.Object);
         services.AddScoped<JokeGenerationService>();
-        services.AddScoped<TopJokeService>();
-        services.AddScoped<HtmlGeneratorService>();
+        if (!omitTopJokeService)
+            services.AddScoped<TopJokeService>();
         provider = services.BuildServiceProvider();
 
         return new JokeSchedulerService(provider.GetRequiredService<IServiceScopeFactory>(), options, status, schedulerLogger);
@@ -104,7 +88,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         => Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, text)]));
 
     [Fact]
-    public async Task Tick_WhenOneModelTimesOut_SavesTheOtherModelsJokeAndWritesPage()
+    public async Task Tick_WhenOneModelTimesOut_SavesTheOtherModelsJoke()
     {
         SetupModel("fast", () => Reply("Швидкий жарт"));
         // A provider timeout is an OperationCanceledException that isn't caused by shutdown.
@@ -118,7 +102,6 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         var joke = Assert.Single(saved);
         Assert.Equal("fast", joke.Model);
         Assert.Equal("Ukrainian", joke.Language);
-        Assert.Contains("<p lang=\"uk\">Швидкий жарт</p>", await File.ReadAllTextAsync(IndexPath));
 
         // /status reports exactly what this process saved: the timed-out model is absent.
         var tick = Assert.Single(status.LastTicks);
@@ -129,7 +112,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Tick_WhenModelReturnsEmptyText_SavesNothingAndSkipsPage()
+    public async Task Tick_WhenModelReturnsEmptyText_SavesNothing()
     {
         SetupModel("blank", () => Reply("   "));
         var scheduler = CreateScheduler(Ukrainian("blank"));
@@ -140,19 +123,16 @@ public sealed class JokeSchedulerServiceTests : IDisposable
 
         Assert.Contains(schedulerLogger.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("empty response"));
         Assert.Empty(saved);
-        Assert.False(File.Exists(IndexPath));
         var tick = Assert.Single(status.LastTicks);
         Assert.True(tick.Succeeded);
         Assert.Empty(tick.Jokes);
     }
 
     [Fact]
-    public async Task Tick_WhenPageRegenerationFails_LoopSurvives()
+    public async Task Tick_WhenTheTickFails_LoopSurvives()
     {
         SetupModel("fast", () => Reply("Жарт"));
-        jokeRepositoryMock
-            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new InvalidOperationException("DB unavailable"));
+        omitTopJokeService = true;
         var scheduler = CreateScheduler(Ukrainian("fast"));
 
         await scheduler.StartAsync(CancellationToken.None);
@@ -172,7 +152,57 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         Assert.False(tick.Succeeded);
         Assert.Equal("InvalidOperationException", tick.Error);
         Assert.Empty(tick.Jokes);
-        Assert.Single(saved);
+        Assert.Empty(saved);
+    }
+
+    [Fact]
+    public async Task Start_AfterTheStartupTick_SchedulesTheNextOneAnIntervalLater()
+    {
+        SetupModel("fast", () => Reply("Жарт"));
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+        var started = DateTime.UtcNow;
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await TickCompletedAsync();
+        // The loop records the next tick right after the startup tick completes.
+        await NextTickAfterAsync(started.AddMinutes(30));
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.InRange(status.NextTickAt!.Value, started.AddHours(1), DateTime.UtcNow.AddHours(1));
+    }
+
+    [Fact]
+    public async Task Start_KeepsTheNextTickDue_UntilEveryLanguagesStartupTickCompletes()
+    {
+        var slowReply = new TaskCompletionSource<ChatResponse>();
+        SetupModel("fast", () => Reply("Жарт"));
+        SetupModel("slow", () => slowReply.Task);
+        var english = Ukrainian("slow");
+        english.Language = "English";
+        english.LanguageCode = "en";
+        var scheduler = CreateScheduler(Ukrainian("fast"), english);
+        var started = DateTime.UtcNow;
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await TickCompletedAsync();
+        await Task.Delay(50);
+
+        // Ukrainian has scheduled its next tick, but English is still generating: the page must
+        // keep polling, so the earliest due time is still the past.
+        Assert.True(status.NextTickAt <= DateTime.UtcNow, $"NextTickAt was {status.NextTickAt:o}.");
+
+        slowReply.SetResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "Joke")]));
+        await schedulerLogger.WaitForAsync(LogLevel.Debug, "tick for 'English' completed", Timeout);
+        await NextTickAfterAsync(started.AddMinutes(30));
+        await scheduler.StopAsync(CancellationToken.None);
+    }
+
+    private async Task NextTickAfterAsync(DateTime threshold)
+    {
+        var deadline = DateTime.UtcNow + Timeout;
+        while (!(status.NextTickAt > threshold) && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+        Assert.True(status.NextTickAt > threshold, $"NextTickAt was {status.NextTickAt:o}, expected after {threshold:o}.");
     }
 
     [Fact]

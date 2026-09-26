@@ -4,8 +4,8 @@ namespace LazyDad.Api.Configuration;
 
 /// <summary>
 /// Validated at startup (ValidateOnStart), so a bad config fails the deploy with a clear
-/// message instead of faulting a scheduler loop later (e.g. PeriodicTimer throws on a
-/// non-positive interval).
+/// message instead of breaking a scheduler loop later (e.g. a non-positive interval would never
+/// move the next due time forward).
 /// </summary>
 public class JokeGenerationOptionsValidator : IValidateOptions<JokeGenerationOptions>
 {

@@ -1,7 +1,10 @@
+using System.Threading.RateLimiting;
 using LazyDad.Api.Configuration;
+using LazyDad.Api.Controllers;
 using LazyDad.Api.Services;
 using LazyDad.Data;
 using LazyDad.Data.Repositories;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Options;
@@ -9,6 +12,22 @@ using Microsoft.Extensions.Options;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
+
+// Container Apps' ingress is the only way in; it appends the caller's address to X-Forwarded-For.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownIPNetworks.Clear();
+    options.KnownProxies.Clear();
+});
+// Votes are anonymous, so at least cap how fast one address can cast them.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy(JokesController.VotePolicy, context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 30, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+});
 
 builder.Services.AddDbContext<LazyDadDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"),
@@ -46,8 +65,10 @@ var app = builder.Build();
 // Pass an explicit PhysicalFileProvider so the middleware is not affected by
 // the stale internal WebRootFileProvider (which is snapshotted before wwwroot exists).
 var fileProvider = new PhysicalFileProvider(wwwrootPath);
+app.UseForwardedHeaders();
 app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = fileProvider });
 app.UseStaticFiles(new StaticFileOptions { FileProvider = fileProvider });
+app.UseRateLimiter();
 app.MapControllers();
 // version: the image's commit (baked into the image as App__Version). revision: the Container Apps revision,
 // unique per rollout even when re-deploying the same commit (the platform sets
@@ -58,24 +79,11 @@ app.MapGet("/healthz", () => Results.Ok(new { status = "healthy", version = appV
 // What this process's scheduler did on its last tick per language (see SchedulerStatus).
 app.MapGet("/status", (SchedulerStatus status) => Results.Ok(new { version = appVersion, revision = appRevision, ticks = status.LastTicks }));
 
-// Regenerate the HTML page from existing jokes once the server is listening, off the startup
-// path: a slow or unreachable DB (including EF's retry delays) must not keep /healthz down.
-// A failure is only logged; the scheduler's first tick regenerates the page again.
-app.Lifetime.ApplicationStarted.Register(() => _ = Task.Run(async () =>
+// The page shell (wwwroot/index.html) depends only on the build and the configuration (the jokes
+// are fetched by app.js), so write it once, before the server starts listening.
+using (var scope = app.Services.CreateScope())
 {
-    try
-    {
-        using var scope = app.Services.CreateScope();
-        var htmlGenerator = scope.ServiceProvider.GetRequiredService<HtmlGeneratorService>();
-        await htmlGenerator.RegenerateAsync(app.Lifetime.ApplicationStopping);
-    }
-    catch (OperationCanceledException) when (app.Lifetime.ApplicationStopping.IsCancellationRequested)
-    {
-    }
-    catch (Exception ex)
-    {
-        app.Logger.LogWarning(ex, "Startup HTML regeneration failed; the scheduler will regenerate the page on its next tick.");
-    }
-}));
+    await scope.ServiceProvider.GetRequiredService<HtmlGeneratorService>().RegenerateAsync(CancellationToken.None);
+}
 
 app.Run();

@@ -39,22 +39,68 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
     [Fact]
     public async Task HomePage_IsServed_WithTheDeployedVersion()
     {
-        // The new revision regenerates the page on startup, so wait until it shows the deployed version.
+        // The new revision writes the page on startup, so wait until it shows the deployed version.
         var html = await target.PollAsync<(bool Found, string Html)>(async () =>
         {
             using var response = await target.Client.GetAsync("");
             if (response.StatusCode != HttpStatusCode.OK)
                 return null;
             var body = await response.Content.ReadAsStringAsync();
-            // Keep polling until the version line exists: the expected version when one is given, else any.
+            // Keep polling until the version link exists: the expected version when one is given, else any.
             var ready = target.ExpectedVersion is null
-                ? body.Contains("<p class=\"version\">Version ")
-                : body.Contains($">{target.ExpectedVersion}</a></p>");
+                ? body.Contains("class=\"ld-version\"")
+                : body.Contains($"<span class=\"ld-sha\">{target.ExpectedVersion}</span>");
             return ready ? (true, body) : null;
         }, SmokeTarget.ColdStartTimeout, $"the home page to show version '{target.ExpectedVersion}'");
 
         Assert.Contains("<title>LazyDad</title>", html.Html);
-        Assert.Matches(@"<p class=""version"">Version (\d{4}\.\d{2}\.\d{2}|\S+ \(local build\))", html.Html);
+        Assert.Matches(@"<span>v(\d{4}\.\d{2}\.\d{2}|\S+ \(local build\))</span>", html.Html);
+    }
+
+    [Theory]
+    [InlineData("app.js", "text/javascript")]
+    [InlineData("app.css", "text/css")]
+    public async Task PageAssets_AreServed(string path, string mediaType)
+    {
+        // The page is a shell: without these, it shows nothing but the loading skeleton.
+        using var response = await target.Client.GetAsync(path);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(mediaType, response.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
+    public async Task FeedAndSummary_ServeThePagesData()
+    {
+        var feed = await target.PollAsync<JsonElement>(async () => await target.GetJsonAsync("jokes/feed?sort=top&limit=5"), SmokeTarget.ColdStartTimeout, "/jokes/feed");
+        var summary = await target.GetJsonAsync("jokes/summary");
+
+        Assert.True(feed.GetProperty("total").GetInt32() > 0, "The feed reports no jokes.");
+        var items = feed.GetProperty("items").EnumerateArray().ToList();
+        Assert.InRange(items.Count, 1, 5);
+        // "top" is by net score, highest first.
+        var scores = items.Select(j => j.GetProperty("up").GetInt32() - j.GetProperty("down").GetInt32()).ToList();
+        Assert.Equal(scores.OrderDescending(), scores);
+        Assert.True(summary.GetProperty("count").GetInt32() > 0, "The summary reports no jokes.");
+        Assert.True(summary.TryGetProperty("nextBatchAt", out _), "The summary has no nextBatchAt.");
+    }
+
+    [Fact]
+    public async Task Vote_WithoutAChange_ReturnsTheCounts()
+    {
+        // value = previous = 0 changes nothing, so this checks the endpoint (routing, rate limiter,
+        // DB read) without casting a vote in the environment.
+        var feed = await target.PollAsync<JsonElement>(async () => await target.GetJsonAsync("jokes/feed?sort=new&limit=1"), SmokeTarget.ColdStartTimeout, "/jokes/feed");
+        var joke = feed.GetProperty("items")[0];
+
+        using var response = await target.Client.PostAsync(
+            $"jokes/{joke.GetProperty("id").GetInt32()}/vote",
+            new StringContent("{\"value\":0,\"previous\":0}", System.Text.Encoding.UTF8, "application/json"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var counts = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.True(counts.RootElement.GetProperty("up").GetInt32() >= 0);
+        Assert.True(counts.RootElement.GetProperty("down").GetInt32() >= 0);
     }
 
     [Fact]
