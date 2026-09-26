@@ -198,6 +198,10 @@ jobs:
           smoke() { dotnet test tests/LazyDad.SmokeTests -c Release --logger "console;verbosity=normal"; }
           smoke && exit 0
           echo "::warning::Smoke tests failed; restarting revision ${{ steps.app.outputs.revision }} and retrying once."
+          # The restarted process keeps the revision name, and the old one can still answer for a moment:
+          # only ticks completed after the restart count.
+          SMOKE_TICKS_AFTER=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
+          export SMOKE_TICKS_AFTER
           az containerapp revision restart -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
             --revision "${{ steps.app.outputs.revision }}" -o none
           smoke

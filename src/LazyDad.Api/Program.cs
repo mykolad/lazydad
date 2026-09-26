@@ -29,8 +29,9 @@ builder.Services.AddRateLimiter(options =>
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 30, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
 });
 
+// A connect timeout long enough for a paused serverless database to resume (see SqlConnectionStrings).
 builder.Services.AddDbContext<LazyDadDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"),
+    options.UseSqlServer(SqlConnectionStrings.WithResumeTimeout(builder.Configuration.GetConnectionString("DefaultConnection") ?? ""),
         sql => sql.EnableRetryOnFailure()));
 
 builder.Services.AddOptions<JokeGenerationOptions>()
