@@ -177,3 +177,65 @@ deploy removes that setting again.
 
 Storage for context: 336 MB of Basic's 10 GB on 2026-09-25. Layers are shared, so each deploy adds
 only a few MB of unique data.
+
+## 9. Azure SQL with Entra ID, no passwords (issue #11)
+
+Everything connects as `sqladmin` today. The target is least-privilege Entra identities and no SQL
+passwords anywhere. It uses the apps' **system-assigned identities** (created in section 8, or with
+`az containerapp identity assign --system-assigned`), so staging can't reach the prod database.
+
+| Principal | Database | Roles |
+|---|---|---|
+| `lazydad-app` (system-assigned) | `lazydad-db` | `db_datareader`, `db_datawriter` |
+| `lazydad-app-staging` (system-assigned) | `lazydad-db-staging` | `db_datareader`, `db_datawriter` |
+| `lazydad-github-cd` (Deploy Environment's migrations) | both | `db_ddladmin`, `db_datareader`, `db_datawriter` |
+
+**1. Create the database users**, as the server's Entra admin (your account). Use the portal's Query editor,
+Azure Data Studio or `sqlcmd -G`. `WITH OBJECT_ID` avoids a directory lookup by display name:
+
+```bash
+az containerapp show -n lazydad-app -g $RG --query identity.principalId -o tsv          # <app-oid>
+az containerapp show -n lazydad-app-staging -g $RG --query identity.principalId -o tsv  # <staging-oid>
+az identity show -g $RG -n lazydad-github-cd --query principalId -o tsv                # <cd-oid>
+```
+
+```sql
+-- In lazydad-db:
+CREATE USER [lazydad-app] FROM EXTERNAL PROVIDER WITH OBJECT_ID = '<app-oid>';
+ALTER ROLE db_datareader ADD MEMBER [lazydad-app];
+ALTER ROLE db_datawriter ADD MEMBER [lazydad-app];
+CREATE USER [lazydad-github-cd] FROM EXTERNAL PROVIDER WITH OBJECT_ID = '<cd-oid>';
+ALTER ROLE db_ddladmin ADD MEMBER [lazydad-github-cd];
+ALTER ROLE db_datareader ADD MEMBER [lazydad-github-cd];
+ALTER ROLE db_datawriter ADD MEMBER [lazydad-github-cd];
+
+-- In lazydad-db-staging: the same, with [lazydad-app-staging] and <staging-oid> instead of the prod app.
+```
+
+**2. Switch staging, then prod.** No secret is left in a connection string:
+
+```bash
+# The app: managed identity (system-assigned needs no User Id).
+az containerapp secret set -n lazydad-app-staging -g $RG --secrets \
+  "sql-conn=Server=tcp:lazydad-sql-swedencentral.database.windows.net,1433;Database=lazydad-db-staging;Authentication=Active Directory Managed Identity;Encrypt=True"
+az containerapp update -n lazydad-app-staging -g $RG --revision-suffix entra-sql -o none   # restart on the new value
+# CD: without the environment secret, Deploy Environment migrates with Entra ID as lazydad-github-cd.
+gh secret delete SQL_CONNECTION_STRING --env staging
+```
+
+Run **Deploy Master** (or Deploy Branch to Staging with *run-migrations*): the migration step logs
+"Migrating lazydad-db-staging with Entra ID", and the smoke tests prove the app reads and writes. Then the
+same for `lazydad-app` / `lazydad-db` / `--env production`.
+
+**3. Lock down**, only once both apps **and** both migration runs work without the password:
+
+```bash
+az keyvault secret delete --vault-name lazydad-kv -n SqlConnectionString
+dotnet user-secrets set "ConnectionStrings:DefaultConnection" \
+  "Server=tcp:lazydad-sql-swedencentral.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True" \
+  --project src/LazyDad.Api
+az sql server ad-only-auth enable -g $RG -n lazydad-sql-swedencentral   # sqladmin stops working everywhere
+```
+
+Entra-only authentication can be turned off again (`ad-only-auth disable`) if something was missed.
+The CI job `clean-database-migrations` uses SQL auth against its own throwaway container, so it's unaffected.

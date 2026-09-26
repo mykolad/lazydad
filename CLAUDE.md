@@ -81,7 +81,8 @@ user secrets and would require a hardcoded connection string.
 Credentials are stored in user secrets (never committed):
 
 ```
-dotnet user-secrets set "ConnectionStrings:DefaultConnection" "<azure-sql-conn-string>" --project src/LazyDad.Api
+# Entra ID with your az login (you are the server's Entra admin); no password:
+dotnet user-secrets set "ConnectionStrings:DefaultConnection" "Server=tcp:lazydad-sql-swedencentral.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True" --project src/LazyDad.Api
 dotnet user-secrets set "LlmProviders:AzureOpenAI:Endpoint"  "<endpoint>"              --project src/LazyDad.Api
 dotnet user-secrets set "LlmProviders:AzureOpenAI:ApiKey"    "<key>"                   --project src/LazyDad.Api
 ```
