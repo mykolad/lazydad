@@ -200,6 +200,8 @@ a.ld-version:hover { color: var(--color-text); }
 .ld-joke:hover { background: var(--color-surface); }
 .ld-joke-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
 .ld-joke-text { margin: 0; font-size: 17px; line-height: 1.5; text-wrap: pretty; }
+/* Some models write jokes as short dialogues ("— Тату, …" on separate lines): keep their line breaks. */
+.ld-joke-text, .ld-spot-text, .ld-toprow-text { white-space: pre-line; }
 .ld-joke-foot { display: flex; align-items: center; gap: 8px; }
 .ld-joke-meta { margin-right: auto; font-size: 12.5px; color: color-mix(in srgb, var(--color-text) 64%, transparent); }
 .ld-copy {
