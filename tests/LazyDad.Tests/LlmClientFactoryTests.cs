@@ -1,5 +1,11 @@
+using System.ClientModel.Primitives;
+using System.Net;
+using System.Text;
+using Azure.AI.OpenAI;
+using Azure.Core;
 using LazyDad.Api.Configuration;
 using LazyDad.Api.Services;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
 
 namespace LazyDad.Tests;
@@ -24,16 +30,64 @@ public class LlmClientFactoryTests
     }
 
     [Fact]
-    public void CreateClient_WithoutAnApiKey_UsesEntraId()
+    public async Task CreateClient_WithAnApiKey_SendsTheKey()
     {
-        // DefaultAzureCredential only fetches a token on the first request, so this makes no network call either.
-        var options = new LlmProviderOptions { Endpoint = "https://example.openai.azure.com/" };
-        var factory = CreateFactory(new() { ["AzureOpenAI"] = options });
+        var request = await SendOneRequestAsync(new LlmProviderOptions { Endpoint = "https://example.openai.azure.com/", ApiKey = "test-key" });
+
+        Assert.Equal("test-key", request.Headers.GetValues("api-key").Single());
+        Assert.Null(request.Headers.Authorization);
+    }
+
+    [Fact]
+    public async Task CreateClient_WithoutAnApiKey_SendsAnEntraIdToken()
+    {
+        var request = await SendOneRequestAsync(new LlmProviderOptions { Endpoint = "https://example.openai.azure.com/" });
+
+        Assert.Equal("Bearer fake-entra-token", request.Headers.Authorization?.ToString());
+        Assert.False(request.Headers.Contains("api-key"));
+    }
+
+    // Sends one chat request through the factory's client to a fake transport, and returns what went over the wire.
+    private static async Task<HttpRequestMessage> SendOneRequestAsync(LlmProviderOptions options)
+    {
+        var handler = new CapturingHandler();
+        var factory = new LlmClientFactory(
+            Options.Create(new Dictionary<string, LlmProviderOptions> { ["AzureOpenAI"] = options }),
+            new Lazy<TokenCredential>(() => new FakeCredential()),
+            () => new AzureOpenAIClientOptions { Transport = new HttpClientPipelineTransport(new HttpClient(handler)) });
 
         using var client = factory.CreateClient("AzureOpenAI", "gpt-6-luna");
+        var response = await client.GetResponseAsync("Say OK.");
 
-        Assert.NotNull(client);
-        Assert.True(LlmClientFactory.UsesEntraId(options));
+        Assert.Equal("OK", response.Text);
+        return Assert.Single(handler.Requests);
+    }
+
+    private sealed class FakeCredential : TokenCredential
+    {
+        public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken)
+            => new("fake-entra-token", DateTimeOffset.UtcNow.AddHours(1));
+
+        public override ValueTask<AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken)
+            => ValueTask.FromResult(GetToken(requestContext, cancellationToken));
+    }
+
+    private sealed class CapturingHandler : HttpMessageHandler
+    {
+        public List<HttpRequestMessage> Requests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            const string completion = """
+                {"id":"c1","object":"chat.completion","created":0,"model":"gpt-6-luna",
+                 "choices":[{"index":0,"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}]}
+                """;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(completion, Encoding.UTF8, "application/json")
+            });
+        }
     }
 
     [Theory]

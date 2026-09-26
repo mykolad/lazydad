@@ -10,15 +10,26 @@ namespace LazyDad.Api.Services;
 
 public class LlmClientFactory : ILlmClientFactory
 {
-    // Entra ID when no API key is configured: the app's managed identity in Azure, the developer's
-    // `az login` locally. One instance, so its token cache is shared by every client.
-    private static readonly Lazy<TokenCredential> EntraCredential = new(() => new DefaultAzureCredential());
-
     private readonly IOptions<Dictionary<string, LlmProviderOptions>> providers;
+    // Entra ID when no API key is configured: the app's managed identity in Azure, the developer's
+    // `az login` locally. Created on first use; one per factory (a singleton), so its token cache is shared.
+    private readonly Lazy<TokenCredential> entraCredential;
+    private readonly Func<AzureOpenAIClientOptions> clientOptions;
 
     public LlmClientFactory(IOptions<Dictionary<string, LlmProviderOptions>> providers)
+        : this(providers, new Lazy<TokenCredential>(() => new DefaultAzureCredential()), () => new AzureOpenAIClientOptions())
+    {
+    }
+
+    /// <summary>For tests: a fake credential, and client options with a fake transport.</summary>
+    internal LlmClientFactory(
+        IOptions<Dictionary<string, LlmProviderOptions>> providers,
+        Lazy<TokenCredential> entraCredential,
+        Func<AzureOpenAIClientOptions> clientOptions)
     {
         this.providers = providers;
+        this.entraCredential = entraCredential;
+        this.clientOptions = clientOptions;
     }
 
     public IChatClient CreateClient(string providerName, string modelName)
@@ -39,11 +50,11 @@ public class LlmClientFactory : ILlmClientFactory
     /// </summary>
     internal static bool UsesEntraId(LlmProviderOptions options) => string.IsNullOrWhiteSpace(options.ApiKey);
 
-    private static IChatClient CreateAzureOpenAIClient(LlmProviderOptions options, string modelName)
+    private IChatClient CreateAzureOpenAIClient(LlmProviderOptions options, string modelName)
     {
         var client = UsesEntraId(options)
-            ? new AzureOpenAIClient(new Uri(options.Endpoint), EntraCredential.Value)
-            : new AzureOpenAIClient(new Uri(options.Endpoint), new AzureKeyCredential(options.ApiKey));
+            ? new AzureOpenAIClient(new Uri(options.Endpoint), entraCredential.Value, clientOptions())
+            : new AzureOpenAIClient(new Uri(options.Endpoint), new AzureKeyCredential(options.ApiKey), clientOptions());
 
         return client.GetChatClient(modelName).AsIChatClient();
     }

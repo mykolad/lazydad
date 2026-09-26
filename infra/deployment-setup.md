@@ -212,5 +212,7 @@ az containerapp secret remove -n lazydad-app -g $RG --secret-names openai-key
 #    other copies, then turn key auth off for good.
 az keyvault secret delete --vault-name lazydad-kv -n AzureOpenAIApiKey
 dotnet user-secrets remove "LlmProviders:AzureOpenAI:ApiKey" --project src/LazyDad.Api
+# Images from before the Entra ID support only know the key: stop Roll Back Production from choosing them.
+gh variable set ROLLBACK_MIN_COMMIT --body "<merge commit of the Entra ID PR on master>"
 az resource update --ids "$OPENAI_ID" --set properties.disableLocalAuth=true
 ```
