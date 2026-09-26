@@ -2,6 +2,7 @@ using LazyDad.Data;
 using LazyDad.Data.Repositories;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace LazyDad.Tests;
 
@@ -94,13 +95,32 @@ public sealed class SchedulerLockRepositoryTests : IDisposable
     }
 
     [Fact]
-    public async Task TryAcquire_WhenAnotherReplicaInsertedFirst_Fails()
+    public async Task TryInsert_WhenAnotherReplicaInsertedTheRowFirst_ReturnsFalse()
     {
-        // Both replicas saw no row; the second insert hits the primary key.
-        await using var first = CreateContext();
-        await using var second = CreateContext();
-        Assert.True(await new SchedulerLockRepository(first).TryAcquireAsync(Key, "a", Now, Now.AddHours(4), CancellationToken.None));
+        // The race's losing side: both replicas saw no row, the other one inserted first, and this insert
+        // hits the primary key.
+        await TryAcquireAsync("a", Now, Now.AddHours(4));
+        await using var context = CreateContext();
 
-        Assert.False(await new SchedulerLockRepository(second).TryAcquireAsync(Key, "b", Now, Now.AddHours(4), CancellationToken.None));
+        Assert.False(await new SchedulerLockRepository(context).TryInsertAsync(Key, "b", Now, Now.AddHours(4), CancellationToken.None));
+        Assert.Equal("a", (await LeaseAsync()).Holder);
+    }
+
+    [Fact]
+    public async Task TryInsert_WhenTheInsertFailsForAnotherReason_Throws()
+    {
+        // Not a key conflict (no row exists): a failure must fail the tick, not pass for lost contention.
+        await using var context = new LazyDadDbContext(new DbContextOptionsBuilder<LazyDadDbContext>()
+            .UseSqlite(connection).AddInterceptors(new FailingSaves()).Options);
+
+        await Assert.ThrowsAsync<DbUpdateException>(
+            () => new SchedulerLockRepository(context).TryInsertAsync(Key, "b", Now, Now.AddHours(4), CancellationToken.None));
+    }
+
+    private sealed class FailingSaves : SaveChangesInterceptor
+    {
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken)
+            => throw new DbUpdateException("Simulated failure (not a key conflict).");
     }
 }

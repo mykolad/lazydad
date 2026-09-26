@@ -51,8 +51,12 @@ public class SchedulerLockRepository : ISchedulerLockRepository
         throw new InvalidOperationException($"Could not acquire scheduler lock '{lockKey}'.");
     }
 
-    // The primary key makes the insert fail for all but one replica.
-    private async Task<bool> TryInsertAsync(string lockKey, string holder, DateTime now, DateTime expiresAt, CancellationToken cancellationToken)
+    /// <summary>
+    /// Inserts the lease row. The primary key makes the insert fail for all but one replica: <c>false</c> means
+    /// another replica's row is there now. Any other failure (a timeout, a schema problem) is rethrown, so it
+    /// fails the tick instead of passing for lost contention.
+    /// </summary>
+    internal async Task<bool> TryInsertAsync(string lockKey, string holder, DateTime now, DateTime expiresAt, CancellationToken cancellationToken)
     {
         var entry = context.SchedulerLocks.Add(new SchedulerLock { LockKey = lockKey, HolderInstanceId = holder, AcquiredAt = now, ExpiresAt = expiresAt });
         try
@@ -62,11 +66,17 @@ public class SchedulerLockRepository : ISchedulerLockRepository
         }
         catch (DbUpdateException)
         {
-            return false;
+            // Provider-neutral check for a key conflict: the row we failed to insert exists.
+            if (await RowExistsAsync(lockKey, cancellationToken))
+                return false;
+            throw;
         }
         finally
         {
             entry.State = EntityState.Detached;
         }
     }
+
+    private async Task<bool> RowExistsAsync(string lockKey, CancellationToken cancellationToken)
+        => await context.SchedulerLocks.AsNoTracking().AnyAsync(l => l.LockKey == lockKey, cancellationToken);
 }
