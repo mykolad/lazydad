@@ -82,4 +82,7 @@ jobs:
     with:
       # Deploy Environment's naming, with its default "r" prefix.
       only-if-serving: lazydad-app--r${{ github.run_id }}-${{ github.run_attempt }}
+      # Read from production's revisions by the production job itself (outputs survive its failure),
+      # so a tag moved by anyone else can't choose the rollback target.
+      previous-digest: ${{ needs.production.outputs.previous-digest }}
     secrets: inherit

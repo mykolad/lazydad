@@ -43,6 +43,13 @@ on:
         required: false
         default: r
         type: string
+    outputs:
+      previous-digest:
+        description: >-
+          The digest of the image that served before this rollout, read from the environment's own
+          revisions by this job (empty if the job stopped before that). Deploy Master's automatic rollback
+          returns to it: unlike the previous-<env> tag, nothing outside this job can change it.
+        value: ${{ jobs.deploy.outputs.previous-digest }}
 
 env:
   DOTNET_NOLOGO: true
@@ -63,6 +70,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    outputs:
+      previous-digest: ${{ steps.protect.outputs.previous-digest }}
 
     steps:
       - uses: actions/checkout@v7
@@ -134,6 +143,7 @@ jobs:
       #      earlier interrupted run) and previous-<env>, and tag the new digest deploying-<env>;
       #   2. after the rollout: move deployed-<env> to the new digest.
       - name: Protect the running and the new image
+        id: protect
         run: |
           az acr login --name lazydadacr
           retag() { docker pull -q "$1" && docker tag "$1" "$2" && docker push -q "$2"; }
@@ -146,9 +156,16 @@ jobs:
             echo "::error::Expected exactly one revision serving traffic, found $count; not moving any tags."
             exit 1
           fi
+          # What served before this rollout, as read from the environment's own revisions: the automatic
+          # rollback's target (a job output, which nothing outside this job can change; tags can be moved by
+          # anyone who can push to the registry). Revisions are pinned by digest, so the image names it.
+          case "$serving" in
+            *@sha256:*) echo "previous-digest=${serving#*@}" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::warning::The serving revision isn't pinned to a digest ($serving); an automatic rollback won't have a target." ;;
+          esac
           # Fatal on failure (bash -e): never move the candidate tag while the serving image is unprotected.
           retag "$serving" "$REGISTRY/lazydad:deployed-${{ inputs.environment }}"
-          # What served before this rollout: Deploy Master's automatic rollback returns to it.
+          # What served before this rollout, kept from the purge so a manual rollback can still return to it.
           retag "$serving" "$REGISTRY/lazydad:previous-${{ inputs.environment }}"
           retag "$REGISTRY/lazydad@${{ inputs.digest }}" "$REGISTRY/lazydad:deploying-${{ inputs.environment }}"
 

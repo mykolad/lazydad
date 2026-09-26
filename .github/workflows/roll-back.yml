@@ -20,8 +20,16 @@ on:
       only-if-serving:
         description: >-
           Automatic rollback: the revision the failed deploy created. If it isn't serving traffic,
-          the deploy never took over and there's nothing to roll back. Otherwise the target is the
-          image that served before (tagged previous-production), unless it's the same image.
+          the deploy never took over and there's nothing to roll back. Otherwise the target is
+          previous-digest, unless it's the same image.
+        type: string
+        required: false
+        default: ''
+      previous-digest:
+        description: >-
+          With only-if-serving: the digest of the image that served before the failed deploy, as
+          Deploy Environment read it from production's revisions (its previous-digest output). Not the
+          previous-production tag, which anyone who can push to the registry can move.
         type: string
         required: false
         default: ''
@@ -65,6 +73,7 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
           ONLY_IF_SERVING: ${{ inputs.only-if-serving }}
+          PREVIOUS_DIGEST: ${{ inputs.previous-digest }}
           MIN_COMMIT: ${{ vars.ROLLBACK_MIN_COMMIT }}
         run: |
           version=$(printf '%s' "$VERSION" | tr -d '[:space:]' | tr 'A-F' 'a-f')
@@ -125,17 +134,18 @@ jobs:
             if [ "${names[$serving]}" != "$ONLY_IF_SERVING" ]; then
               skip "Production serves ${names[$serving]}, not $ONLY_IF_SERVING: the failed deploy never took traffic."
             fi
-            # Deploy Environment tagged the image that served before its rollout previous-production.
-            # (The revision before this one isn't reliable: it may never have become ready.)
-            digest=$(digest_of "lazydad:previous-production")
-            if [ -z "$digest" ]; then
-              echo "::error::lazydad:previous-production isn't in the registry; roll back by hand."
+            # The failed deploy's own record of what served before it (the revision before this one isn't
+            # reliable: it may never have become ready). Never the previous-production tag: staging's
+            # identity can push to the registry, so it could move that tag while this runs.
+            if ! [[ "$PREVIOUS_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::The failed deploy didn't report the image that served before it ('$PREVIOUS_DIGEST'); roll back by hand (Roll Back Production)."
               exit 1
             fi
+            digest=$PREVIOUS_DIGEST
             if [ "$digest" = "$serving_digest" ]; then
               skip "The same image served before this deploy, so the failure isn't in the new build; not rolling back further."
             fi
-            echo "Previous version: lazydad:previous-production"
+            echo "Previous version: $digest (served before the failed deploy)"
           elif [ -n "$version" ]; then
             if ! [[ "$version" =~ ^[0-9a-f]{7,40}$ ]]; then
               echo "::error::'$VERSION' isn't a commit SHA (7 to 40 hex digits)."

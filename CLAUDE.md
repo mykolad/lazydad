@@ -152,7 +152,7 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
   including the weekly registry purge task (`purge-old-images`: keeps the last 30 days, 10 older
   images, and what each environment runs: revisions are pinned to the image digest, and the manifest
   stays tagged `deployed-<env>` / `deploying-<env>`, applied in two phases around each rollout; `previous-<env>`
-  marks what served before the latest rollout, for the automatic rollback).
+  keeps what served before the latest rollout from the purge, for a manual rollback).
 
 ## Building and testing
 
@@ -205,9 +205,9 @@ Its second job, **`clean-database-migrations`**, runs against a throwaway SQL Se
    against it. If they fail, it restarts the new revision (a fresh startup tick) and runs them once more,
    counting only ticks completed after the restart (`SMOKE_TICKS_AFTER`).
 3. **roll-back**, only if production failed **after its new revision took traffic**: the reusable
-   `.github/workflows/roll-back.yml` (**Roll Back**) puts back the image that served before, which Deploy
-   Environment tags `previous-<environment>` before each rollout. It does nothing if production never
-   switched to the new revision, or if the same image served before. It doesn't roll back migrations, and
+   `.github/workflows/roll-back.yml` (**Roll Back**) puts back the image that served before: the digest the production
+   job read from its own revisions before the rollout (a job output, not the movable `previous-<environment>` tag).
+   It does nothing if production never switched to the new revision, or if the same image served before. It doesn't roll back migrations, and
    the run still ends as failed, so GitHub notifies you.
 
 Promotion is automatic: production runs only if staging's smoke tests pass. Azure login is

@@ -278,7 +278,8 @@ What it keeps:
      tags (`^[0-9a-f]{7}`), and Deploy Environment tags in two phases, so the job can stop at any point:
      - **before the rollout**, it re-tags the image of the revision **serving traffic** as `deployed-<env>`
        (not the app's desired image, which after a failed rollout names the failed one; repairing any
-       earlier interrupted run), and also as `previous-<env>` (Deploy Master's automatic rollback target).
+       earlier interrupted run), and also as `previous-<env>` (so a manual rollback can return to it; the automatic rollback gets its
+       digest from the deploy job itself).
        This is fatal on failure, and only then does it tag the new digest `deploying-<env>`;
      - **after the rollout**, it moves `deployed-<env>` to the new digest.
 
@@ -699,9 +700,10 @@ app's `sql-conn` secret are the `sqladmin` login, which reaches every database o
 | `staging` (`*/*` branches and `master`) | `lazydad-github-staging` | `lazydad-app-staging`; push images; SQL firewall rules; the staging DB schema |
 | `production` (`master` only) | `lazydad-github-cd` | `lazydad-app`; push images; SQL firewall rules; the prod DB schema |
 
-Both still push to the same registry, so staging could re-point a tag like `previous-production`. That's why the
-Roll Back workflow only accepts an image whose digest production's own revisions ran (`roll-back.yml`), and
-Deploy Master deploys the digest its own build produced, never a tag.
+Both still push to the same registry, so staging could re-point tags like `previous-production` or `<sha>`. So
+nothing that decides what production runs trusts a tag: Deploy Master deploys the digest its own build produced,
+its automatic rollback returns to the digest the production job read from production's revisions (a job output),
+and the Roll Back workflow only accepts an image whose digest production's own revisions ran.
 
 **How GitHub picks the identity.** `azure/login` uses `vars.AZURE_CLIENT_ID`. A variable set on an environment
 overrides the repository's for jobs in that environment, and every job that logs in to Azure runs in one. Azure
