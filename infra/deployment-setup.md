@@ -198,15 +198,16 @@ for app in lazydad-app-staging lazydad-app; do
 done
 # Your own account needs the same role for local runs without a key.
 
-# 2. Switch an environment to Entra ID: drop the key setting (a new revision; wait a few minutes after the
-#    role assignment first, since RBAC takes a while to apply). Check its startup tick on /status before prod.
-az containerapp update -n lazydad-app-staging -g $RG --remove-env-vars LlmProviders__AzureOpenAI__ApiKey -o none
-az containerapp secret remove -n lazydad-app-staging -g $RG --secret-names openai-key
-
-#    Once staging's startup tick shows jokes from every model, the same for production. Its startup tick on
-#    /status (both models saved, leaderboard not "failed") confirms it.
-az containerapp update -n lazydad-app -g $RG --remove-env-vars LlmProviders__AzureOpenAI__ApiKey -o none
-az containerapp secret remove -n lazydad-app -g $RG --secret-names openai-key
+# 2. Switch one app at a time, staging first (wait a few minutes after the role assignment: RBAC takes a
+#    while to apply). Dropping the key setting makes a new revision that uses Entra ID; the openai-key
+#    secret stays for now, so switching back is one command.
+APP=lazydad-app-staging     # then lazydad-app
+az containerapp update -n $APP -g $RG --remove-env-vars LlmProviders__AzureOpenAI__ApiKey -o none
+#    Check the new revision's startup tick on /status: a joke from every model, leaderboard not "failed".
+#    If a model rejects the identity, switch back:
+#      az containerapp update -n $APP -g $RG --set-env-vars LlmProviders__AzureOpenAI__ApiKey=secretref:openai-key -o none
+#    Once it works, remove the now-unused secret, then repeat for production.
+az containerapp secret remove -n $APP -g $RG --secret-names openai-key
 
 # 3. Only once BOTH apps run without the key (disabling key auth breaks anything still using it): remove the
 #    other copies, then turn key auth off for good.
