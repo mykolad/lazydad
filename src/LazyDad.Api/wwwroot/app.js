@@ -95,6 +95,7 @@
     copied: null
   };
   const pendingVotes = new Map();
+  const lastVoteAt = new Map(); // joke id → when its shown counts last changed through a vote
   let copiedTimer = 0;
   let summaryRefreshedAt = 0;
 
@@ -152,11 +153,16 @@
 
   // Keeps one object per joke, so every place that shows it updates together. Counts from the
   // server include only the votes it has counted, so re-apply any vote still in flight.
-  function remember(joke) {
-    const shown = state.votes[joke.id] || 0;
-    const counted = state.committed[joke.id] || 0;
-    shiftCounts(joke, counted, shown);
+  // requestedAt: when the request that returned the joke started. A vote made since then is newer
+  // than its counts (the response may even arrive after the vote's own), so those are ignored.
+  function remember(joke, requestedAt) {
     const existing = state.jokes.get(joke.id);
+    if (existing && (lastVoteAt.get(joke.id) ?? 0) >= requestedAt) {
+      joke.up = existing.up;
+      joke.down = existing.down;
+    } else {
+      shiftCounts(joke, state.committed[joke.id] || 0, state.votes[joke.id] || 0);
+    }
     if (!existing) {
       state.jokes.set(joke.id, joke);
       return joke;
@@ -197,6 +203,7 @@
     const generation = state.generation;
     await loadTop();
     showView(state.view);
+    const requestedAt = Date.now();
     const page = await getJson(`jokes/feed?sort=new&limit=${PAGE_SIZE}`);
     if (generation !== state.generation) return;
     const fresh = page.items.filter(j => !state.feed.includes(j.id));
@@ -206,7 +213,7 @@
       await resetFeed();
       return;
     }
-    fresh.forEach(j => placeInFeed(remember(j)));
+    fresh.forEach(j => placeInFeed(remember(j, requestedAt)));
   }
 
   // The feed's order: [net score,] time, id, all descending (as the API sorts).
@@ -239,13 +246,14 @@
   }
 
   async function loadTop() {
+    const requestedAt = Date.now();
     const entries = await getJson('jokes/top');
     // One leaderboard per language; the page shows the first (today there's only Ukrainian).
     const language = entries.length ? entries[0].language : null;
     state.top = entries
       .filter(e => e.language === language)
       .sort((a, b) => a.rank - b.rank)
-      .map(e => ({ rank: e.rank, reason: e.reason, judgeModel: e.judgeModel, joke: remember(e.joke) }));
+      .map(e => ({ rank: e.rank, reason: e.reason, judgeModel: e.judgeModel, joke: remember(e.joke, requestedAt) }));
     state.spot = Math.min(state.spot, Math.max(state.top.length - 1, 0));
     renderSpotlight();
     renderTopList();
@@ -259,12 +267,13 @@
     renderFeedFooter();
     try {
       const after = state.cursor ? `&after=${encodeURIComponent(state.cursor)}` : '';
+      const requestedAt = Date.now();
       const page = await getJson(`jokes/feed?sort=${state.sort}&limit=${PAGE_SIZE}${after}`);
       if (generation !== state.generation) return;
       state.cursor = page.next;
       state.total = page.total;
       // Votes can reorder "top" between pages; skip jokes that are already listed.
-      const fresh = page.items.filter(j => !state.feed.includes(j.id)).map(remember);
+      const fresh = page.items.filter(j => !state.feed.includes(j.id)).map(j => remember(j, requestedAt));
       state.feed.push(...fresh.map(j => j.id));
       $('ld-list').insertAdjacentHTML('beforeend', fresh.map(rowHtml).join(''));
       state.done = page.next === null;
@@ -371,6 +380,7 @@
   function setShownVote(joke, to) {
     shiftCounts(joke, state.votes[joke.id] || 0, to);
     if (to) state.votes[joke.id] = to; else delete state.votes[joke.id];
+    lastVoteAt.set(joke.id, Date.now());
     paintVotes(joke);
   }
 
@@ -404,6 +414,7 @@
       joke.up = counts.up;
       joke.down = counts.down;
       shiftCounts(joke, value, state.votes[joke.id] || 0);
+      lastVoteAt.set(joke.id, Date.now());
       paintVotes(joke);
     } catch {
       // Roll back to what the server has counted, unless the reader has clicked again since: that
@@ -470,10 +481,7 @@
     const strings = t();
     const joke = entry.joke;
     const copied = state.copied === joke.id;
-    // Re-rendering replaces the buttons: put focus back on the equivalent one.
-    const focused = panel.contains(document.activeElement) ? document.activeElement : null;
-    const refocus = focused?.matches('[data-rotation]') ? '[data-rotation]'
-      : focused?.matches('[data-spot]') ? `[data-spot="${state.spot}"]` : null;
+    const refocus = focusedControl(panel);
     const tabs = state.top.map((e, i) =>
       `<button type="button" data-spot="${i}" aria-label="${esc(strings.place)} ${e.rank}" aria-current="${i === state.spot}">${e.rank}</button>`).join('');
     // A persistent pause for the auto-rotation (WCAG 2.2.2): hover and focus only pause it while
@@ -491,11 +499,13 @@
       `<div class="ld-spot-actions">${voteHtml(joke, false)}` +
       `<button type="button" class="ld-round" data-share="${joke.id}" aria-label="${esc(copied ? strings.copied : strings.share)}">${copied ? ICON.check(17) : ICON.share}</button></div>`;
     paintVotes(joke);
-    if (refocus) panel.querySelector(refocus)?.focus();
+    restoreFocus(panel, refocus);
   }
 
   function renderTopList() {
-    $('ld-toplist').innerHTML = state.top.map((entry, i) => {
+    const list = $('ld-toplist');
+    const refocus = focusedControl(list);
+    list.innerHTML = state.top.map((entry, i) => {
       const joke = entry.joke;
       return `<button type="button" class="ld-toprow" data-spot="${i}" aria-current="${i === state.spot}">` +
         `<span class="ld-badge">${entry.rank}</span>` +
@@ -504,6 +514,25 @@
         `<span class="ld-toprow-meta"><span data-net-for="${joke.id}">${signed(net(joke))}</span> · ${esc(shortDate(joke.generatedAt))}</span>` +
         '</span></button>';
     }).join('');
+    restoreFocus(list, refocus);
+  }
+
+  // Re-rendering replaces the buttons (an automatic refresh, a rotation, a language switch): find the
+  // focused one's equivalent, so a keyboard user keeps their place.
+  function focusedControl(container) {
+    const el = document.activeElement;
+    if (!el || !container.contains(el)) return null;
+    if (el.matches('[data-rotation]')) return '[data-rotation]';
+    if (el.matches('[data-share]')) return `[data-share="${el.dataset.share}"]`;
+    if (el.matches('[data-vote]')) return `[data-vote-for="${el.closest('[data-vote-for]').dataset.voteFor}"] [data-vote="${el.dataset.vote}"]`;
+    // A spotlight tab was pressed, so focus follows the selected one; a Top 3 row keeps its place.
+    if (el.matches('[data-spot]')) return container.id === 'ld-spotlight' ? `[data-spot="${state.spot}"]` : `[data-spot="${el.dataset.spot}"]`;
+    return 'button';
+  }
+
+  // Falls back to the container's first button when the control is gone (e.g. another joke now).
+  function restoreFocus(container, selector) {
+    if (selector) (container.querySelector(selector) ?? container.querySelector('button'))?.focus();
   }
 
   function selectSpot(index) {
