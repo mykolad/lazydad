@@ -28,6 +28,10 @@ public class SqlConnectionStringsTests
         => Assert.Equal(120, new SqlConnectionStringBuilder(SqlConnectionStrings.WithResumeTimeout("Server=s;Connect Timeout=120")).ConnectTimeout);
 
     [Fact]
+    public void WithResumeTimeout_KeepsZero_WhichMeansNoTimeout()
+        => Assert.Equal(0, new SqlConnectionStringBuilder(SqlConnectionStrings.WithResumeTimeout("Server=s;Connect Timeout=0")).ConnectTimeout);
+
+    [Fact]
     public void WithResumeTimeout_AcceptsAnEmptyConnectionString()
         => Assert.Equal(SqlConnectionStrings.MinConnectTimeoutSeconds,
             new SqlConnectionStringBuilder(SqlConnectionStrings.WithResumeTimeout("")).ConnectTimeout);
