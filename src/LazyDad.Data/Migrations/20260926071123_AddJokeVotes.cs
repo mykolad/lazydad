@@ -23,11 +23,20 @@ namespace LazyDad.Data.Migrations
                 type: "int",
                 nullable: false,
                 defaultValue: 0);
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Jokes_GeneratedAt_Id",
+                table: "Jokes",
+                columns: new[] { "GeneratedAt", "Id" });
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.DropIndex(
+                name: "IX_Jokes_GeneratedAt_Id",
+                table: "Jokes");
+
             migrationBuilder.DropColumn(
                 name: "Down",
                 table: "Jokes");

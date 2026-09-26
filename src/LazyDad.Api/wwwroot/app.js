@@ -260,7 +260,8 @@
       showView(state.count === 0 && state.feed.length === 0 ? 'empty' : 'feed');
     } catch {
       const label = $('ld-loading-text');
-      label.innerHTML = `${esc(t().failed)} <button type="button" class="ld-link-btn" data-retry>${esc(t().retry)}</button>`;
+      // Tagged, so switching UA/EN translates the error too.
+      label.innerHTML = `<span data-i18n="failed">${esc(t().failed)}</span> <button type="button" class="ld-link-btn" data-retry data-i18n="retry">${esc(t().retry)}</button>`;
     }
   }
 
@@ -504,7 +505,7 @@
     if (state.pageFailed) {
       end.hidden = false;
       end.removeAttribute('data-i18n');
-      end.innerHTML = `${esc(t().failed)} <button type="button" class="ld-link-btn" data-retry-page>${esc(t().retry)}</button>`;
+      end.innerHTML = `<span data-i18n="failed">${esc(t().failed)}</span> <button type="button" class="ld-link-btn" data-retry-page data-i18n="retry">${esc(t().retry)}</button>`;
     } else {
       end.setAttribute('data-i18n', 'end');
       end.textContent = t().end;

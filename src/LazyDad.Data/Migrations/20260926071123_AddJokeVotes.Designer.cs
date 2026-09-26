@@ -12,7 +12,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace LazyDad.Data.Migrations
 {
     [DbContext(typeof(LazyDadDbContext))]
-    [Migration("20260925234950_AddJokeVotes")]
+    [Migration("20260926071123_AddJokeVotes")]
     partial class AddJokeVotes
     {
         /// <inheritdoc />
@@ -59,6 +59,8 @@ namespace LazyDad.Data.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("Language");
+
+                    b.HasIndex("GeneratedAt", "Id");
 
                     b.ToTable("Jokes");
                 });

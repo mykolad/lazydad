@@ -57,6 +57,8 @@ namespace LazyDad.Data.Migrations
 
                     b.HasIndex("Language");
 
+                    b.HasIndex("GeneratedAt", "Id");
+
                     b.ToTable("Jokes");
                 });
 

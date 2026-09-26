@@ -97,9 +97,10 @@ public class JokesControllerTests
     public async Task GetFeed_ReturnsThePage_TheTotal_AndACursorAfterItsLastJoke(string sort, JokeSort expected)
     {
         var last = new Joke { Id = 3, Text = "Joke 3", GeneratedAt = new DateTime(2026, 9, 23, 4, 0, 0, DateTimeKind.Utc), Up = 7, Down = 2 };
-        List<Joke> page = [MakeJoke(4), last];
+        // The repository returns one row more than the limit when another page exists.
+        List<Joke> rows = [MakeJoke(4), last, MakeJoke(2)];
         jokeRepositoryMock.Setup(r => r.CountAsync(It.IsAny<CancellationToken>())).ReturnsAsync(42);
-        jokeRepositoryMock.Setup(r => r.GetPageAsync(expected, null, 2, It.IsAny<CancellationToken>())).ReturnsAsync(page);
+        jokeRepositoryMock.Setup(r => r.GetPageAsync(expected, null, 3, It.IsAny<CancellationToken>())).ReturnsAsync(rows);
 
         var json = Json(await CreateController().GetFeed(sort, null, 2, CancellationToken.None));
 
@@ -113,11 +114,22 @@ public class JokesControllerTests
     public async Task GetFeed_PassesTheCursorOn_AndEndsWithoutANextCursor()
     {
         var after = new JokeCursor(5, new DateTime(2026, 9, 23, 4, 0, 0, DateTimeKind.Utc), 3);
-        jokeRepositoryMock.Setup(r => r.GetPageAsync(JokeSort.TopVoted, after, 20, It.IsAny<CancellationToken>())).ReturnsAsync([MakeJoke(1)]);
+        jokeRepositoryMock.Setup(r => r.GetPageAsync(JokeSort.TopVoted, after, 21, It.IsAny<CancellationToken>())).ReturnsAsync([MakeJoke(1)]);
 
         var json = Json(await CreateController().GetFeed("top", after.ToString(), 20, CancellationToken.None));
 
         // Fewer jokes than the limit: that was the last page.
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("next").ValueKind);
+    }
+
+    [Fact]
+    public async Task GetFeed_AnExactlyFullLastPage_HasNoNextCursor()
+    {
+        jokeRepositoryMock.Setup(r => r.GetPageAsync(JokeSort.Newest, null, 3, It.IsAny<CancellationToken>())).ReturnsAsync([MakeJoke(2), MakeJoke(1)]);
+
+        var json = Json(await CreateController().GetFeed("new", null, 2, CancellationToken.None));
+
+        Assert.Equal(2, json.GetProperty("items").GetArrayLength());
         Assert.Equal(JsonValueKind.Null, json.GetProperty("next").ValueKind);
     }
 

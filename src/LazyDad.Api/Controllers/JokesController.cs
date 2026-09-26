@@ -71,8 +71,11 @@ public class JokesController : ControllerBase
             return BadRequest("after must be a 'next' value from a previous page.");
 
         var total = await jokeRepository.CountAsync(cancellationToken);
-        var items = await jokeRepository.GetPageAsync(order.Value, cursor, limit, cancellationToken);
-        var next = items.Count == limit ? JokeCursor.After(items[^1]).ToString() : null;
+        // One extra row says whether another page exists, so the last page has no "next" even
+        // when it's exactly full.
+        var rows = await jokeRepository.GetPageAsync(order.Value, cursor, limit + 1, cancellationToken);
+        var items = rows.Take(limit).ToList();
+        var next = rows.Count > limit ? JokeCursor.After(items[^1]).ToString() : null;
         return Ok(new { total, items, next });
     }
 

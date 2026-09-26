@@ -20,6 +20,10 @@ public class LazyDadDbContext : DbContext
             entity.Property(e => e.Text).HasMaxLength(2000).IsRequired();
             // Index speeds up the common query: get jokes by language
             entity.HasIndex(e => e.Language);
+            // The feed's default order and its keyset cursor (newest first, ties by id).
+            // "Top voted" sorts on Up - Down without an index: every vote would have to maintain
+            // one, and the table (a dozen jokes a day) is cheap to sort.
+            entity.HasIndex(e => new { e.GeneratedAt, e.Id });
         });
 
         modelBuilder.Entity<TopJoke>(entity =>
