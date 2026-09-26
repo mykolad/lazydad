@@ -924,4 +924,13 @@ foreach ($id in 'lazydad-github-staging', 'lazydad-github-cd') {
 
 What a previewed branch can still do afterwards: anything to staging (its app, its database, LLM calls, which
 cost tokens), push images that production never runs, and open a SQL firewall rule (useless without a login).
-Nothing that changes production.
+It can't change what production runs, or make production run anything else.
+
+**One gap remains: availability.** Both identities can write to the whole registry (`AcrPush`), so a branch could
+also move production's protection tags (`deployed-production`, `previous-production`) off the image production
+runs. The weekly purge would then delete that manifest, and production's next restart or scale-out would fail to
+pull it (the running replica keeps running; a Deploy Master run fixes it). An ACR lock doesn't help: `AcrPush`
+can lift locks too. The fix is repository-scoped permissions (the registry's "RBAC Registry + ABAC Repository
+Permissions" mode): previews write only to a `lazydad-preview` repository, and production's identity copies
+the image it deploys into a production-only `lazydad` repository with `az acr import` (same digest). That's a
+registry migration of its own, planned separately.
