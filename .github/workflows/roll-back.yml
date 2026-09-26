@@ -65,6 +65,7 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
           ONLY_IF_SERVING: ${{ inputs.only-if-serving }}
+          MIN_COMMIT: ${{ vars.ROLLBACK_MIN_COMMIT }}
         run: |
           version=$(printf '%s' "$VERSION" | tr -d '[:space:]' | tr 'A-F' 'a-f')
 
@@ -178,6 +179,12 @@ jobs:
           fi
           if ! git merge-base --is-ancestor "$ref" HEAD 2> /dev/null; then
             echo "::error::${ref:0:7} isn't on master (a branch build?); production only runs master commits."
+            exit 1
+          fi
+          # The oldest commit production can still run, set when a lock-down made older images unusable
+          # (e.g. disabling Azure OpenAI key auth: images before the Entra ID support only have the key).
+          if [ -n "$MIN_COMMIT" ] && ! git merge-base --is-ancestor "$MIN_COMMIT" "$ref" 2> /dev/null; then
+            echo "::error::${ref:0:7} predates ROLLBACK_MIN_COMMIT (${MIN_COMMIT:0:7}); it can't run with today's configuration."
             exit 1
           fi
 

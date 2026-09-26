@@ -88,7 +88,8 @@ Credentials are stored in user secrets (never committed):
 # Entra ID with your az login (you are the server's Entra admin); no password:
 dotnet user-secrets set "ConnectionStrings:DefaultConnection" "Server=tcp:lazydad-sql-swedencentral.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True" --project src/LazyDad.Api
 dotnet user-secrets set "LlmProviders:AzureOpenAI:Endpoint"  "<endpoint>"              --project src/LazyDad.Api
-dotnet user-secrets set "LlmProviders:AzureOpenAI:ApiKey"    "<key>"                   --project src/LazyDad.Api
+# No API key: the app uses Entra ID (your `az login`; needs the "Foundry User" role on lazydad-openai-resource).
+# dotnet user-secrets set "LlmProviders:AzureOpenAI:ApiKey" "<key>" --project src/LazyDad.Api  # only while key auth is on
 ```
 
 Azure SQL firewall must allow the local machine's public IP.
@@ -244,6 +245,12 @@ docker build -t lazydad .
 docker run -p 8080:8080 \
   -e ConnectionStrings__DefaultConnection="..." \
   -e LlmProviders__AzureOpenAI__Endpoint="..." \
-  -e LlmProviders__AzureOpenAI__ApiKey="..." \
+  -e AZURE_TENANT_ID="..." -e AZURE_CLIENT_ID="..." -e AZURE_CLIENT_SECRET="..." \
   lazydad
 ```
+
+The container has no Azure CLI and can't see your `az login`, so with no API key it authenticates to Azure
+OpenAI through `DefaultAzureCredential`'s environment credential: a **dev service principal** with the
+"Foundry User" role on `lazydad-openai-resource` (`az ad sp create-for-rbac`; keep its secret out of the repo).
+While key auth is still on, `-e LlmProviders__AzureOpenAI__ApiKey="..."` works instead. For everyday local
+work, `dotnet run` with your `az login` needs neither.
