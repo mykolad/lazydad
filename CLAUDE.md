@@ -96,6 +96,8 @@ Azure SQL firewall must allow the local machine's public IP.
   - Staging: `lazydad-db-staging`, serverless on the **free offer** (100k vCore-s/month). It
     pauses when idle; if the free amount runs out it stays paused until next month, and staging
     deploys fail until then.
+  - The app raises the SQL connect timeout to 60 s (`SqlConnectionStrings.WithResumeTimeout`), so a login waits
+    for a paused database to resume instead of timing out after the default 15 s.
 - **Migrations** run in Deploy Master as an EF migration bundle, against staging and then prod (see below).
   The app never migrates on startup.
 - **Azure OpenAI** (`lazydad-openai-resource`, AI Services, eastus2): each `LlmModels[].Model` in config is the deployment name. Non-OpenAI models
@@ -162,7 +164,8 @@ Build and Test still compiles the smoke project, because its build step builds t
    `deployed-<environment>` to it,
    allows the runner through staging's IP
    restrictions, and runs `tests/LazyDad.SmokeTests`
-   against it. If they fail, it restarts the new revision (a fresh startup tick) and runs them once more.
+   against it. If they fail, it restarts the new revision (a fresh startup tick) and runs them once more,
+   counting only ticks completed after the restart (`SMOKE_TICKS_AFTER`).
 3. **roll-back**, only if production failed **after its new revision took traffic**: the reusable
    `.github/workflows/roll-back.yml` (**Roll Back**) puts back the image that served before, which Deploy
    Environment tags `previous-<environment>` before each rollout. It does nothing if production never

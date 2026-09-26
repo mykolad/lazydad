@@ -129,9 +129,14 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
         {
             var json = await target.GetJsonAsync("status");
             var isExpectedRevision = target.ExpectedRevision is null || json.GetProperty("revision").GetString() == target.ExpectedRevision;
-            var reported = json.GetProperty("ticks").EnumerateArray().Select(t => t.GetProperty("language").GetString()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            // After a restart (SMOKE_TICKS_AFTER), only the restarted process's ticks count.
+            var reported = json.GetProperty("ticks").EnumerateArray()
+                .Where(t => target.TicksAfter is null || t.GetProperty("completedAt").GetDateTimeOffset() > target.TicksAfter)
+                .Select(t => t.GetProperty("language").GetString())
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             return isExpectedRevision && configured.Keys.All(reported.Contains) ? json : null;
-        }, SmokeTarget.GenerationTimeout, $"revision '{target.ExpectedRevision}' to report a tick for: {string.Join(", ", configured.Keys)}");
+        }, SmokeTarget.GenerationTimeout, $"revision '{target.ExpectedRevision}' to report a tick for: {string.Join(", ", configured.Keys)}" +
+            (target.TicksAfter is null ? "" : $" completed after {target.TicksAfter:o}"));
 
         var jokes = await target.GetJsonAsync("jokes");
         var persisted = jokes.EnumerateArray().ToDictionary(j => j.GetProperty("id").GetInt32(), j => j.GetProperty("model").GetString());
