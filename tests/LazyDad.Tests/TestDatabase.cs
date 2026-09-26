@@ -2,6 +2,7 @@ using LazyDad.Data;
 using Microsoft.Data.SqlClient;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace LazyDad.Tests;
 
@@ -36,14 +37,17 @@ public sealed class TestDatabase : IDisposable
         }
     }
 
-    public LazyDadDbContext CreateContext()
+    public LazyDadDbContext CreateContext() => CreateContext([]);
+
+    /// <summary>A context with EF interceptors, e.g. to simulate a failing save.</summary>
+    public LazyDadDbContext CreateContext(IInterceptor[] interceptors)
     {
         var options = new DbContextOptionsBuilder<LazyDadDbContext>();
         if (sqlite is not null)
             options.UseSqlite(sqlite);
         else
             options.UseSqlServer(sqlServer);
-        return new LazyDadDbContext(options.Options);
+        return new LazyDadDbContext(options.AddInterceptors(interceptors).Options);
     }
 
     public void Dispose()

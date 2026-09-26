@@ -1,30 +1,21 @@
 using LazyDad.Data;
 using LazyDad.Data.Repositories;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace LazyDad.Tests;
 
-/// <summary>Runs against a real (SQLite in-memory) database, so the atomic UPDATE and the key conflict are real.</summary>
+/// <summary>Runs against a real database (SQLite in memory, or SQL Server with the migrations in CI; see TestDatabase), so the atomic UPDATE and the key conflict are real.</summary>
 public sealed class SchedulerLockRepositoryTests : IDisposable
 {
     private const string Key = "jokes:Ukrainian";
     private static readonly DateTime Now = new(2026, 9, 26, 12, 0, 0, DateTimeKind.Utc);
 
-    private readonly SqliteConnection connection = new("DataSource=:memory:");
+    private readonly TestDatabase database = new();
 
-    public SchedulerLockRepositoryTests()
-    {
-        connection.Open();
-        using var context = CreateContext();
-        context.Database.EnsureCreated();
-    }
+    public void Dispose() => database.Dispose();
 
-    public void Dispose() => connection.Dispose();
-
-    private LazyDadDbContext CreateContext()
-        => new(new DbContextOptionsBuilder<LazyDadDbContext>().UseSqlite(connection).Options);
+    private LazyDadDbContext CreateContext() => database.CreateContext();
 
     private async Task<bool> TryAcquireAsync(string holder, DateTime now, DateTime expiresAt)
     {
@@ -130,8 +121,7 @@ public sealed class SchedulerLockRepositoryTests : IDisposable
     public async Task TryInsert_WhenTheInsertFailsForAnotherReason_Throws()
     {
         // Not a key conflict (no row exists): a failure must fail the tick, not pass for lost contention.
-        await using var context = new LazyDadDbContext(new DbContextOptionsBuilder<LazyDadDbContext>()
-            .UseSqlite(connection).AddInterceptors(new FailingSaves()).Options);
+        await using var context = database.CreateContext([new FailingSaves()]);
 
         await Assert.ThrowsAsync<DbUpdateException>(
             () => new SchedulerLockRepository(context).TryInsertAsync(Key, "b", Now, Now.AddHours(4), CancellationToken.None));
