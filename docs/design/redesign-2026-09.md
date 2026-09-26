@@ -4,7 +4,7 @@
 > match what shipped. **The code is the source of truth:** `src/LazyDad.Api/wwwroot/app.css`
 > (tokens, layout), `app.js` (behaviour) and `Services/HtmlGeneratorService.cs` (the page shell).
 > Where the build differs from the original handoff, it's listed under [Deviations](#deviations-from-the-handoff).
-> The interactive prototype and reference screenshots weren't committed. The screenshots are on PR #23.
+> The interactive prototype and its reference screenshots weren't committed.
 
 ## Overview
 A redesign of the LazyDad site: AI‑generated Ukrainian dad jokes, a new batch every 4 hours, and the top 3 picked by an AI judge. New features:
