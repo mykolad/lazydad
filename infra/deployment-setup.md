@@ -181,8 +181,14 @@ only a few MB of unique data.
 ## 9. Azure SQL with Entra ID, no passwords (issue #11)
 
 Everything connects as `sqladmin` today. The target is least-privilege Entra identities and no SQL
-passwords anywhere. It uses the apps' **system-assigned identities** (created in section 8, or with
-`az containerapp identity assign --system-assigned`), so staging can't reach the prod database.
+passwords anywhere. It uses the apps' **system-assigned identities**, one per app, so staging can't reach
+the prod database. The Azure OpenAI switch (issue #10) uses the same ones. If the apps don't have them yet:
+
+```bash
+for app in lazydad-app-staging lazydad-app; do
+  az containerapp identity assign -n $app -g $RG --system-assigned -o none
+done
+```
 
 | Principal | Database | Roles |
 |---|---|---|
