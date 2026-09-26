@@ -165,13 +165,44 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         await scheduler.StartAsync(CancellationToken.None);
         await TickCompletedAsync();
         // The loop records the next tick right after the startup tick completes.
-        var deadline = DateTime.UtcNow + Timeout;
-        while (status.NextTickAt is null && DateTime.UtcNow < deadline)
-            await Task.Delay(10);
+        await NextTickAfterAsync(started.AddMinutes(30));
         await scheduler.StopAsync(CancellationToken.None);
 
-        var next = Assert.NotNull(status.NextTickAt);
-        Assert.InRange(next, started.AddHours(1), DateTime.UtcNow.AddHours(1));
+        Assert.InRange(status.NextTickAt!.Value, started.AddHours(1), DateTime.UtcNow.AddHours(1));
+    }
+
+    [Fact]
+    public async Task Start_KeepsTheNextTickDue_UntilEveryLanguagesStartupTickCompletes()
+    {
+        var slowReply = new TaskCompletionSource<ChatResponse>();
+        SetupModel("fast", () => Reply("Жарт"));
+        SetupModel("slow", () => slowReply.Task);
+        var english = Ukrainian("slow");
+        english.Language = "English";
+        english.LanguageCode = "en";
+        var scheduler = CreateScheduler(Ukrainian("fast"), english);
+        var started = DateTime.UtcNow;
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await TickCompletedAsync();
+        await Task.Delay(50);
+
+        // Ukrainian has scheduled its next tick, but English is still generating: the page must
+        // keep polling, so the earliest due time is still the past.
+        Assert.True(status.NextTickAt <= DateTime.UtcNow, $"NextTickAt was {status.NextTickAt:o}.");
+
+        slowReply.SetResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "Joke")]));
+        await schedulerLogger.WaitForAsync(LogLevel.Debug, "tick for 'English' completed", Timeout);
+        await NextTickAfterAsync(started.AddMinutes(30));
+        await scheduler.StopAsync(CancellationToken.None);
+    }
+
+    private async Task NextTickAfterAsync(DateTime threshold)
+    {
+        var deadline = DateTime.UtcNow + Timeout;
+        while (!(status.NextTickAt > threshold) && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+        Assert.True(status.NextTickAt > threshold, $"NextTickAt was {status.NextTickAt:o}, expected after {threshold:o}.");
     }
 
     [Fact]

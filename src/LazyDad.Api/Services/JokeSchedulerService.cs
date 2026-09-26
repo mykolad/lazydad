@@ -36,6 +36,11 @@ public class JokeSchedulerService : BackgroundService
             return;
         }
 
+        // Every language that will run is due now, before any loop starts: the page's countdown uses
+        // the earliest due time, which must stay in the past until every startup tick has completed.
+        foreach (var language in enabledLanguages.Where(l => l.LlmModels.Count > 0))
+            status.RecordNextTick(language.Language, DateTime.UtcNow);
+
         // Run one independent loop per language concurrently.
         // WhenAll propagates exceptions but each loop catches its own,
         // so this only completes when all loops exit (i.e. on cancellation).
