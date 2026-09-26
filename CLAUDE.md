@@ -230,6 +230,12 @@ docker build -t lazydad .
 docker run -p 8080:8080 \
   -e ConnectionStrings__DefaultConnection="..." \
   -e LlmProviders__AzureOpenAI__Endpoint="..." \
-  -e LlmProviders__AzureOpenAI__ApiKey="..." \
+  -e AZURE_TENANT_ID="..." -e AZURE_CLIENT_ID="..." -e AZURE_CLIENT_SECRET="..." \
   lazydad
 ```
+
+The container has no Azure CLI and can't see your `az login`, so with no API key it authenticates to Azure
+OpenAI through `DefaultAzureCredential`'s environment credential: a **dev service principal** with the
+"Foundry User" role on `lazydad-openai-resource` (`az ad sp create-for-rbac`; keep its secret out of the repo).
+While key auth is still on, `-e LlmProviders__AzureOpenAI__ApiKey="..."` works instead. For everyday local
+work, `dotnet run` with your `az login` needs neither.
