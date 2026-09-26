@@ -1,10 +1,12 @@
 using System.ClientModel.Primitives;
+using System.Diagnostics;
 using System.Net;
 using System.Text;
 using Azure.AI.OpenAI;
 using Azure.Core;
 using LazyDad.Api.Configuration;
 using LazyDad.Api.Services;
+using LazyDad.Api.Telemetry;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
 
@@ -19,7 +21,7 @@ public class LlmClientFactoryTests
     public void CreateClient_ForAzureOpenAI_ReturnsChatClient()
     {
         // Constructing the client makes no network call, so a placeholder endpoint is fine.
-        var factory = CreateFactory(new()
+        using var factory = CreateFactory(new()
         {
             ["AzureOpenAI"] = new() { Endpoint = "https://example.openai.azure.com/", ApiKey = "test-key" }
         });
@@ -47,14 +49,111 @@ public class LlmClientFactoryTests
         Assert.False(request.Headers.Contains("api-key"));
     }
 
+    [Fact]
+    public async Task CreateClient_SharesOneClientPerModel_ThatOutlivesTheCallersDispose()
+    {
+        var handler = new CapturingHandler();
+        using var factory = CreateFactory(handler, new LlmProviderOptions { Endpoint = "https://example.openai.azure.com/", ApiKey = "test-key" });
+
+        var first = factory.CreateClient("AzureOpenAI", "gpt-6-luna");
+        var shared = first.GetService<OpenTelemetryChatClient>();
+        // Callers dispose their client after each call (using var).
+        first.Dispose();
+        using var second = factory.CreateClient("AzureOpenAI", "gpt-6-luna");
+        using var otherModel = factory.CreateClient("AzureOpenAI", "Kimi-K2.5");
+
+        Assert.NotNull(shared);
+        Assert.Same(shared, second.GetService<OpenTelemetryChatClient>());
+        Assert.NotSame(shared, otherModel.GetService<OpenTelemetryChatClient>());
+        Assert.Equal("OK", (await second.GetResponseAsync("Say OK.")).Text);
+    }
+
+    [Fact]
+    public void CreateClient_ForConcurrentFirstCallers_CreatesOneClient()
+    {
+        var created = 0;
+        using var factory = new LlmClientFactory(
+            Options.Create(new Dictionary<string, LlmProviderOptions>
+            {
+                ["AzureOpenAI"] = new() { Endpoint = "https://example.openai.azure.com/", ApiKey = "test-key" }
+            }),
+            new Lazy<TokenCredential>(() => new FakeCredential()),
+            () =>
+            {
+                Interlocked.Increment(ref created);
+                // Slow creation widens the window in which the other callers ask for the same model.
+                Thread.Sleep(50);
+                return new AzureOpenAIClientOptions();
+            });
+        using var start = new Barrier(8);
+        var clients = new IChatClient[8];
+
+        // Dedicated threads, not the thread pool: blocking 8 pool threads starves tests running in parallel.
+        var threads = Enumerable.Range(0, clients.Length).Select(i => new Thread(() =>
+        {
+            start.SignalAndWait();
+            clients[i] = factory.CreateClient("AzureOpenAI", "gpt-6-luna");
+        })).ToList();
+        threads.ForEach(t => t.Start());
+        threads.ForEach(t => t.Join());
+
+        Assert.Equal(1, created);
+        Assert.Single(clients.Select(c => c.GetService<OpenTelemetryChatClient>()).Distinct());
+    }
+
+    [Fact]
+    public void CreateClient_WhenCreatingFails_TriesAgainNextTime()
+    {
+        var attempts = 0;
+        using var factory = new LlmClientFactory(
+            Options.Create(new Dictionary<string, LlmProviderOptions>
+            {
+                ["AzureOpenAI"] = new() { Endpoint = "https://example.openai.azure.com/", ApiKey = "test-key" }
+            }),
+            new Lazy<TokenCredential>(() => new FakeCredential()),
+            () => ++attempts == 1 ? throw new InvalidOperationException("first attempt fails") : new AzureOpenAIClientOptions());
+
+        Assert.Throws<InvalidOperationException>(() => factory.CreateClient("AzureOpenAI", "gpt-6-luna"));
+        using var client = factory.CreateClient("AzureOpenAI", "gpt-6-luna");
+
+        Assert.NotNull(client.GetService<OpenTelemetryChatClient>());
+        Assert.Equal(2, attempts);
+    }
+
+    [Fact]
+    public async Task CreateClient_TracesEachCall_WithoutThePromptOrTheResponse()
+    {
+        var spans = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == LazyDadTelemetry.ChatClientName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activity => { lock (spans) spans.Add(activity); },
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        await SendOneRequestAsync(new LlmProviderOptions { Endpoint = "https://example.openai.azure.com/", ApiKey = "test-key" });
+
+        Activity span;
+        lock (spans) span = Assert.Single(spans);
+        Assert.Equal("gpt-6-luna", span.GetTagItem("gen_ai.request.model"));
+        // No message content: neither as attributes nor as events.
+        Assert.DoesNotContain(span.TagObjects, tag => tag.Value is string text && text.Contains("Say OK."));
+        Assert.DoesNotContain(span.TagObjects, tag => tag.Key.Contains("messages"));
+        Assert.Empty(span.Events);
+    }
+
+    private static LlmClientFactory CreateFactory(CapturingHandler handler, LlmProviderOptions options)
+        => new(
+            Options.Create(new Dictionary<string, LlmProviderOptions> { ["AzureOpenAI"] = options }),
+            new Lazy<TokenCredential>(() => new FakeCredential()),
+            () => new AzureOpenAIClientOptions { Transport = new HttpClientPipelineTransport(new HttpClient(handler)) });
+
     // Sends one chat request through the factory's client to a fake transport, and returns what went over the wire.
     private static async Task<HttpRequestMessage> SendOneRequestAsync(LlmProviderOptions options)
     {
         var handler = new CapturingHandler();
-        var factory = new LlmClientFactory(
-            Options.Create(new Dictionary<string, LlmProviderOptions> { ["AzureOpenAI"] = options }),
-            new Lazy<TokenCredential>(() => new FakeCredential()),
-            () => new AzureOpenAIClientOptions { Transport = new HttpClientPipelineTransport(new HttpClient(handler)) });
+        using var factory = CreateFactory(handler, options);
 
         using var client = factory.CreateClient("AzureOpenAI", "gpt-6-luna");
         var response = await client.GetResponseAsync("Say OK.");
@@ -100,7 +199,7 @@ public class LlmClientFactoryTests
     [Fact]
     public void CreateClient_ForUnconfiguredProvider_Throws()
     {
-        var factory = CreateFactory([]);
+        using var factory = CreateFactory([]);
 
         var ex = Assert.Throws<InvalidOperationException>(() => factory.CreateClient("AzureOpenAI", "gpt-5.3-chat"));
         Assert.Contains("'AzureOpenAI' is not configured", ex.Message);
@@ -109,7 +208,7 @@ public class LlmClientFactoryTests
     [Fact]
     public void CreateClient_ForConfiguredButUnsupportedProvider_Throws()
     {
-        var factory = CreateFactory(new() { ["SomethingElse"] = new() { Endpoint = "https://example.com/" } });
+        using var factory = CreateFactory(new() { ["SomethingElse"] = new() { Endpoint = "https://example.com/" } });
 
         var ex = Assert.Throws<NotSupportedException>(() => factory.CreateClient("SomethingElse", "model"));
         Assert.Contains("'SomethingElse' is not supported", ex.Message);

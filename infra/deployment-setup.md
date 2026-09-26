@@ -299,3 +299,114 @@ az sql server ad-only-auth enable -g $RG -n lazydad-sql-swedencentral
 
 Entra-only authentication can be turned off again (`ad-only-auth disable`) if something was missed.
 The CI job `clean-database-migrations` uses SQL auth against its own throwaway container, so it's unaffected.
+
+## 10. Monitoring and logs: Grafana Cloud
+
+The app sends traces, metrics and logs over OpenTelemetry (OTLP) straight to a Grafana Cloud stack in the EU
+(free tier; no collector or agent to run). Only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set: local runs, tests and
+older images send nothing. What goes out, and what doesn't:
+
+- **Traces:** one per request (`/healthz` excluded, uptime checks would flood them) and one per scheduler tick
+  (`joke tick`), with its lease, LLM calls (model, duration, tokens) and SQL commands under it.
+- **Metrics:** requests (rate, errors, latency per route), rate-limited votes, LLM duration and tokens per model
+  (`gen_ai_client_*`), SQL, .NET runtime, and the scheduler's own counters: `lazydad_scheduler_ticks_total`
+  (outcome `succeeded`/`failed`/`skipped`), `lazydad_jokes_total` (per model, `saved`/`empty`/`failed`),
+  `lazydad_leaderboard_updates_total`.
+- **Logs:** everything the app logs through `ILogger`, linked to its trace. That includes model output the app logs
+  on purpose: each saved joke's text, and the judge's raw answer when it's invalid (to debug it). It's only about
+  the (public) jokes; the LLM spans themselves don't record prompts or responses.
+- **Never:** visitor IPs, user agents or any other visitor data (`PersonalDataFilter` strips them before export).
+  Nothing the app logs is about visitors; keep it that way.
+
+Each app reports as its own service (`service.name` = the Container App's name, so `job="lazydad-app"` in PromQL).
+The console logs still go to Log Analytics as the fallback (step 4).
+
+**1. Token, into Key Vault.** In Grafana Cloud: *Connections → OpenTelemetry (OTLP) → View connection details*,
+generate a token (it can write metrics, logs and traces); the instance ID is shown there too. Keep the token out of
+the repo and chat. The one copy lives in Key Vault as `OtlpHeaders` (a placeholder since the original setup), in
+`OTEL_EXPORTER_OTLP_HEADERS`'s format: basic auth `<instance id>:<token>`, the space URL-encoded (per the OTLP spec).
+Both apps reference it, so a new token is one update.
+
+```bash
+KV_ID=$(az keyvault show -n lazydad-kv --query id -o tsv)
+INSTANCE_ID=<instance id from the connection details>
+read -rs TOKEN   # paste the token; not echoed, not in the shell history
+AUTH=$(printf '%s:%s' "$INSTANCE_ID" "$TOKEN" | base64 -w0); unset TOKEN
+# Check the credentials first (the app doesn't log export failures): 200 = accepted, 401 = wrong token or instance ID.
+curl -s -o /dev/null -w '%{http_code}\n' -X POST -H "Authorization: Basic $AUTH" -H 'Content-Type: application/json' \
+  -d '{"resourceLogs":[]}' https://otlp-gateway-prod-eu-north-0.grafana.net/otlp/v1/logs
+az keyvault secret set --vault-name lazydad-kv -n OtlpHeaders --value "Authorization=Basic%20$AUTH" -o none
+unset AUTH
+```
+
+**2. Per app, staging first.** Deploys keep these settings (Deploy Environment only swaps the image), and images
+from before this change ignore them, so rollbacks are fine. Each app reads the secret with its system-assigned
+identity: prod's already reads the vault (`Key Vault Secrets User` on all of it); staging gets that role on this
+one secret only, so it can't read prod's other secrets.
+
+```bash
+# Staging only: its identity (section 8 or 9 may have assigned it already; this is then a no-op) and access to the secret.
+az containerapp identity assign -n lazydad-app-staging -g $RG --system-assigned -o none
+STAGING_ID=$(az containerapp show -n lazydad-app-staging -g $RG --query identity.principalId -o tsv)
+az role assignment create --assignee-object-id $STAGING_ID --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets User" --scope "$KV_ID/secrets/OtlpHeaders" -o none
+# Wait a few minutes for the role to apply: a reference the identity can't read fails the new revision (the old one keeps serving).
+
+APP=lazydad-app-staging; ENV=staging     # then: lazydad-app / production
+az containerapp secret set -n $APP -g $RG \
+  --secrets "otlp-headers=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/OtlpHeaders,identityref:system"
+az containerapp update -n $APP -g $RG -o none --set-env-vars \
+  OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-eu-north-0.grafana.net/otlp \
+  OTEL_EXPORTER_OTLP_HEADERS=secretref:otlp-headers \
+  OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=$ENV
+```
+
+Check in Grafana's *Explore*: logs `{service_name="lazydad-app-staging"}`, a `joke tick` trace from the new
+revision's startup tick, and the metric `lazydad_jokes_total`. If nothing arrives although the `curl` check passed,
+compare the app's settings with the commands above (`az containerapp show -n $APP -g $RG --query
+properties.template.containers[0].env`). To switch telemetry off again:
+`az containerapp update -n $APP -g $RG --remove-env-vars OTEL_EXPORTER_OTLP_ENDPOINT -o none`.
+
+Then, on prod only, remove the placeholders from the original setup (the app never read them; the endpoint isn't secret):
+
+```bash
+az containerapp update -n lazydad-app -g $RG --remove-env-vars OpenTelemetry__Endpoint OpenTelemetry__Headers -o none
+az containerapp secret remove -n lazydad-app -g $RG --secret-names otlp-endpoint
+az keyvault secret delete --vault-name lazydad-kv -n OtlpEndpoint
+```
+
+A new token later (expired or leaked): update `OtlpHeaders` as in step 1, then restart each app's active revision;
+the value is read when a replica starts. Revoke the old token in Grafana.
+
+```bash
+for app in lazydad-app-staging lazydad-app; do
+  az containerapp revision restart -n $app -g $RG \
+    --revision "$(az containerapp show -n $app -g $RG --query properties.latestReadyRevisionName -o tsv)"
+done
+```
+
+**3. Uptime check and alerts (prod only).** Staging's ingress admits listed IPs only, and it scales to zero, so it
+would look down and idle all the time.
+
+- *Testing & synthetics → Synthetics → Add check → HTTP*:
+  `https://lazydad-app.wittyfield-6bfb5662.westeurope.azurecontainerapps.io/healthz`, every 5 minutes from 2–3 EU
+  probes (well inside the free tier's executions), with its built-in alert when the check fails.
+- *Alerting → Contact points*: your email. Then *Alert rules* (Prometheus data source), evaluated every 5 minutes:
+
+  | Alert | Query | Condition |
+  |---|---|---|
+  | A scheduler tick failed | `sum(increase(lazydad_scheduler_ticks_total{job="lazydad-app", outcome="failed"}[15m]))` | > 0 |
+  | No joke saved for 5 hours (ticks run every 4) | `sum(increase(lazydad_jokes_total{job="lazydad-app", outcome="saved"}[5h]))` | < 1; *no data* also alerts |
+  | A model failed or returned nothing | `sum by (model) (increase(lazydad_jokes_total{job="lazydad-app", outcome=~"failed\|empty"}[4h]))` | > 0 |
+  | Server errors | `sum(increase(http_server_request_duration_seconds_count{job="lazydad-app", http_response_status_code=~"5.."}[15m]))` | > 2 |
+
+  Metric names are Grafana's translation of the OpenTelemetry names; if one doesn't match, pick it in the query
+  builder's metric browser.
+
+**4. Log Analytics: cap the fallback.** The console logs keep going to the Container Apps environment's workspace
+(30 days). They were about 8 MB a month, at most 2.2 MB a day (2026-09-26), so a 0.1 GB daily cap never bites
+in normal use but stops a logging bug from running up a bill:
+
+```bash
+az monitor log-analytics workspace update -g $RG -n workspace-lazydadrgseCk --quota 0.1
+```

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Azure;
 using Azure.AI.OpenAI;
 using Azure.Core;
@@ -8,9 +9,15 @@ using Microsoft.Extensions.Options;
 
 namespace LazyDad.Api.Services;
 
-public class LlmClientFactory : ILlmClientFactory
+/// <summary>
+/// One chat client per provider and model, shared for the app's lifetime: the Azure OpenAI client is meant to be
+/// reused, and its telemetry wrapper owns a meter, which would restart the LLM metrics if it were created per call.
+/// Callers may dispose what <see cref="CreateClient"/> returns (a no-op); the factory disposes the shared clients.
+/// </summary>
+public sealed class LlmClientFactory : ILlmClientFactory, IDisposable
 {
     private readonly IOptions<Dictionary<string, LlmProviderOptions>> providers;
+    private readonly ConcurrentDictionary<(string Provider, string Model), Lazy<IChatClient>> clients = new();
     // Entra ID when no API key is configured: the app's managed identity in Azure, the developer's
     // `az login` locally. Created on first use; one per factory (a singleton), so its token cache is shared.
     private readonly Lazy<TokenCredential> entraCredential;
@@ -37,11 +44,31 @@ public class LlmClientFactory : ILlmClientFactory
         if (!providers.Value.TryGetValue(providerName, out var options))
             throw new InvalidOperationException($"LLM provider '{providerName}' is not configured.");
 
-        return providerName switch
+        // GetOrAdd may run its factory more than once for concurrent first callers; only the Lazy it stores
+        // gets created, so exactly one client per model exists.
+        var key = (providerName, modelName);
+        var client = clients.GetOrAdd(key, _ => new Lazy<IChatClient>(() => providerName switch
         {
             "AzureOpenAI" => CreateAzureOpenAIClient(options, modelName),
             _ => throw new NotSupportedException($"LLM provider '{providerName}' is not supported.")
-        };
+        }));
+        try
+        {
+            return new SharedChatClient(client.Value);
+        }
+        catch
+        {
+            // Lazy would keep the exception for good; drop it, so the next call tries again.
+            clients.TryRemove(new KeyValuePair<(string, string), Lazy<IChatClient>>(key, client));
+            throw;
+        }
+    }
+
+    public void Dispose()
+    {
+        foreach (var client in clients.Values.Where(c => c.IsValueCreated))
+            client.Value.Dispose();
+        clients.Clear();
     }
 
     /// <summary>
@@ -56,6 +83,19 @@ public class LlmClientFactory : ILlmClientFactory
             ? new AzureOpenAIClient(new Uri(options.Endpoint), entraCredential.Value, clientOptions())
             : new AzureOpenAIClient(new Uri(options.Endpoint), new AzureKeyCredential(options.ApiKey), clientOptions());
 
-        return client.GetChatClient(modelName).AsIChatClient();
+        // A span and duration/token metrics per call (collected only when telemetry is on, see TelemetryExtensions).
+        // Prompts and responses stay off the spans: that's the default, set explicitly so an OTEL_* setting can't change it.
+        return client.GetChatClient(modelName).AsIChatClient()
+            .AsBuilder()
+            .UseOpenTelemetry(configure: telemetry => telemetry.EnableSensitiveData = false)
+            .Build();
+    }
+
+    /// <summary>A shared client handed to a caller: disposing it leaves the shared client alive.</summary>
+    private sealed class SharedChatClient(IChatClient innerClient) : DelegatingChatClient(innerClient)
+    {
+        protected override void Dispose(bool disposing)
+        {
+        }
     }
 }

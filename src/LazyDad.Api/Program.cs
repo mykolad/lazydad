@@ -2,6 +2,7 @@ using System.Threading.RateLimiting;
 using LazyDad.Api.Configuration;
 using LazyDad.Api.Controllers;
 using LazyDad.Api.Services;
+using LazyDad.Api.Telemetry;
 using LazyDad.Data;
 using LazyDad.Data.Repositories;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -12,6 +13,8 @@ using Microsoft.Extensions.Options;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
+// Traces, metrics and logs to Grafana Cloud, when OTEL_EXPORTER_OTLP_ENDPOINT is set (see TelemetryExtensions).
+builder.AddTelemetry();
 
 // Container Apps' ingress is the only way in; it appends the caller's address to X-Forwarded-For.
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
