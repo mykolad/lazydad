@@ -203,7 +203,13 @@ done
 az containerapp update -n lazydad-app-staging -g $RG --remove-env-vars LlmProviders__AzureOpenAI__ApiKey -o none
 az containerapp secret remove -n lazydad-app-staging -g $RG --secret-names openai-key
 
-# 3. Once both apps run without it: remove the other copies, then turn key auth off for good.
+#    Once staging's startup tick shows jokes from every model, the same for production. Its startup tick on
+#    /status (both models saved, leaderboard not "failed") confirms it.
+az containerapp update -n lazydad-app -g $RG --remove-env-vars LlmProviders__AzureOpenAI__ApiKey -o none
+az containerapp secret remove -n lazydad-app -g $RG --secret-names openai-key
+
+# 3. Only once BOTH apps run without the key (disabling key auth breaks anything still using it): remove the
+#    other copies, then turn key auth off for good.
 az keyvault secret delete --vault-name lazydad-kv -n AzureOpenAIApiKey
 dotnet user-secrets remove "LlmProviders:AzureOpenAI:ApiKey" --project src/LazyDad.Api
 az resource update --ids "$OPENAI_ID" --set properties.disableLocalAuth=true
