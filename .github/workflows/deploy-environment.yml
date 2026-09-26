@@ -101,6 +101,18 @@ jobs:
         env:
           SQL_CONNECTION_STRING: ${{ secrets.SQL_CONNECTION_STRING }}
         run: |
+          # While the environment still has a SQL_CONNECTION_STRING secret (SQL login), use it. Without
+          # one, log in with Entra ID (issue #11) as this job's identity: azure/login left the runner signed
+          # in as lazydad-github-cd, which "Active Directory Default" picks up through the Azure CLI.
+          if [ -z "$SQL_CONNECTION_STRING" ]; then
+            case "${{ inputs.environment }}" in
+              production) database=lazydad-db ;;
+              staging) database=lazydad-db-staging ;;
+              *) echo "::error::No database known for environment '${{ inputs.environment }}'."; exit 1 ;;
+            esac
+            SQL_CONNECTION_STRING="Server=tcp:$SQL_SERVER.database.windows.net,1433;Database=$database;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60"
+            echo "Migrating $database with Entra ID (no SQL_CONNECTION_STRING secret)."
+          fi
           chmod +x ./efbundle
           # A paused serverless DB (staging) can take a minute to resume; retry the whole bundle.
           for attempt in 1 2 3; do

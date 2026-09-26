@@ -217,3 +217,85 @@ dotnet user-secrets remove "LlmProviders:AzureOpenAI:ApiKey" --project src/LazyD
 gh variable set ROLLBACK_MIN_COMMIT --body "<merge commit of the Entra ID PR on master>"
 az resource update --ids "$OPENAI_ID" --set properties.disableLocalAuth=true
 ```
+
+## 9. Azure SQL with Entra ID, no passwords (issue #11)
+
+Everything connects as `sqladmin` today. The target is least-privilege Entra identities and no SQL
+passwords anywhere. It uses the apps' **system-assigned identities**, one per app, so staging can't reach
+the prod database. Section 8 (Azure OpenAI) assigns the same ones; if you haven't done that yet:
+
+```bash
+for app in lazydad-app-staging lazydad-app; do
+  az containerapp identity assign -n $app -g $RG --system-assigned -o none
+done
+```
+
+| Principal | Database | Roles |
+|---|---|---|
+| `lazydad-app` (system-assigned) | `lazydad-db` | `db_datareader`, `db_datawriter` |
+| `lazydad-app-staging` (system-assigned) | `lazydad-db-staging` | `db_datareader`, `db_datawriter` |
+| `lazydad-github-cd` (Deploy Environment's migrations) | both | `db_ddladmin`, `db_datareader`, `db_datawriter` |
+
+**1. Create the database users**, as the server's Entra admin (your account). Use the portal's Query editor,
+Azure Data Studio or `sqlcmd -G`. `WITH OBJECT_ID` avoids a directory lookup by display name:
+
+```bash
+az containerapp show -n lazydad-app -g $RG --query identity.principalId -o tsv          # <app-oid>
+az containerapp show -n lazydad-app-staging -g $RG --query identity.principalId -o tsv  # <staging-oid>
+az identity show -g $RG -n lazydad-github-cd --query principalId -o tsv                # <cd-oid>
+```
+
+```sql
+-- In lazydad-db:
+CREATE USER [lazydad-app] FROM EXTERNAL PROVIDER WITH OBJECT_ID = '<app-oid>';
+ALTER ROLE db_datareader ADD MEMBER [lazydad-app];
+ALTER ROLE db_datawriter ADD MEMBER [lazydad-app];
+CREATE USER [lazydad-github-cd] FROM EXTERNAL PROVIDER WITH OBJECT_ID = '<cd-oid>';
+ALTER ROLE db_ddladmin ADD MEMBER [lazydad-github-cd];
+ALTER ROLE db_datareader ADD MEMBER [lazydad-github-cd];
+ALTER ROLE db_datawriter ADD MEMBER [lazydad-github-cd];
+
+-- In lazydad-db-staging: the same, with [lazydad-app-staging] and <staging-oid> instead of the prod app.
+```
+
+**2. Switch staging, then prod**, one app at a time. The password connection string stays in `sql-conn`
+until the lock-down, so switching back is one command:
+
+```bash
+APP=lazydad-app-staging; DB=lazydad-db-staging; ENV=staging     # then: lazydad-app / lazydad-db / production
+# A new secret with the managed-identity connection string (system-assigned needs no User Id), and a
+# revision that uses it. The old revision serves until the new one is up.
+az containerapp secret set -n $APP -g $RG --secrets \
+  "sql-conn-entra=Server=tcp:lazydad-sql-swedencentral.database.windows.net,1433;Database=$DB;Authentication=Active Directory Managed Identity;Encrypt=True"
+az containerapp update -n $APP -g $RG --set-env-vars ConnectionStrings__DefaultConnection=secretref:sql-conn-entra \
+  --revision-suffix entra-sql -o none
+# Check the new revision's startup tick on /status: jokes saved, leaderboard not "failed". If it can't
+# reach the database, switch back:
+#   az containerapp update -n $APP -g $RG --set-env-vars ConnectionStrings__DefaultConnection=secretref:sql-conn --revision-suffix password-sql -o none
+
+# CD: without the environment secret, Deploy Environment migrates with Entra ID as lazydad-github-cd.
+gh secret delete SQL_CONNECTION_STRING --env $ENV
+```
+
+Run **Deploy Master** (or Deploy Branch to Staging with *run-migrations* for staging): the migration step logs
+"Migrating <database> with Entra ID", and the smoke tests prove the app reads and writes. If the migration
+can't log in, put the secret back (`gh secret set SQL_CONNECTION_STRING --env $ENV`) and check the
+`lazydad-github-cd` user in that database. Then repeat for production.
+
+**3. Lock down**, only once both apps **and** both migration runs work without the password:
+
+```bash
+# Every stored copy of the password goes. Key Vault only soft-deletes, so purge too (allowed while purge
+# protection is off; otherwise it stays recoverable until the retention period ends).
+az keyvault secret delete --vault-name lazydad-kv -n SqlConnectionString
+az keyvault secret purge  --vault-name lazydad-kv -n SqlConnectionString
+for app in lazydad-app-staging lazydad-app; do az containerapp secret remove -n $app -g $RG --secret-names sql-conn; done
+dotnet user-secrets set "ConnectionStrings:DefaultConnection" \
+  "Server=tcp:lazydad-sql-swedencentral.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True" \
+  --project src/LazyDad.Api
+# sqladmin stops working everywhere, so any copy of the password left anywhere is useless from here on.
+az sql server ad-only-auth enable -g $RG -n lazydad-sql-swedencentral
+```
+
+Entra-only authentication can be turned off again (`ad-only-auth disable`) if something was missed.
+The CI job `clean-database-migrations` uses SQL auth against its own throwaway container, so it's unaffected.
