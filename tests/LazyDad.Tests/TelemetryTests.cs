@@ -85,6 +85,8 @@ public class TelemetryTests
         Assert.True(app.Services.GetRequiredService<TracerProvider>().ForceFlush());
         Assert.True(app.Services.GetRequiredService<MeterProvider>().ForceFlush());
         Assert.True(app.Services.GetRequiredService<LoggerProvider>().ForceFlush());
+        // A flush can finish with its export still being retried (e.g. on a busy CI runner): wait for all three.
+        await collector.WaitForAsync(["/otlp/v1/traces", "/otlp/v1/metrics", "/otlp/v1/logs"], TimeSpan.FromSeconds(30));
         await app.StopAsync();
 
         // http/protobuf by default (not the .NET exporter's gRPC), with the signal paths appended to the base URL.
@@ -117,6 +119,13 @@ public class TelemetryTests
         public IReadOnlyList<string> Paths { get { lock (requests) return requests.Select(r => r.Path).ToList(); } }
 
         public IReadOnlyList<string?> AuthorizationHeaders { get { lock (requests) return requests.Select(r => r.Authorization).ToList(); } }
+
+        public async Task WaitForAsync(string[] paths, TimeSpan timeout)
+        {
+            var deadline = DateTime.UtcNow + timeout;
+            while (!paths.All(Paths.Contains) && DateTime.UtcNow < deadline)
+                await Task.Delay(50);
+        }
 
         public string Body(string path)
         {

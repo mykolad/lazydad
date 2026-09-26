@@ -69,7 +69,7 @@ public class LlmClientFactoryTests
     }
 
     [Fact]
-    public async Task CreateClient_ForConcurrentFirstCallers_CreatesOneClient()
+    public void CreateClient_ForConcurrentFirstCallers_CreatesOneClient()
     {
         var created = 0;
         using var factory = new LlmClientFactory(
@@ -86,12 +86,16 @@ public class LlmClientFactoryTests
                 return new AzureOpenAIClientOptions();
             });
         using var start = new Barrier(8);
+        var clients = new IChatClient[8];
 
-        var clients = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
+        // Dedicated threads, not the thread pool: blocking 8 pool threads starves tests running in parallel.
+        var threads = Enumerable.Range(0, clients.Length).Select(i => new Thread(() =>
         {
             start.SignalAndWait();
-            return factory.CreateClient("AzureOpenAI", "gpt-6-luna");
-        })));
+            clients[i] = factory.CreateClient("AzureOpenAI", "gpt-6-luna");
+        })).ToList();
+        threads.ForEach(t => t.Start());
+        threads.ForEach(t => t.Join());
 
         Assert.Equal(1, created);
         Assert.Single(clients.Select(c => c.GetService<OpenTelemetryChatClient>()).Distinct());
