@@ -210,10 +210,10 @@ gh variable set AZURE_CLIENT_ID       --body (az identity show -g $RG -n lazydad
 gh variable set AZURE_TENANT_ID       --body (az account show --query tenantId -o tsv)
 gh variable set AZURE_SUBSCRIPTION_ID --body (az account show --query id -o tsv)
 
-# Typed in without echo (Read-Host input isn't saved in the history). Unlike the bash pipe, the value is on gh's
-# command line while it runs: a pipe from PowerShell would add a trailing newline to the secret.
-gh secret set SQL_CONNECTION_STRING --env staging    --body (Read-Host 'staging connection string' -MaskInput)
-gh secret set SQL_CONNECTION_STRING --env production --body (Read-Host 'prod connection string' -MaskInput)
+# Without --body, gh prompts for the value with hidden input: it's never on a command line or in the history.
+# (Not a pipe: PowerShell would add a trailing newline to the secret.)
+gh secret set SQL_CONNECTION_STRING --env staging
+gh secret set SQL_CONNECTION_STRING --env production
 ```
 
 </details>
