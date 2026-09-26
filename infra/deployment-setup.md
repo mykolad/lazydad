@@ -312,9 +312,11 @@ older images send nothing. What goes out, and what doesn't:
   (`gen_ai_client_*`), SQL, .NET runtime, and the scheduler's own counters: `lazydad_scheduler_ticks_total`
   (outcome `succeeded`/`failed`/`skipped`), `lazydad_jokes_total` (per model, `saved`/`empty`/`failed`),
   `lazydad_leaderboard_updates_total`.
-- **Logs:** everything the app logs through `ILogger`, linked to its trace.
-- **Never:** visitor IPs, user agents or any other visitor data (`PersonalDataFilter` strips them before export),
-  or LLM prompts and responses. The joke text is in the logs, but it's public on the page anyway.
+- **Logs:** everything the app logs through `ILogger`, linked to its trace. That includes model output the app logs
+  on purpose: each saved joke's text, and the judge's raw answer when it's invalid (to debug it). It's only about
+  the (public) jokes; the LLM spans themselves don't record prompts or responses.
+- **Never:** visitor IPs, user agents or any other visitor data (`PersonalDataFilter` strips them before export).
+  Nothing the app logs is about visitors; keep it that way.
 
 Each app reports as its own service (`service.name` = the Container App's name, so `job="lazydad-app"` in PromQL).
 The console logs still go to Log Analytics as the fallback (step 4).

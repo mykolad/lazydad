@@ -72,7 +72,9 @@ tests/LazyDad.SmokeTests — smoke tests against a deployed app (run by Deploy M
   `OTEL_*` variables apply, with `http/protobuf` as the default protocol. A trace per request (not `/healthz`) and per
   scheduler tick (`joke tick`); `SchedulerMetrics` counts ticks, jokes and leaderboard updates by outcome, next to
   `/status`. **No visitor data:** `PersonalDataFilter` strips IPs and user agents from spans before export (a test
-  checks the exported bytes), and LLM prompts/responses aren't captured. Keep metric tags bounded (no joke ids).
+  checks the exported bytes), and the LLM spans don't record prompts or responses. All `ILogger` logs are exported,
+  including the model output they contain on purpose (saved jokes, an invalid judge answer): never log anything about
+  visitors. Keep metric tags bounded (no joke ids).
 - `LlmClientFactory` keeps **one chat client per model** for the app's lifetime (wrapped with `UseOpenTelemetry()`);
   callers may still dispose theirs (a no-op). Creating one per call would restart the LLM metrics every tick.
 

@@ -84,7 +84,7 @@ public sealed class LlmClientFactory : ILlmClientFactory, IDisposable
             : new AzureOpenAIClient(new Uri(options.Endpoint), new AzureKeyCredential(options.ApiKey), clientOptions());
 
         // A span and duration/token metrics per call (collected only when telemetry is on, see TelemetryExtensions).
-        // Prompts and responses stay out of it: that's the default, set explicitly so an OTEL_* setting can't change it.
+        // Prompts and responses stay off the spans: that's the default, set explicitly so an OTEL_* setting can't change it.
         return client.GetChatClient(modelName).AsIChatClient()
             .AsBuilder()
             .UseOpenTelemetry(configure: telemetry => telemetry.EnableSensitiveData = false)
