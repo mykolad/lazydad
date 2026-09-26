@@ -21,6 +21,9 @@
   --color-accent-2-700: #56633f; --color-accent-2-800: #3d472b; --color-accent-2-900: #272e1b;
 
   --shadow-md: 0 3px 10px color-mix(in srgb, #2e2b25 16%, transparent);
+  /* Fill of selected pills (language, theme, sort). The light theme darkens the design's accent,
+     so their small light labels reach WCAG AA contrast (~5.7:1 instead of ~3:1). */
+  --color-selected: #8c491a;
 
   /* Nunito everywhere (it has Cyrillic); Caprasimo is Latin-only, so only the wordmark uses it. */
   --font-body: "Nunito", system-ui, sans-serif;
@@ -51,6 +54,7 @@
   --color-accent-2-700: #ccdbb2; --color-accent-2-800: #e1eecc; --color-accent-2-900: #f0fae1;
 
   --shadow-md: 0 0 0 1px color-mix(in srgb, #f3e8d6 8%, transparent), 0 4px 14px rgba(0, 0, 0, .35);
+  --color-selected: #d67f48;
   color-scheme: dark;
 }
 
@@ -102,7 +106,7 @@ svg { display: block; flex: none; }
   font: 600 12px var(--font-body); letter-spacing: .04em; background: transparent; color: var(--color-text);
 }
 .ld-pills .ld-icon-btn { min-width: 0; width: 32px; padding: 0; display: grid; place-items: center; }
-.ld-pills button[aria-pressed="true"] { background: var(--color-accent); color: var(--color-bg); }
+.ld-pills button[aria-pressed="true"] { background: var(--color-selected); color: var(--color-bg); }
 
 /* — layout — */
 .ld-main {
@@ -188,7 +192,7 @@ a.ld-version:hover { color: var(--color-text); }
 }
 .ld-seg-opt + .ld-seg-opt { border-left: 1px solid var(--color-divider); }
 .ld-seg-opt input { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; }
-.ld-seg-opt:has(input:checked) { background: var(--color-accent); color: var(--color-bg); }
+.ld-seg-opt:has(input:checked) { background: var(--color-selected); color: var(--color-bg); }
 .ld-seg-opt:not(:has(input:checked)):hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
 .ld-seg-opt:has(input:focus-visible) { outline: 2px solid var(--color-accent); outline-offset: -2px; }
 

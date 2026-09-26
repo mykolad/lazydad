@@ -65,10 +65,12 @@ public class JokeSchedulerService : BackgroundService
 
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
-            // Advance before the tick runs; skip periods the timer coalesced if a tick overran.
+            await RunTickAsync(language, stoppingToken);
+            // Advance only once the tick (jokes and leaderboard) is done: until then the due time
+            // stays in the past, which tells the page to keep polling for the batch. Skips periods
+            // the timer coalesced if a tick overran.
             do nextTick += period; while (nextTick <= DateTime.UtcNow);
             status.RecordNextTick(language.Language, nextTick);
-            await RunTickAsync(language, stoppingToken);
         }
     }
 

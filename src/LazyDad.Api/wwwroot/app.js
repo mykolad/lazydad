@@ -165,12 +165,30 @@
   async function loadSummary() {
     const summary = await getJson('jokes/summary');
     summaryRefreshedAt = Date.now();
+    // A new count or a new due time (the scheduler moves it once a batch, leaderboard included, is
+    // done) means there's something new to show.
+    const changed = state.count !== null &&
+      (summary.count !== state.count || summary.nextBatchAt !== state.nextBatchAt);
     state.count = summary.count;
     state.nextBatchAt = summary.nextBatchAt;
     renderCount();
     renderCountdown();
-    // The first batch has landed while the empty state was showing: load it.
     if (state.view === 'empty' && summary.count > 0) await showFirstBatch();
+    else if (state.view === 'feed' && changed) await showLatest();
+  }
+
+  // After a batch: the leaderboard may have changed, and the newest jokes sort before the feed's
+  // cursor, so prepend them (the browser's scroll anchoring keeps the reader's place).
+  async function showLatest() {
+    const generation = state.generation;
+    await loadTop();
+    showView(state.view);
+    if (state.sort !== 'new') return;
+    const page = await getJson(`jokes/feed?sort=new&limit=${PAGE_SIZE}`);
+    if (generation !== state.generation) return;
+    const fresh = page.items.filter(j => !state.feed.includes(j.id)).map(remember);
+    state.feed.unshift(...fresh.map(j => j.id));
+    $('ld-list').insertAdjacentHTML('afterbegin', fresh.map(rowHtml).join(''));
   }
 
   async function showFirstBatch() {

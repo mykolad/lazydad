@@ -17,7 +17,10 @@ public class SchedulerStatus
 
     public IReadOnlyList<TickStatus> LastTicks => lastTicks.Values.OrderBy(t => t.Language, StringComparer.Ordinal).ToList();
 
-    /// <summary>When the language's next scheduled tick is due (UTC).</summary>
+    /// <summary>
+    /// When the language's next scheduled tick is due (UTC). Recorded after a tick completes, so while
+    /// one runs the value is already due (in the past), and a change means a batch is complete.
+    /// </summary>
     public void RecordNextTick(string language, DateTime dueAt) => nextTicks[language] = dueAt;
 
     /// <summary>The earliest scheduled tick of any language (the page's countdown), or <c>null</c> before the first is scheduled.</summary>
