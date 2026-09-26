@@ -60,9 +60,13 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
     [Theory]
     [InlineData("app.js", "text/javascript")]
     [InlineData("app.css", "text/css")]
+    // Static files with an unknown extension aren't served, so check the unusual ones too.
+    [InlineData("favicon.ico", "image/x-icon")]
+    [InlineData("site.webmanifest", "application/manifest+json")]
+    [InlineData("logo.svg", "image/svg+xml")]
     public async Task PageAssets_AreServed(string path, string mediaType)
     {
-        // The page is a shell: without these, it shows nothing but the loading skeleton.
+        // The page is a shell (app.js/app.css render it) with brand files from wwwroot.
         using var response = await target.Client.GetAsync(path);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);

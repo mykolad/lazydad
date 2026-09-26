@@ -40,6 +40,8 @@ tests/LazyDad.SmokeTests — smoke tests against a deployed app (run by Deploy M
   feed (infinite scroll, pages of 20, sort Newest / Top voted), votes, copy/share, the countdown,
   UA/EN interface (jokes stay Ukrainian), and light/dark/system theme. Preferences and the reader's
   votes live in `localStorage`. `wwwroot/app.css` has the Organic design tokens (dark = reversed ramps).
+  Brand files (sloth logo per theme, favicons, `site.webmanifest`) are static files in `wwwroot`.
+  Design spec and deviations: `docs/design/redesign-2026-09.md`.
 - **API for the page:** `GET /jokes/feed?sort=new|top&limit=(≤ 50)[&after=<next>]` → `{total, items, next}` (keyset cursor, so new jokes don't shift pages);
   `GET /jokes/summary` → `{count, nextBatchAt}`; `POST /jokes/{id}/vote {value, previous}` → `{up, down}`.
 - **Votes are anonymous.** The browser remembers its vote and sends it as `previous`, so switching or
