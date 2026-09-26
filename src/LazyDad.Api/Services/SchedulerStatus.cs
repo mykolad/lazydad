@@ -29,7 +29,7 @@ public class SchedulerStatus
 
 /// <param name="Leaderboard">
 /// <c>updated</c>, <c>unchanged</c> (also when the leaderboard is disabled or had nothing to judge),
-/// or <c>failed</c>.
+/// <c>failed</c>, or <c>skipped</c> (another replica generated this period; no jokes, nothing judged).
 /// </param>
 /// <param name="Error">The exception type only: /status is public, so no messages or details.</param>
 public sealed record TickStatus(

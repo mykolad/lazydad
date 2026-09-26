@@ -11,6 +11,9 @@ public class JokeSchedulerService : BackgroundService
     private readonly IOptions<JokeGenerationOptions> options;
     private readonly SchedulerStatus status;
     private readonly ILogger<JokeSchedulerService> logger;
+    // Identifies this process in SchedulerLocks: the machine (the Container Apps replica) plus a per-process part.
+    private readonly string instanceId =
+        $"{(Environment.MachineName.Length > 60 ? Environment.MachineName[..60] : Environment.MachineName)}/{Guid.NewGuid():N}";
 
     public JokeSchedulerService(
         IServiceScopeFactory scopeFactory,
@@ -59,7 +62,7 @@ public class JokeSchedulerService : BackgroundService
             language.Language, language.IntervalHours, language.LlmModels.Count);
 
         // Generate immediately on startup, then on each period.
-        await RunTickAsync(language, stoppingToken);
+        await RunTickAsync(language, startup: true, stoppingToken);
 
         // Ticks are due every period from here (the page's countdown to the next batch). A delay to
         // each due time rather than a PeriodicTimer: a timer keeps a tick that fell due during an
@@ -75,7 +78,7 @@ public class JokeSchedulerService : BackgroundService
                 await Task.Delay(wait, stoppingToken);
             stoppingToken.ThrowIfCancellationRequested();
 
-            await RunTickAsync(language, stoppingToken);
+            await RunTickAsync(language, startup: false, stoppingToken);
             // Advance only once the tick (jokes and leaderboard) is done: until then the due time
             // stays in the past, which tells the page to keep polling for the batch. Due times that
             // passed while an overrunning tick ran are skipped, not run back to back.
@@ -88,10 +91,17 @@ public class JokeSchedulerService : BackgroundService
     /// Runs one tick. Any failure (e.g. a transient DB error while ranking the leaderboard) is
     /// logged, so the loop survives and retries on the next tick instead of stopping the host.
     /// </summary>
-    private async Task RunTickAsync(LanguageOptions language, CancellationToken stoppingToken)
+    internal async Task RunTickAsync(LanguageOptions language, bool startup, CancellationToken stoppingToken)
     {
         try
         {
+            if (!await TakeTurnAsync(language, startup, stoppingToken))
+            {
+                status.Record(new TickStatus(language.Language, DateTime.UtcNow, true, [], "skipped", null));
+                logger.LogInformation("Skipped the '{Language}' tick: another replica generated this period.", language.Language);
+                return;
+            }
+
             var (saved, leaderboard) = await GenerateAndPersistAsync(language, stoppingToken);
             status.Record(new TickStatus(
                 language.Language, DateTime.UtcNow, true,
@@ -107,6 +117,31 @@ public class JokeSchedulerService : BackgroundService
             status.Record(new TickStatus(language.Language, DateTime.UtcNow, false, [], "unknown", ex.GetType().Name));
             logger.LogError(ex, "Joke tick for '{Language}' failed; will retry on the next tick.", language.Language);
         }
+    }
+
+    /// <summary>
+    /// One batch per language per period across all replicas: a lease in <c>SchedulerLocks</c> that lasts
+    /// until just before the next due time. A replica whose timer fires while another holds it skips that
+    /// tick; if the holder is gone, the next replica whose timer fires takes over. The startup tick always
+    /// runs and takes the lease: a new revision proves itself with it (the deploy's smoke tests check it),
+    /// and it usually starts while the old revision still holds the lease.
+    /// </summary>
+    private async Task<bool> TakeTurnAsync(LanguageOptions language, bool startup, CancellationToken stoppingToken)
+    {
+        var period = TimeSpan.FromHours(language.IntervalHours);
+        // Ends a little early, so the holder's own next due time finds it expired.
+        var margin = TimeSpan.FromTicks(Math.Min(TimeSpan.FromMinutes(5).Ticks, period.Ticks / 10));
+        var now = DateTime.UtcNow;
+        var lockKey = $"jokes:{language.Language}";
+
+        using var scope = scopeFactory.CreateScope();
+        var locks = scope.ServiceProvider.GetRequiredService<ISchedulerLockRepository>();
+        if (startup)
+        {
+            await locks.AcquireAsync(lockKey, instanceId, now, now + period - margin, stoppingToken);
+            return true;
+        }
+        return await locks.TryAcquireAsync(lockKey, instanceId, now, now + period - margin, stoppingToken);
     }
 
     private async Task<(IReadOnlyList<Joke> Saved, string Leaderboard)> GenerateAndPersistAsync(LanguageOptions language, CancellationToken stoppingToken)

@@ -49,6 +49,7 @@ builder.Services.Configure<Dictionary<string, LlmProviderOptions>>(
 
 builder.Services.AddScoped<IJokeRepository, JokeRepository>();
 builder.Services.AddScoped<ITopJokeRepository, TopJokeRepository>();
+builder.Services.AddScoped<ISchedulerLockRepository, SchedulerLockRepository>();
 
 builder.Services.AddSingleton<ILlmClientFactory, LlmClientFactory>();
 builder.Services.AddScoped<JokeGenerationService>();
