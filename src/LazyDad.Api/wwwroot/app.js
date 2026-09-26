@@ -88,6 +88,7 @@
     done: false,
     pageFailed: false,
     generation: 0,
+    refreshPending: false,    // a batch landed but showing it failed; retry on the next poll
     copied: null
   };
   const pendingVotes = new Map();
@@ -171,10 +172,17 @@
       (summary.count !== state.count || summary.nextBatchAt !== state.nextBatchAt);
     state.count = summary.count;
     state.nextBatchAt = summary.nextBatchAt;
+    // Cleared only once the refresh succeeds: until then the countdown keeps polling (see renderCountdown).
+    if (changed) state.refreshPending = true;
     renderCount();
     renderCountdown();
-    if (state.view === 'empty' && summary.count > 0) await showFirstBatch();
-    else if (state.view === 'feed' && changed) await showLatest();
+    if (state.view === 'empty' && summary.count > 0) {
+      await showFirstBatch();
+      state.refreshPending = false;
+    } else if (state.view === 'feed' && state.refreshPending) {
+      await showLatest();
+      state.refreshPending = false;
+    }
   }
 
   // After a batch: the leaderboard may have changed, and the newest jokes sort before the feed's
@@ -288,8 +296,9 @@
     $('ld-empty-text').innerHTML = text === null
       ? esc(t().emptySoon)
       : `${esc(t().emptyB)} <strong>${esc(text)}</strong>.`;
-    // The batch is due (or the scheduler hadn't planned one yet): ask again, at most once a minute.
-    if (at === null && state.view !== 'loading' && Date.now() - summaryRefreshedAt > 60000) {
+    // The batch is due (or the scheduler hadn't planned one yet), or the refresh after one failed:
+    // ask again, at most once a minute.
+    if ((at === null || state.refreshPending) && state.view !== 'loading' && Date.now() - summaryRefreshedAt > 60000) {
       summaryRefreshedAt = Date.now();
       loadSummary().catch(() => { /* keep the last values */ });
     }
