@@ -56,16 +56,24 @@ public class JokeSchedulerService : BackgroundService
         // Generate immediately on startup, then on each period.
         await RunTickAsync(language, stoppingToken);
 
-        using var timer = new PeriodicTimer(TimeSpan.FromHours(language.IntervalHours));
+        var period = TimeSpan.FromHours(language.IntervalHours);
+        using var timer = new PeriodicTimer(period);
+        // The timer fires every period from its creation, so the due times are known in advance
+        // (the page's countdown to the next batch).
+        var nextTick = DateTime.UtcNow + period;
+        status.RecordNextTick(language.Language, nextTick);
 
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
+            // Advance before the tick runs; skip periods the timer coalesced if a tick overran.
+            do nextTick += period; while (nextTick <= DateTime.UtcNow);
+            status.RecordNextTick(language.Language, nextTick);
             await RunTickAsync(language, stoppingToken);
         }
     }
 
     /// <summary>
-    /// Runs one tick. Any failure (e.g. a transient DB error during HTML regeneration) is
+    /// Runs one tick. Any failure (e.g. a transient DB error while ranking the leaderboard) is
     /// logged, so the loop survives and retries on the next tick instead of stopping the host.
     /// </summary>
     private async Task RunTickAsync(LanguageOptions language, CancellationToken stoppingToken)
@@ -97,7 +105,6 @@ public class JokeSchedulerService : BackgroundService
         using var scope = scopeFactory.CreateScope();
         var jokeRepository = scope.ServiceProvider.GetRequiredService<IJokeRepository>();
         var topJokeService = scope.ServiceProvider.GetRequiredService<TopJokeService>();
-        var htmlGenerator = scope.ServiceProvider.GetRequiredService<HtmlGeneratorService>();
 
         var saved = new List<Joke>();
 
@@ -121,12 +128,10 @@ public class JokeSchedulerService : BackgroundService
         }
 
         // Runs even when nothing new was saved, so an empty leaderboard still gets seeded.
-        var topChanged = false;
         var leaderboard = "unchanged";
         try
         {
-            topChanged = await topJokeService.UpdateAsync(language.Language, saved, stoppingToken);
-            if (topChanged)
+            if (await topJokeService.UpdateAsync(language.Language, saved, stoppingToken))
                 leaderboard = "updated";
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -138,9 +143,6 @@ public class JokeSchedulerService : BackgroundService
             leaderboard = "failed";
             logger.LogError(ex, "Failed to update the top jokes for '{Language}'.", language.Language);
         }
-
-        if (saved.Count > 0 || topChanged)
-            await htmlGenerator.RegenerateAsync(stoppingToken);
 
         return (saved, leaderboard);
     }

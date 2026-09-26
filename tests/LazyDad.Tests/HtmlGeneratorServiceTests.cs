@@ -1,48 +1,79 @@
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using LazyDad.Api.Configuration;
 using LazyDad.Api.Services;
-using LazyDad.Data.Entities;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using Moq;
 
 namespace LazyDad.Tests;
 
 public class HtmlGeneratorServiceTests
 {
-    private static Joke MakeJoke(string language, string text)
-        => new() { Id = 1, Language = language, Model = "gpt-5.3-chat", Text = text, GeneratedAt = new DateTime(2026, 9, 24, 0, 0, 0, DateTimeKind.Utc) };
+    private static readonly AppInfoOptions PipelineBuild = new()
+    {
+        Version = "e33d99a",
+        Revision = "e33d99a1234567890abcdef1234567890abcdef",
+        CommitDate = new DateTimeOffset(2026, 9, 25, 21, 5, 0, TimeSpan.FromHours(3)),
+        SourceUrl = "https://github.com/mykolad/lazydad/"
+    };
+
+    private static string Build(AppInfoOptions appInfo)
+        => HtmlGeneratorService.BuildHtml(new Dictionary<string, string> { ["Ukrainian"] = "uk" }, appInfo);
 
     [Fact]
-    public void BuildHtml_TagsJokeWithConfiguredLanguageCode()
+    public void BuildHtml_IsTheShellForAppJs_WithVersionedAssets()
     {
-        var codes = new Dictionary<string, string> { ["Ukrainian"] = "uk" };
+        var html = Build(PipelineBuild);
 
-        var html = HtmlGeneratorService.BuildHtml([MakeJoke("Ukrainian", "Жарт")], [], codes, new AppInfoOptions());
-
-        Assert.Contains("<html lang=\"en\">", html);
-        Assert.Contains("<p lang=\"uk\">Жарт</p>", html);
+        Assert.Contains("<title>LazyDad</title>", html);
+        Assert.Contains("<html lang=\"uk\" data-theme=\"light\">", html);
+        Assert.Contains("<link rel=\"stylesheet\" href=\"app.css?v=e33d99a\">", html);
+        Assert.Contains("<script src=\"app.js?v=e33d99a\" defer></script>", html);
+        // Every element app.js looks up by id is in the shell.
+        foreach (var id in new[] { "ld-count", "ld-next", "ld-countdown", "ld-loading", "ld-loading-text", "ld-empty", "ld-empty-text",
+                     "ld-aside", "ld-spotlight", "ld-toplist", "ld-feed", "ld-list", "ld-sentinel", "ld-more", "ld-end", "ld-config" })
+            Assert.Contains($"id=\"{id}\"", html);
     }
 
     [Fact]
-    public void BuildHtml_WithoutLanguageCode_OmitsLangAttribute()
+    public void BuildHtml_SetsTheThemeBeforeFirstPaint()
     {
-        var html = HtmlGeneratorService.BuildHtml([MakeJoke("Klingon", "Joke")], [], new Dictionary<string, string>(), new AppInfoOptions());
+        var html = Build(PipelineBuild);
 
-        Assert.Contains("<p>Joke</p>", html);
+        // The bootstrap script comes before the stylesheet, so the first paint already has the theme.
+        var bootstrap = html.IndexOf("localStorage.getItem('lazydad.theme')", StringComparison.Ordinal);
+        Assert.True(bootstrap >= 0 && bootstrap < html.IndexOf("app.css", StringComparison.Ordinal));
+        Assert.Contains("prefers-color-scheme: dark", html);
     }
 
     [Fact]
-    public void BuildHtml_EscapesJokeText()
+    public void BuildHtml_EmbedsTheLanguageCodesAsJson()
     {
-        var html = HtmlGeneratorService.BuildHtml([MakeJoke("Ukrainian", "<script>alert(\"x\")</script> & co")], [], new Dictionary<string, string>(), new AppInfoOptions());
+        var html = Build(PipelineBuild);
 
-        Assert.Contains("&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; co", html);
-        Assert.DoesNotContain("<script>", html);
+        var json = Regex.Match(html, "<script type=\"application/json\" id=\"ld-config\">(.*?)</script>").Groups[1].Value;
+        using var config = JsonDocument.Parse(json);
+        Assert.Equal("uk", config.RootElement.GetProperty("languageCodes").GetProperty("Ukrainian").GetString());
     }
 
     [Fact]
-    public void BuildHtml_WithNoJokes_ShowsEmptyMessage()
+    public void BuildHtml_ConfigJson_CannotCloseTheScriptElement()
     {
-        var html = HtmlGeneratorService.BuildHtml([], [], new Dictionary<string, string>(), new AppInfoOptions());
+        var html = HtmlGeneratorService.BuildHtml(new Dictionary<string, string> { ["</script><b>"] = "x" }, PipelineBuild);
 
-        Assert.Contains("No jokes yet", html);
+        Assert.DoesNotContain("</script><b>", html);
+    }
+
+    [Fact]
+    public void BuildHtml_ShowsTheVersionUnderTheTopThree()
+    {
+        var html = Build(PipelineBuild);
+
+        var panel = html.IndexOf("id=\"ld-spotlight\"", StringComparison.Ordinal);
+        var version = html.IndexOf("class=\"ld-version\"", StringComparison.Ordinal);
+        Assert.True(panel >= 0 && version > panel, "The version link should follow the Top 3 panel in the aside.");
     }
 
     [Fact]
@@ -64,69 +95,66 @@ public class HtmlGeneratorServiceTests
     }
 
     [Fact]
-    public void BuildHtml_RendersTopSectionWithMedalReasonAndLanguage()
+    public void VersionHtml_ForPipelineBuild_ShowsCalVerAndShortSha_LinkedToTheCommit()
     {
-        var joke = MakeJoke("Ukrainian", "Найкращий жарт");
-        var top = new TopJoke { Language = "Ukrainian", Rank = 1, JokeId = joke.Id, Joke = joke, Reason = "Clever <pun>", JudgeModel = "gpt-6-sol" };
-        var codes = new Dictionary<string, string> { ["Ukrainian"] = "uk" };
+        var html = HtmlGeneratorService.VersionHtml(PipelineBuild);
 
-        var html = HtmlGeneratorService.BuildHtml([joke], [top], codes, new AppInfoOptions());
-
-        Assert.Contains("<h2>Top 1 &middot; Ukrainian</h2>", html);
-        Assert.Contains("🥇</span><span lang=\"uk\">Найкращий жарт</span>", html);
-        Assert.Contains("Clever &lt;pun&gt;", html);
-        Assert.Contains("judged by gpt-6-sol", html);
-        Assert.Contains("<h2>All jokes</h2>", html);
+        Assert.StartsWith("<a class=\"ld-version\"", html);
+        Assert.Contains("href=\"https://github.com/mykolad/lazydad/commit/e33d99a1234567890abcdef1234567890abcdef\"", html);
+        Assert.Contains("<span>v2026.09.25</span><span class=\"ld-sha\">e33d99a</span>", html);
     }
 
     [Fact]
-    public void VersionText_ForPipelineBuild_ShowsCalVerAndLinkedShortSha()
-    {
-        var appInfo = new AppInfoOptions
-        {
-            Version = "e33d99a",
-            Revision = "e33d99a1234567890abcdef1234567890abcdef",
-            CommitDate = new DateTimeOffset(2026, 9, 25, 21, 5, 0, TimeSpan.FromHours(3)),
-            SourceUrl = "https://github.com/mykolad/lazydad/"
-        };
-
-        var text = HtmlGeneratorService.VersionText(appInfo);
-
-        Assert.Equal(
-            "Version 2026.09.25 &middot; <a href=\"https://github.com/mykolad/lazydad/commit/e33d99a1234567890abcdef1234567890abcdef\">e33d99a</a>",
-            text);
-    }
-
-    [Fact]
-    public void VersionText_UsesTheUtcDate()
+    public void VersionHtml_UsesTheUtcDate()
     {
         // 00:30 on the 26th in UTC+3 is still the 25th in UTC.
         var appInfo = new AppInfoOptions { Version = "abc1234", CommitDate = new DateTimeOffset(2026, 9, 26, 0, 30, 0, TimeSpan.FromHours(3)) };
 
-        Assert.StartsWith("Version 2026.09.25 &middot; abc1234", HtmlGeneratorService.VersionText(appInfo));
+        Assert.Contains("<span>v2026.09.25</span>", HtmlGeneratorService.VersionHtml(appInfo));
     }
 
     [Fact]
-    public void VersionText_WithoutRepository_ShowsShaWithoutLink()
+    public void VersionHtml_WithoutRepository_ShowsShaWithoutLink()
     {
         var appInfo = new AppInfoOptions { Version = "abc1234", CommitDate = DateTimeOffset.UtcNow };
 
-        Assert.DoesNotContain("<a ", HtmlGeneratorService.VersionText(appInfo));
+        var html = HtmlGeneratorService.VersionHtml(appInfo);
+
+        Assert.DoesNotContain("<a ", html);
+        Assert.Contains("<span class=\"ld-sha\">abc1234</span>", html);
     }
 
     [Fact]
-    public void VersionText_ForLocalBuild_SaysSo()
-        => Assert.Equal("Version dev (local build)", HtmlGeneratorService.VersionText(new AppInfoOptions()));
+    public void VersionHtml_ForLocalBuild_SaysSo()
+        => Assert.Contains("<span>vdev (local build)</span>", HtmlGeneratorService.VersionHtml(new AppInfoOptions()));
 
     [Fact]
-    public void BuildHtml_RendersTheVersionUnderTheTitle()
-    {
-        var html = HtmlGeneratorService.BuildHtml([], [], new Dictionary<string, string>(), new AppInfoOptions());
+    public void VersionHtml_EscapesTheVersion()
+        => Assert.Contains("v&lt;x&gt; (local build)", HtmlGeneratorService.VersionHtml(new AppInfoOptions { Version = "<x>" }));
 
-        var title = html.IndexOf("<h1>LazyDad</h1>", StringComparison.Ordinal);
-        var version = html.IndexOf("<p class=\"version\">Version dev (local build)</p>", StringComparison.Ordinal);
-        Assert.True(title >= 0 && version > title, "The version line should follow the title.");
-        Assert.True(version < html.IndexOf("class=\"subtitle\"", StringComparison.Ordinal), "The version line should come before the joke count.");
-        Assert.DoesNotContain("<footer>", html);
+    [Fact]
+    public async Task RegenerateAsync_WritesIndexHtmlUnderWwwroot()
+    {
+        var contentRoot = Directory.CreateTempSubdirectory("lazydad-tests-").FullName;
+        try
+        {
+            var env = new Mock<IWebHostEnvironment>();
+            env.Setup(e => e.ContentRootPath).Returns(contentRoot);
+            var service = new HtmlGeneratorService(
+                Options.Create(new JokeGenerationOptions { Languages = [new() { Language = "Ukrainian", LanguageCode = "uk" }] }),
+                Options.Create(PipelineBuild),
+                env.Object,
+                NullLogger<HtmlGeneratorService>.Instance);
+
+            await service.RegenerateAsync(CancellationToken.None);
+
+            var html = await File.ReadAllTextAsync(Path.Combine(contentRoot, "wwwroot", "index.html"));
+            Assert.Contains("<span class=\"ld-sha\">e33d99a</span>", html);
+            Assert.False(File.Exists(Path.Combine(contentRoot, "wwwroot", "index.html.tmp")));
+        }
+        finally
+        {
+            Directory.Delete(contentRoot, recursive: true);
+        }
     }
 }

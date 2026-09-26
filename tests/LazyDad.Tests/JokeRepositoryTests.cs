@@ -85,4 +85,80 @@ public sealed class JokeRepositoryTests : IDisposable
         await using var verify = CreateContext();
         Assert.Equal("added", (await new JokeRepository(verify).GetByIdAsync(joke.Id, CancellationToken.None))?.Text);
     }
+
+    [Fact]
+    public async Task CountAsync_CountsAllJokes()
+    {
+        await using var context = CreateContext();
+
+        Assert.Equal(4, await new JokeRepository(context).CountAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task GetPageAsync_Newest_PagesNewestFirst()
+    {
+        await using var context = CreateContext();
+        var repository = new JokeRepository(context);
+
+        var first = await repository.GetPageAsync(JokeSort.Newest, 0, 2, CancellationToken.None);
+        var second = await repository.GetPageAsync(JokeSort.Newest, 2, 2, CancellationToken.None);
+
+        Assert.Equal(["uk-new", "en"], first.Select(j => j.Text));
+        Assert.Equal(["uk-mid", "uk-old"], second.Select(j => j.Text));
+    }
+
+    [Fact]
+    public async Task GetPageAsync_TopVoted_OrdersByNetScore_ThenNewest()
+    {
+        await using (var setup = CreateContext())
+        {
+            await setup.Jokes.Where(j => j.Text == "uk-old").ExecuteUpdateAsync(s => s.SetProperty(j => j.Up, 5).SetProperty(j => j.Down, 1));
+            await setup.Jokes.Where(j => j.Text == "uk-mid").ExecuteUpdateAsync(s => s.SetProperty(j => j.Up, 1).SetProperty(j => j.Down, 4));
+        }
+        await using var context = CreateContext();
+
+        var page = await new JokeRepository(context).GetPageAsync(JokeSort.TopVoted, 0, 10, CancellationToken.None);
+
+        // +4, then the two zeros newest first, then −3 (net scores can be negative).
+        Assert.Equal(["uk-old", "uk-new", "en", "uk-mid"], page.Select(j => j.Text));
+    }
+
+    [Fact]
+    public async Task AddVotesAsync_AddsTheDeltas_AndReturnsTheNewCounts()
+    {
+        int id;
+        await using (var setup = CreateContext())
+            id = setup.Jokes.Single(j => j.Text == "uk-new").Id;
+        await using var context = CreateContext();
+        var repository = new JokeRepository(context);
+
+        await repository.AddVotesAsync(id, 1, 0, CancellationToken.None);
+        await repository.AddVotesAsync(id, 1, 0, CancellationToken.None);
+        var joke = await repository.AddVotesAsync(id, -1, 1, CancellationToken.None);
+
+        Assert.NotNull(joke);
+        Assert.Equal((1, 1), (joke.Up, joke.Down));
+    }
+
+    [Fact]
+    public async Task AddVotesAsync_NeverGoesBelowZero()
+    {
+        int id;
+        await using (var setup = CreateContext())
+            id = setup.Jokes.Single(j => j.Text == "uk-new").Id;
+        await using var context = CreateContext();
+
+        var joke = await new JokeRepository(context).AddVotesAsync(id, -1, -1, CancellationToken.None);
+
+        Assert.NotNull(joke);
+        Assert.Equal((0, 0), (joke.Up, joke.Down));
+    }
+
+    [Fact]
+    public async Task AddVotesAsync_ForAMissingJoke_ReturnsNull()
+    {
+        await using var context = CreateContext();
+
+        Assert.Null(await new JokeRepository(context).AddVotesAsync(12345, 1, 0, CancellationToken.None));
+    }
 }

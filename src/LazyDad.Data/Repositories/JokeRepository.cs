@@ -38,4 +38,36 @@ public class JokeRepository : IJokeRepository
         context.Jokes.Add(joke);
         await context.SaveChangesAsync(cancellationToken);
     }
+
+    public async Task<int> CountAsync(CancellationToken cancellationToken)
+        => await context.Jokes.CountAsync(cancellationToken);
+
+    public async Task<List<Joke>> GetPageAsync(JokeSort sort, int offset, int limit, CancellationToken cancellationToken)
+    {
+        var ordered = sort == JokeSort.TopVoted
+            ? context.Jokes.OrderByDescending(j => j.Up - j.Down).ThenByDescending(j => j.GeneratedAt)
+            : context.Jokes.OrderByDescending(j => j.GeneratedAt);
+
+        return await ordered
+            .ThenByDescending(j => j.Id)
+            .Skip(offset)
+            .Take(limit)
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<Joke?> AddVotesAsync(int id, int upDelta, int downDelta, CancellationToken cancellationToken)
+    {
+        // One UPDATE statement, so concurrent votes can't overwrite each other.
+        var updated = await context.Jokes
+            .Where(j => j.Id == id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(j => j.Up, j => j.Up + upDelta < 0 ? 0 : j.Up + upDelta)
+                .SetProperty(j => j.Down, j => j.Down + downDelta < 0 ? 0 : j.Down + downDelta),
+                cancellationToken);
+
+        return updated == 0
+            ? null
+            : await context.Jokes.AsNoTracking().SingleAsync(j => j.Id == id, cancellationToken);
+    }
 }
