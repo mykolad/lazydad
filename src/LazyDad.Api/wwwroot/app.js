@@ -384,6 +384,9 @@
     paintVotes(joke);
   }
 
+  // A vote doesn't move the row, even under "Top voted": re-sorting would pull it out from under the
+  // reader's pointer mid-interaction. The server's order returns on reload or a sort change, and
+  // paging follows the server's cursor, not the rows on screen.
   // Optimistic: the page updates at once; requests for the same joke go one at a time, each
   // sending the vote the server has counted as "previous".
   function vote(id, direction) {
@@ -666,6 +669,8 @@
   }, ROTATE_MS);
 
   darkQuery.addEventListener('change', () => { if (state.theme === 'system') applyTheme(); });
+  // The pause control only exists while the spotlight can rotate.
+  reducedMotion.addEventListener('change', renderSpotlight);
   setInterval(renderCountdown, CLOCK_MS);
 
   applyTheme();
