@@ -1,26 +1,23 @@
 using LazyDad.Data;
 using LazyDad.Data.Entities;
 using LazyDad.Data.Repositories;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace LazyDad.Tests;
 
 /// <summary>
-/// Runs against a real (SQLite in-memory) database: the behaviour under test is
+/// Runs against a real database (SQLite in memory, or SQL Server with the migrations in CI; see TestDatabase): the behaviour under test is
 /// EF change tracking plus ExecuteDelete, which a mocked repository can't exercise.
 /// </summary>
 public sealed class TopJokeRepositoryTests : IDisposable
 {
     private const string Language = "Ukrainian";
 
-    private readonly SqliteConnection connection = new("DataSource=:memory:");
+    private readonly TestDatabase database = new();
 
     public TopJokeRepositoryTests()
     {
-        connection.Open();
         using var context = CreateContext();
-        context.Database.EnsureCreated();
 
         context.Jokes.AddRange(Enumerable.Range(1, 4).Select(i => new Joke
         {
@@ -30,10 +27,9 @@ public sealed class TopJokeRepositoryTests : IDisposable
         context.SaveChanges();
     }
 
-    public void Dispose() => connection.Dispose();
+    public void Dispose() => database.Dispose();
 
-    private LazyDadDbContext CreateContext()
-        => new(new DbContextOptionsBuilder<LazyDadDbContext>().UseSqlite(connection).Options);
+    private LazyDadDbContext CreateContext() => database.CreateContext();
 
     private static TopJoke MakeEntry(int rank, int jokeId)
         => new() { Language = Language, Rank = rank, JokeId = jokeId, Reason = "r", JudgeModel = "gpt-6-sol", SelectedAt = DateTime.UtcNow };

@@ -61,3 +61,75 @@ jobs:
             TestResults/**/*.trx
             coverage/
           retention-days: 14
+
+  # Issue #9: nothing else builds the database from scratch with the real migrations on real SQL
+  # Server. The unit tests use SQLite with EnsureCreated(), and staging only ever applies the newest
+  # migrations on top of its existing schema. Runs in parallel with build-and-test.
+  clean-database-migrations:
+    name: clean-database-migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # A throwaway SQL Server for this job only (SQL auth: the container has no Entra ID). The password
+    # protects nothing but this container, so it isn't a secret.
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: Y
+          MSSQL_SA_PASSWORD: Throwaway-container-2026!
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Throwaway-container-2026!' -C -Q 'SELECT 1' || exit 1"
+          --health-interval 10s --health-timeout 5s --health-retries 20
+
+    env:
+      SQL_SERVER: Server=localhost,1433;User ID=sa;Password=Throwaway-container-2026!;TrustServerCertificate=True
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: actions/cache@v6
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'dotnet-tools.json') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore and build
+        run: |
+          dotnet restore LazyDad.slnx
+          dotnet tool restore
+          dotnet build LazyDad.slnx -c Release --no-restore
+
+      - name: No model change without a migration
+        run: >-
+          dotnet ef migrations has-pending-model-changes
+          --project src/LazyDad.Data --startup-project src/LazyDad.Api --configuration Release --no-build
+
+      # The same bundle the deploys build (build-image.yml).
+      - name: Build the migration bundle
+        run: |
+          dotnet restore src/LazyDad.Api -r linux-x64
+          dotnet ef migrations bundle --project src/LazyDad.Data --startup-project src/LazyDad.Api \
+            --configuration Release --self-contained --target-runtime linux-x64 --output efbundle --force
+
+      - name: Apply every migration to an empty database
+        run: ./efbundle --connection "$SQL_SERVER;Database=lazydad_migrations"
+
+      # "0" rolls back to before the first migration: every Down runs. (RemoveRussianJokes.Down is a
+      # deliberate no-op: the purged rows can't come back.) Then the whole chain again.
+      - name: Roll every migration back, then apply them again
+        run: |
+          ./efbundle 0 --connection "$SQL_SERVER;Database=lazydad_migrations"
+          ./efbundle --connection "$SQL_SERVER;Database=lazydad_migrations"
+
+      # Each test class gets its own database with the migrations applied (see TestDatabase).
+      - name: Repository tests on SQL Server
+        env:
+          SQLSERVER_TEST_CONNECTION: ${{ env.SQL_SERVER }}
+        run: dotnet test tests/LazyDad.Tests -c Release --no-build --filter "FullyQualifiedName~RepositoryTests" --logger "console;verbosity=normal"
