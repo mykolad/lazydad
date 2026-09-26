@@ -579,7 +579,7 @@ Remove-Variable AUTH
 **2. Per app, staging first.** Deploys keep these settings (Deploy Environment only swaps the image), and images
 from before this change ignore them, so rollbacks are fine. Each app reads the secret with its system-assigned
 identity: prod's already reads the vault (`Key Vault Secrets User` on all of it); staging gets that role on this
-one secret only, so it can't read prod's other secrets.
+one secret only, so it can't read prod's other secrets. (Section 11 later gives staging a token of its own.)
 
 ```bash
 # Staging only: its identity (section 8 or 9 may have assigned it already; this is then a no-op) and access to the secret.
@@ -841,7 +841,7 @@ Test it: *Actions → Deploy Branch to Staging → Run workflow* on `master`, wi
 build (image push), the migrations (still with the password while that secret exists), the rollout and the
 smoke tests all run as the new identity. The next Deploy Master run checks production's side.
 
-**5. Take the passwords away from staging.** Staging has to run on its managed identity first: section 8 step 2
+**5. Take the passwords and shared credentials away from staging.** Staging has to run on its managed identity first: section 8 step 2
 (Azure OpenAI) and section 9 step 2 (SQL) for `lazydad-app-staging`. Then remove what branch code could read
 that works outside staging:
 
@@ -854,6 +854,58 @@ az containerapp secret remove -n lazydad-app-staging -g $RG --secret-names sql-c
 
 Run Deploy Branch to Staging with *run-migrations* again: the migration step logs "Migrating
 lazydad-db-staging with Entra ID". (`sqladmin` itself keeps working for prod until section 9's lock-down.)
+
+**Staging's own Grafana token.** Section 10 gave both apps the same `OtlpHeaders` secret, so code running on
+staging can read production's Grafana write token from its environment. Give staging a token of its own: in
+Grafana Cloud, create a second one (for example an access policy `lazydad-staging` that can write metrics, logs
+and traces), then:
+
+```bash
+INSTANCE_ID=<instance id from the connection details>
+read -rs TOKEN   # the staging token; not echoed, not in the shell history
+AUTH=$(printf '%s:%s' "$INSTANCE_ID" "$TOKEN" | base64 -w0); unset TOKEN
+az keyvault secret set --vault-name lazydad-kv -n OtlpHeadersStaging --value "Authorization=Basic%20$AUTH" -o none
+unset AUTH
+KV_ID=$(az keyvault show -n lazydad-kv --query id -o tsv)
+STG_APP_PID=$(az containerapp show -n lazydad-app-staging -g $RG --query identity.principalId -o tsv)   # the app's own identity
+az role assignment create --assignee-object-id $STG_APP_PID --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets User" --scope "$KV_ID/secrets/OtlpHeadersStaging" -o none
+# Wait a few minutes for the role, then switch staging to its token (read when a replica starts):
+az containerapp secret set -n lazydad-app-staging -g $RG \
+  --secrets "otlp-headers=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/OtlpHeadersStaging,identityref:system"
+az containerapp revision restart -n lazydad-app-staging -g $RG \
+  --revision "$(az containerapp show -n lazydad-app-staging -g $RG --query properties.latestReadyRevisionName -o tsv)"
+# Once staging's telemetry arrives again: take away its access to production's token.
+az role assignment delete --assignee $STG_APP_PID --role "Key Vault Secrets User" --scope "$KV_ID/secrets/OtlpHeaders"
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$INSTANCE_ID = '<instance id from the connection details>'
+$TOKEN = Read-Host 'Grafana staging token' -MaskInput   # not echoed; Read-Host input isn't saved in the history
+$AUTH = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("${INSTANCE_ID}:$TOKEN")); Remove-Variable TOKEN
+az keyvault secret set --vault-name lazydad-kv -n OtlpHeadersStaging --value "Authorization=Basic%20$AUTH" -o none
+Remove-Variable AUTH
+$KV_ID = az keyvault show -n lazydad-kv --query id -o tsv
+$STG_APP_PID = az containerapp show -n lazydad-app-staging -g $RG --query identity.principalId -o tsv   # the app's own identity
+az role assignment create --assignee-object-id $STG_APP_PID --assignee-principal-type ServicePrincipal `
+  --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/OtlpHeadersStaging" -o none
+# Wait a few minutes for the role, then switch staging to its token (read when a replica starts):
+az containerapp secret set -n lazydad-app-staging -g $RG `
+  --secrets 'otlp-headers=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/OtlpHeadersStaging,identityref:system'
+az containerapp revision restart -n lazydad-app-staging -g $RG `
+  --revision (az containerapp show -n lazydad-app-staging -g $RG --query properties.latestReadyRevisionName -o tsv)
+# Once staging's telemetry arrives again: take away its access to production's token.
+az role assignment delete --assignee $STG_APP_PID --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/OtlpHeaders"
+```
+
+</details>
+
+Staging has had production's token until now, so rotate it too: a new token in Grafana, stored in `OtlpHeaders`
+and picked up with a restart (section 10, "A new token later"), then revoke the old one. Both tokens still
+write to the same Grafana stack, and a write token can't be limited to certain labels: staging's could still
+send data labelled as production. But it's no longer production's token, and you can revoke it on its own.
 
 **6. Remove the old way in.** `lazydad-github-cd` no longer needs anything in staging:
 

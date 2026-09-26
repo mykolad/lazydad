@@ -145,8 +145,9 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
   (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details).
 - **Monitoring:** a Grafana Cloud stack (free tier, `eu-north`) gets both apps' telemetry, one service per app
   (`job="lazydad-app"`, `"lazydad-app-staging"`), with the uptime check and email alerts on prod. The OTLP credentials are
-  one Key Vault secret (`lazydad-kv`/`OtlpHeaders`) that both apps reference with their system-assigned identities
-  (staging can read only that secret). Console logs also stay in the environment's Log Analytics workspace (30 days,
+  Key Vault secrets that the apps reference with their system-assigned identities: `OtlpHeaders` for prod, and
+  `OtlpHeadersStaging`, a separate Grafana token, for staging (runbook section 11), which can read only that one
+  secret, since branch previews run there. Console logs also stay in the environment's Log Analytics workspace (30 days,
   daily cap) as the fallback.
 - **Setup runbook:** `infra/deployment-setup.md` (bash, with a PowerShell 7 version of each block) has the one-time Azure/GitHub setup behind Deploy Master,
   including the weekly registry purge task (`purge-old-images`: keeps the last 30 days, 10 older
