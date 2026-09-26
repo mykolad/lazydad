@@ -3,13 +3,32 @@
 What was set up on 2026-09-24 to support `.github/workflows/deploy-master.yml` (Deploy Master). Every step used the `az`
 and `gh` CLIs. Keep this in sync with reality until it's replaced by Bicep (IaC is on the plan).
 
+Each command block is bash (Git Bash on Windows). Under it, a collapsed **PowerShell 7** version does the same, or a
+note says the bash commands run unchanged. Both use the same variable names; set them once per session with the block
+below. Except `$PID` and `$ENV`, which PowerShell reserves (process id, and too close to the `$env:` drive): those are
+`$APP_PID` and `$ENV_NAME` there.
+
 > In Git Bash, `export MSYS_NO_PATHCONV=1` first. Otherwise the `/subscriptions/...` scopes get
 > rewritten as file paths and role assignments fail with `MissingSubscription`.
+
+> In PowerShell on Windows, `az` is `az.cmd`, so every argument also passes through `cmd`. Arguments in single quotes
+> (the PowerShell blocks use them for anything with spaces, `;`, `,`, `^` or `$`) arrive intact, but `cmd` drops the
+> double quotes inside JSON (none of these blocks pass JSON to `az`), and treats `<...>` in an argument without spaces as
+> a redirection: replace every `<placeholder>` before running a command.
 
 ```bash
 RG=lazydad-rg
 ACR_ID=$(az acr show -n lazydadacr --query id -o tsv)
 ```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$RG = 'lazydad-rg'
+$ACR_ID = az acr show -n lazydadacr --query id -o tsv
+```
+
+</details>
 
 ## 1. Identities
 
@@ -35,6 +54,27 @@ for id in $(az resource list -g $RG --query "[?name=='lazydad-app' || name=='laz
 done
 ```
 
+<details><summary>PowerShell 7</summary>
+
+```powershell
+az identity create -g $RG -n lazydad-acr-pull -l westeurope
+az identity create -g $RG -n lazydad-github-cd -l westeurope
+$PULL_PID = az identity show -g $RG -n lazydad-acr-pull --query principalId -o tsv
+$CD_PID = az identity show -g $RG -n lazydad-github-cd --query principalId -o tsv
+
+az role assignment create --assignee-object-id $PULL_PID --assignee-principal-type ServicePrincipal --role AcrPull --scope $ACR_ID
+az role assignment create --assignee-object-id $CD_PID --assignee-principal-type ServicePrincipal --role AcrPush --scope $ACR_ID
+az role assignment create --assignee-object-id $CD_PID --assignee-principal-type ServicePrincipal --role Reader  --scope $ACR_ID   # az acr login resolves the registry via ARM
+az role assignment create --assignee-object-id $CD_PID --assignee-principal-type ServicePrincipal --role 'SQL Server Contributor' `
+  --scope (az sql server show -g $RG -n lazydad-sql-swedencentral --query id -o tsv)
+# Contributor on lazydad-app, lazydad-app-staging (after step 3) and the environment (join/action on update):
+foreach ($id in az resource list -g $RG --query "[?name=='lazydad-app' || name=='lazydad-app-staging' || name=='lazydad-cae'].id" -o tsv) {
+  az role assignment create --assignee-object-id $CD_PID --assignee-principal-type ServicePrincipal --role Contributor --scope $id
+}
+```
+
+</details>
+
 ## 2. Staging database (free offer)
 
 ```bash
@@ -42,6 +82,16 @@ az sql db create -g $RG -s lazydad-sql-swedencentral -n lazydad-db-staging \
   --edition GeneralPurpose --compute-model Serverless --family Gen5 --capacity 1 --min-capacity 0.5 \
   --auto-pause-delay 60 --use-free-limit --free-limit-exhaustion-behavior AutoPause --backup-storage-redundancy Local
 ```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+az sql db create -g $RG -s lazydad-sql-swedencentral -n lazydad-db-staging `
+  --edition GeneralPurpose --compute-model Serverless --family Gen5 --capacity 1 --min-capacity 0.5 `
+  --auto-pause-delay 60 --use-free-limit --free-limit-exhaustion-behavior AutoPause --backup-storage-redundancy Local
+```
+
+</details>
 
 The connection string is prod's with `Database=lazydad-db-staging` (same server login).
 Apply the schema once with `dotnet ef database update --connection "<staging>"`; Deploy Master keeps it current after that.
@@ -60,6 +110,22 @@ az containerapp create -n lazydad-app-staging -g $RG --environment lazydad-cae \
              LlmProviders__AzureOpenAI__ApiKey=secretref:openai-key
 ```
 
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$PULL_ID = az identity show -g $RG -n lazydad-acr-pull --query id -o tsv
+az containerapp create -n lazydad-app-staging -g $RG --environment lazydad-cae `
+  --image 'lazydadacr.azurecr.io/lazydad:<tag>' `
+  --user-assigned $PULL_ID --registry-server lazydadacr.azurecr.io --registry-identity $PULL_ID `
+  --ingress external --target-port 8080 --min-replicas 0 --max-replicas 1 --cpu 0.5 --memory 1Gi `
+  --secrets 'sql-conn=<staging conn>' 'openai-endpoint=<endpoint>' 'openai-key=<key>' `
+  --env-vars ConnectionStrings__DefaultConnection=secretref:sql-conn `
+             LlmProviders__AzureOpenAI__Endpoint=secretref:openai-endpoint `
+             LlmProviders__AzureOpenAI__ApiKey=secretref:openai-key
+```
+
+</details>
+
 ## 4. Prod: pull with managed identity, disable the ACR admin user
 
 ```bash
@@ -69,6 +135,8 @@ az containerapp update -n lazydad-app -g $RG --revision-suffix mi-pull   # a rea
 az containerapp secret remove -n lazydad-app -g $RG --secret-names lazydadacrazurecrio-lazydadacr
 az acr update -n lazydadacr --admin-enabled false
 ```
+
+*PowerShell 7: the same commands.*
 
 ## 5. Staging: allow listed IPs only
 
@@ -80,6 +148,15 @@ crawler would cost tokens. With at least one `Allow` rule, Container Apps denies
 az containerapp ingress access-restriction set -n lazydad-app-staging -g $RG \
   --rule-name home --ip-address <your-public-ip>/32 --action Allow --description "Owner's home IP"
 ```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+az containerapp ingress access-restriction set -n lazydad-app-staging -g $RG `
+  --rule-name home --ip-address '<your-public-ip>/32' --action Allow --description "Owner's home IP"
+```
+
+</details>
 
 Deploy Master adds the runner's IP for the duration of the smoke tests and removes it afterwards
 (`restricted-ingress: true` in `deploy-master.yml`). If your home IP changes, update the `home` rule.
@@ -114,6 +191,33 @@ printf '%s' "<staging conn>" | gh secret set SQL_CONNECTION_STRING --env staging
 printf '%s' "<prod conn>"    | gh secret set SQL_CONNECTION_STRING --env production
 ```
 
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$PREFIX = "repo:mykolad@$(gh api users/mykolad --jq .id)/lazydad@$(gh api repos/mykolad/lazydad --jq .id)"
+foreach ($envName in 'staging', 'production') {
+  # ${PREFIX} in braces: "$PREFIX:environment" would read as a scoped variable.
+  az identity federated-credential create -g $RG --identity-name lazydad-github-cd -n "github-$envName-immutable" `
+    --issuer https://token.actions.githubusercontent.com `
+    --subject "${PREFIX}:environment:$envName" --audiences api://AzureADTokenExchange
+
+  '{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' |
+    gh api -X PUT "repos/mykolad/lazydad/environments/$envName" --input -
+  gh api -X POST "repos/mykolad/lazydad/environments/$envName/deployment-branch-policies" -f name=master -f type=branch
+}
+
+gh variable set AZURE_CLIENT_ID       --body (az identity show -g $RG -n lazydad-github-cd --query clientId -o tsv)
+gh variable set AZURE_TENANT_ID       --body (az account show --query tenantId -o tsv)
+gh variable set AZURE_SUBSCRIPTION_ID --body (az account show --query id -o tsv)
+
+# Typed in without echo (Read-Host input isn't saved in the history). Unlike the bash pipe, the value is on gh's
+# command line while it runs: a pipe from PowerShell would add a trailing newline to the secret.
+gh secret set SQL_CONNECTION_STRING --env staging    --body (Read-Host 'staging connection string' -MaskInput)
+gh secret set SQL_CONNECTION_STRING --env production --body (Read-Host 'prod connection string' -MaskInput)
+```
+
+</details>
+
 Jobs log in only through an environment (the federated subjects are `environment:staging` and
 `environment:production`), so a workflow that doesn't use one can't get an Azure token.
 
@@ -125,6 +229,14 @@ The federated credential matches the environment, not the branch, so nothing cha
 gh api -X POST repos/mykolad/lazydad/environments/staging/deployment-branch-policies -f name='*/*' -f type=branch
 ```
 
+<details><summary>PowerShell 7</summary>
+
+```powershell
+gh api -X POST repos/mykolad/lazydad/environments/staging/deployment-branch-policies -f 'name=*/*' -f type=branch
+```
+
+</details>
+
 ## 7. Registry cleanup: weekly purge of old images
 
 Every deploy pushes a new `lazydad:<short-sha>` image. An **ACR Task** (it runs inside the registry,
@@ -135,6 +247,15 @@ on a cron schedule in UTC, and costs fractions of a cent per run) deletes old on
 az acr task create --registry lazydadacr --name purge-old-images --schedule "0 3 * * 0" \
   --cmd "acr purge --filter 'lazydad:^[0-9a-f]{7}.*$' --ago 30d --keep 10 --untagged" --context /dev/null
 ```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+az acr task create --registry lazydadacr --name purge-old-images --schedule '0 3 * * 0' `
+  --cmd 'acr purge --filter ''lazydad:^[0-9a-f]{7}.*$'' --ago 30d --keep 10 --untagged' --context /dev/null
+```
+
+</details>
 
 What it keeps:
 - **every image from the last 30 days** (`--ago 30d`)
@@ -166,6 +287,16 @@ az acr run --registry lazydadacr --cmd "acr purge --filter 'lazydad:^[0-9a-f]{7}
 az acr task list-runs --registry lazydadacr --name purge-old-images -o table
 az acr task run --registry lazydadacr --name purge-old-images
 ```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+az acr run --registry lazydadacr --cmd 'acr purge --filter ''lazydad:^[0-9a-f]{7}.*$'' --ago 30d --keep 10 --untagged --dry-run' /dev/null
+az acr task list-runs --registry lazydadacr --name purge-old-images -o table
+az acr task run --registry lazydadacr --name purge-old-images
+```
+
+</details>
 
 Deploy Master and Roll Back Production (both through Deploy Environment) handle both. For a **manual rollback** outside the pipelines
 (e.g. to an image built before images carried their version, which Roll Back Production refuses), do the same yourself:
@@ -218,6 +349,39 @@ gh variable set ROLLBACK_MIN_COMMIT --body "<merge commit of the Entra ID PR on 
 az resource update --ids "$OPENAI_ID" --set properties.disableLocalAuth=true
 ```
 
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$OPENAI_ID = az cognitiveservices account show -n lazydad-openai-resource -g $RG --query id -o tsv
+
+# 1. A system-assigned identity per app, with inference rights (see the bash version for the role choice).
+foreach ($name in 'lazydad-app-staging', 'lazydad-app') {
+  az containerapp identity assign -n $name -g $RG --system-assigned -o none
+  # Not $PID: that's PowerShell's own (read-only) process id.
+  $APP_PID = az containerapp show -n $name -g $RG --query identity.principalId -o tsv
+  az role assignment create --assignee-object-id $APP_PID --assignee-principal-type ServicePrincipal `
+    --role 'Foundry User' --scope $OPENAI_ID
+}
+# Your own account needs the same role for local runs without a key.
+
+# 2. Switch one app at a time, staging first (wait a few minutes after the role assignment).
+$APP = 'lazydad-app-staging'     # then lazydad-app
+az containerapp update -n $APP -g $RG --remove-env-vars LlmProviders__AzureOpenAI__ApiKey -o none
+#    Check the new revision's startup tick on /status. If a model rejects the identity, switch back:
+#      az containerapp update -n $APP -g $RG --set-env-vars LlmProviders__AzureOpenAI__ApiKey=secretref:openai-key -o none
+#    Once it works, remove the now-unused secret, then repeat for production.
+az containerapp secret remove -n $APP -g $RG --secret-names openai-key
+
+# 3. Only once BOTH apps run without the key: remove the other copies, then turn key auth off for good.
+az keyvault secret delete --vault-name lazydad-kv -n AzureOpenAIApiKey
+dotnet user-secrets remove 'LlmProviders:AzureOpenAI:ApiKey' --project src/LazyDad.Api
+# Images from before the Entra ID support only know the key: stop Roll Back Production from choosing them.
+gh variable set ROLLBACK_MIN_COMMIT --body '<merge commit of the Entra ID PR on master>'
+az resource update --ids $OPENAI_ID --set properties.disableLocalAuth=true
+```
+
+</details>
+
 ## 9. Azure SQL with Entra ID, no passwords (issue #11)
 
 Everything connects as `sqladmin` today. The target is least-privilege Entra identities and no SQL
@@ -229,6 +393,16 @@ for app in lazydad-app-staging lazydad-app; do
   az containerapp identity assign -n $app -g $RG --system-assigned -o none
 done
 ```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+foreach ($name in 'lazydad-app-staging', 'lazydad-app') {
+  az containerapp identity assign -n $name -g $RG --system-assigned -o none
+}
+```
+
+</details>
 
 | Principal | Database | Roles |
 |---|---|---|
@@ -244,6 +418,8 @@ az containerapp show -n lazydad-app -g $RG --query identity.principalId -o tsv  
 az containerapp show -n lazydad-app-staging -g $RG --query identity.principalId -o tsv  # <staging-oid>
 az identity show -g $RG -n lazydad-github-cd --query principalId -o tsv                # <cd-oid>
 ```
+
+*PowerShell 7: the same commands.*
 
 ```sql
 -- In lazydad-db:
@@ -277,6 +453,24 @@ az containerapp update -n $APP -g $RG --set-env-vars ConnectionStrings__DefaultC
 gh secret delete SQL_CONNECTION_STRING --env $ENV
 ```
 
+<details><summary>PowerShell 7</summary>
+
+```powershell
+# $ENV_NAME, not $ENV: too close to PowerShell's $env: drive.
+$APP = 'lazydad-app-staging'; $DB = 'lazydad-db-staging'; $ENV_NAME = 'staging'     # then: lazydad-app / lazydad-db / production
+az containerapp secret set -n $APP -g $RG --secrets `
+  "sql-conn-entra=Server=tcp:lazydad-sql-swedencentral.database.windows.net,1433;Database=$DB;Authentication=Active Directory Managed Identity;Encrypt=True"
+az containerapp update -n $APP -g $RG --set-env-vars ConnectionStrings__DefaultConnection=secretref:sql-conn-entra `
+  --revision-suffix entra-sql -o none
+# Check the new revision's startup tick on /status. If it can't reach the database, switch back:
+#   az containerapp update -n $APP -g $RG --set-env-vars ConnectionStrings__DefaultConnection=secretref:sql-conn --revision-suffix password-sql -o none
+
+# CD: without the environment secret, Deploy Environment migrates with Entra ID as lazydad-github-cd.
+gh secret delete SQL_CONNECTION_STRING --env $ENV_NAME
+```
+
+</details>
+
 Run **Deploy Master** (or Deploy Branch to Staging with *run-migrations* for staging): the migration step logs
 "Migrating <database> with Entra ID", and the smoke tests prove the app reads and writes. If the migration
 can't log in, put the secret back (`gh secret set SQL_CONNECTION_STRING --env $ENV`) and check the
@@ -296,6 +490,20 @@ dotnet user-secrets set "ConnectionStrings:DefaultConnection" \
 # sqladmin stops working everywhere, so any copy of the password left anywhere is useless from here on.
 az sql server ad-only-auth enable -g $RG -n lazydad-sql-swedencentral
 ```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+az keyvault secret delete --vault-name lazydad-kv -n SqlConnectionString
+az keyvault secret purge  --vault-name lazydad-kv -n SqlConnectionString
+foreach ($name in 'lazydad-app-staging', 'lazydad-app') { az containerapp secret remove -n $name -g $RG --secret-names sql-conn }
+dotnet user-secrets set 'ConnectionStrings:DefaultConnection' `
+  'Server=tcp:lazydad-sql-swedencentral.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True' `
+  --project src/LazyDad.Api
+az sql server ad-only-auth enable -g $RG -n lazydad-sql-swedencentral
+```
+
+</details>
 
 Entra-only authentication can be turned off again (`ad-only-auth disable`) if something was missed.
 The CI job `clean-database-migrations` uses SQL auth against its own throwaway container, so it's unaffected.
@@ -332,12 +540,32 @@ KV_ID=$(az keyvault show -n lazydad-kv --query id -o tsv)
 INSTANCE_ID=<instance id from the connection details>
 read -rs TOKEN   # paste the token; not echoed, not in the shell history
 AUTH=$(printf '%s:%s' "$INSTANCE_ID" "$TOKEN" | base64 -w0); unset TOKEN
-# Check the credentials first (the app doesn't log export failures): 200 = accepted, 401 = wrong token or instance ID.
+# Check the credentials first (the app doesn't log export failures): 200 or 204 = accepted, 401 = wrong token or instance ID.
 curl -s -o /dev/null -w '%{http_code}\n' -X POST -H "Authorization: Basic $AUTH" -H 'Content-Type: application/json' \
   -d '{"resourceLogs":[]}' https://otlp-gateway-prod-eu-north-0.grafana.net/otlp/v1/logs
 az keyvault secret set --vault-name lazydad-kv -n OtlpHeaders --value "Authorization=Basic%20$AUTH" -o none
 unset AUTH
 ```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$KV_ID = az keyvault show -n lazydad-kv --query id -o tsv
+$INSTANCE_ID = '<instance id from the connection details>'
+$TOKEN = Read-Host 'Grafana token' -MaskInput   # not echoed; Read-Host input isn't saved in the history
+# "${INSTANCE_ID}:" in braces: "$INSTANCE_ID:" would read as a scoped variable.
+$AUTH = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("${INSTANCE_ID}:$TOKEN")); Remove-Variable TOKEN
+# Check the credentials first: 200 or 204 = accepted, 401 = wrong token or instance ID.
+(Invoke-WebRequest -Method Post -Uri https://otlp-gateway-prod-eu-north-0.grafana.net/otlp/v1/logs `
+  -Headers @{ Authorization = "Basic $AUTH" } -ContentType application/json `
+  -Body '{"resourceLogs":[]}' -SkipHttpErrorCheck).StatusCode
+az keyvault secret set --vault-name lazydad-kv -n OtlpHeaders --value "Authorization=Basic%20$AUTH" -o none
+# Confirm the vault holds exactly that value (prints only True or False):
+(az keyvault secret show --vault-name lazydad-kv -n OtlpHeaders --query value -o tsv) -eq "Authorization=Basic%20$AUTH"
+Remove-Variable AUTH
+```
+
+</details>
 
 **2. Per app, staging first.** Deploys keep these settings (Deploy Environment only swaps the image), and images
 from before this change ignore them, so rollbacks are fine. Each app reads the secret with its system-assigned
@@ -361,6 +589,27 @@ az containerapp update -n $APP -g $RG -o none --set-env-vars \
   OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=$ENV
 ```
 
+<details><summary>PowerShell 7</summary>
+
+```powershell
+# Staging only: its identity (a no-op if section 8 or 9 assigned it already) and access to the secret.
+az containerapp identity assign -n lazydad-app-staging -g $RG --system-assigned -o none
+$STAGING_ID = az containerapp show -n lazydad-app-staging -g $RG --query identity.principalId -o tsv
+az role assignment create --assignee-object-id $STAGING_ID --assignee-principal-type ServicePrincipal `
+  --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/OtlpHeaders" -o none
+# Wait a few minutes for the role to apply: a reference the identity can't read fails the new revision.
+
+$APP = 'lazydad-app-staging'; $ENV_NAME = 'staging'     # then: lazydad-app / production
+az containerapp secret set -n $APP -g $RG `
+  --secrets 'otlp-headers=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/OtlpHeaders,identityref:system'
+az containerapp update -n $APP -g $RG -o none --set-env-vars `
+  OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-eu-north-0.grafana.net/otlp `
+  OTEL_EXPORTER_OTLP_HEADERS=secretref:otlp-headers `
+  "OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=$ENV_NAME"
+```
+
+</details>
+
 Check in Grafana's *Explore*: logs `{service_name="lazydad-app-staging"}`, a `joke tick` trace from the new
 revision's startup tick, and the metric `lazydad_jokes_total`. If nothing arrives although the `curl` check passed,
 compare the app's settings with the commands above (`az containerapp show -n $APP -g $RG --query
@@ -375,6 +624,8 @@ az containerapp secret remove -n lazydad-app -g $RG --secret-names otlp-endpoint
 az keyvault secret delete --vault-name lazydad-kv -n OtlpEndpoint
 ```
 
+*PowerShell 7: the same commands.*
+
 A new token later (expired or leaked): update `OtlpHeaders` as in step 1, then restart each app's active revision;
 the value is read when a replica starts. Revoke the old token in Grafana.
 
@@ -384,6 +635,17 @@ for app in lazydad-app-staging lazydad-app; do
     --revision "$(az containerapp show -n $app -g $RG --query properties.latestReadyRevisionName -o tsv)"
 done
 ```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+foreach ($name in 'lazydad-app-staging', 'lazydad-app') {
+  az containerapp revision restart -n $name -g $RG `
+    --revision (az containerapp show -n $name -g $RG --query properties.latestReadyRevisionName -o tsv)
+}
+```
+
+</details>
 
 **3. Uptime check and alerts (prod only).** Staging's ingress admits listed IPs only, and it scales to zero, so it
 would look down and idle all the time.
@@ -410,3 +672,5 @@ in normal use but stops a logging bug from running up a bill:
 ```bash
 az monitor log-analytics workspace update -g $RG -n workspace-lazydadrgseCk --quota 0.1
 ```
+
+*PowerShell 7: the same commands.*
