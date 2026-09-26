@@ -98,7 +98,8 @@ Azure SQL firewall must allow the local machine's public IP.
     deploys fail until then.
 - **Migrations** run in Deploy Master as an EF migration bundle, against staging and then prod (see below).
   The app never migrates on startup.
-- **Azure OpenAI** (swedencentral): each `LlmModels[].Model` in config is the Azure deployment name (e.g. `gpt-5.3-chat`)
+- **Azure OpenAI** (`lazydad-openai-resource`, AI Services, eastus2): each `LlmModels[].Model` in config is the deployment name. Non-OpenAI models
+  deployed there (e.g. `Kimi-K2.5`, a thinking model: 10–60 s and ~3–4k output tokens per joke) are called through the same Azure OpenAI chat API.
 - **Container Apps** (environment `lazydad-cae`, Consumption, 0.5 vCPU / 1 GiB):
   - `lazydad-app` (prod): **exactly one replica** (min = max = 1), no health probes yet.
     Scaling out needs the scheduler lock first (see issue #6); the vote rate limit is per replica.
