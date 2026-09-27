@@ -145,14 +145,15 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
   (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details).
 - **Monitoring:** a Grafana Cloud stack (free tier, `eu-north`) gets both apps' telemetry, one service per app
   (`job="lazydad-app"`, `"lazydad-app-staging"`), with the uptime check and email alerts on prod. The OTLP credentials are
-  one Key Vault secret (`lazydad-kv`/`OtlpHeaders`) that both apps reference with their system-assigned identities
-  (staging can read only that secret). Console logs also stay in the environment's Log Analytics workspace (30 days,
+  Key Vault secrets that the apps reference with their system-assigned identities: `OtlpHeaders` for prod, and
+  `OtlpHeadersStaging`, a separate Grafana token, for staging (runbook section 11), which can read only that one
+  secret, since branch previews run there. Console logs also stay in the environment's Log Analytics workspace (30 days,
   daily cap) as the fallback.
 - **Setup runbook:** `infra/deployment-setup.md` (bash, with a PowerShell 7 version of each block) has the one-time Azure/GitHub setup behind Deploy Master,
   including the weekly registry purge task (`purge-old-images`: keeps the last 30 days, 10 older
   images, and what each environment runs: revisions are pinned to the image digest, and the manifest
   stays tagged `deployed-<env>` / `deploying-<env>`, applied in two phases around each rollout; `previous-<env>`
-  marks what served before the latest rollout, for the automatic rollback).
+  keeps what served before the latest rollout from the purge, for a manual rollback).
 
 ## Building and testing
 
@@ -205,16 +206,18 @@ Its second job, **`clean-database-migrations`**, runs against a throwaway SQL Se
    against it. If they fail, it restarts the new revision (a fresh startup tick) and runs them once more,
    counting only ticks completed after the restart (`SMOKE_TICKS_AFTER`).
 3. **roll-back**, only if production failed **after its new revision took traffic**: the reusable
-   `.github/workflows/roll-back.yml` (**Roll Back**) puts back the image that served before, which Deploy
-   Environment tags `previous-<environment>` before each rollout. It does nothing if production never
-   switched to the new revision, or if the same image served before. It doesn't roll back migrations, and
+   `.github/workflows/roll-back.yml` (**Roll Back**) puts back the image that served before: the digest the production
+   job read from its own revisions before the rollout (a job output, not the movable `previous-<environment>` tag).
+   It does nothing if production never switched to the new revision, or if the same image served before. It doesn't roll back migrations, and
    the run still ends as failed, so GitHub notifies you.
 
 Promotion is automatic: production runs only if staging's smoke tests pass. Azure login is
-OIDC through the `lazydad-github-cd` managed identity, trusted via GitHub's immutable subjects
-(`repo:mykolad@<id>/lazydad@<id>:environment:<env>`); nothing secret lives in GitHub except
-each environment's `SQL_CONNECTION_STRING`. Both environments only accept deployments from
-`master`.
+OIDC through a managed identity per environment, each trusted via GitHub's immutable subject for its environment
+only (`repo:mykolad@<id>/lazydad@<id>:environment:<env>`), with `AZURE_CLIENT_ID` set per environment:
+`lazydad-github-cd` deploys production, `lazydad-github-staging` staging and the builds (runbook section 11). The
+staging identity can't change production, since branch previews run as it. Nothing secret lives in GitHub except
+each environment's `SQL_CONNECTION_STRING` (until the Entra ID switch, runbook section 9). Production only accepts
+deployments from `master`.
 
 The smoke tests check that `/healthz` reports the new version and revision, that the page and API are served,
 that the new revision itself saved a joke from every model configured in `appsettings.json` and ran
@@ -236,7 +239,9 @@ dotnet test tests/LazyDad.SmokeTests
 open **Actions → Deploy Branch to Staging → Run workflow** and pick the branch. It runs the same
 Build Image and Deploy Environment steps, smoke tests included, against **staging only**.
 - **Production can't be reached from it:** the `production` environment accepts `master` only.
-  `staging` also accepts `*/*` branches (`feature/…`, `fix/…`).
+  `staging` also accepts `*/*` branches (`feature/…`, `fix/…`). The branch's own code (workflows, build) runs
+  with staging's identity, which has no rights on production (runbook section 11), and Roll Back only trusts
+  images production's own revisions ran, since staging can push images too.
 - **Migrations are off by default** (the *run-migrations* checkbox). Staging keeps any migration it
   applies, so only tick it for a branch whose migrations you'll merge unchanged.
 - **It shares the `deploy` concurrency group with Deploy Master,** so the two never interleave on
