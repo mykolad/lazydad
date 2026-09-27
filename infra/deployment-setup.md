@@ -1017,8 +1017,11 @@ from Cloudflare's ranges (`CloudflareClientAddressMiddleware`, ranges in `appset
 limit would count every visitor behind the same Cloudflare edge server as one. Deploy Environment allows its
 runner through any app with IP restrictions, so deploys keep working after step 6.
 
-**1. Check the zone.** In the Cloudflare dashboard, `lazydad.fyi` is on the Free plan and its nameservers are
-Cloudflare's (Registrar domains are set up that way).
+**1. Check the zone** (nothing to change, normally). A *zone* is Cloudflare's name for a domain in your account: its
+DNS records and all its settings. Open `lazydad.fyi` in the dashboard; its **Overview** should say plan **Free** and
+status **Active**. Active means the domain's nameservers are Cloudflare's, so the records and settings you add there
+are the ones the internet sees. Cloudflare Registrar sets up both when you buy a domain through it; a domain bought
+elsewhere would need its nameservers changed at that registrar first, and then a wait until the zone is Active.
 
 **2. Deploy the Cloudflare-aware app first.** It's on master once this section's PR is merged. Deploy Master
 rolls it out, and until step 5 nothing changes: no request comes from Cloudflare yet.
