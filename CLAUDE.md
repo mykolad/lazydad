@@ -46,8 +46,9 @@ tests/LazyDad.SmokeTests — smoke tests against a deployed app (run by Deploy M
   `GET /jokes/summary` → `{count, nextBatchAt}`; `POST /jokes/{id}/vote {value, previous}` → `{up, down}`.
 - **Votes are anonymous.** The browser remembers its vote and sends it as `previous`, so switching or
   removing adjusts the counts; the update is one atomic SQL `UPDATE` that never goes below zero. The
-  endpoint is rate-limited to 30 votes per minute per client IP (from `X-Forwarded-For`, set by the
-  Container Apps ingress). Server-side dedupe needs sign-in, which doesn't exist yet.
+  endpoint is rate-limited to 30 votes per minute per client IP: from `X-Forwarded-For` (set by the Container Apps
+  ingress), or, for requests from Cloudflare's ranges, from `CF-Connecting-IP` (`CloudflareClientAddressMiddleware`;
+  anyone can send that header, so only Cloudflare's count). Server-side dedupe needs sign-in, which doesn't exist yet.
 - One loop per enabled language (a delay to each due time, every `IntervalHours`) runs concurrently via `Task.WhenAll`.
   Within a tick, all of a language's `LlmModels` are called in parallel, each in its
   own DI scope (a `DbContext` must not be shared across concurrent calls); jokes are
@@ -129,6 +130,10 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
 - **Container Apps** (environment `lazydad-cae`, Consumption, 0.5 vCPU / 1 GiB):
   - `lazydad-app` (prod): **exactly one replica** (min = max = 1), no health probes yet.
     Scaling out (issue #6) is safe for joke generation (the scheduler lease); the vote rate limit is per replica.
+    Public address: **`lazydad.fyi`**, through Cloudflare's proxy (Free plan: DDoS protection, bot settings, a rate-limit
+    rule on votes), with a Cloudflare Origin CA certificate on the environment and the app's ingress limited to
+    Cloudflare's IPv4 ranges (runbook section 12). The ranges also live in `appsettings.json` (`Cloudflare:IpRanges`);
+    keep both in sync with https://www.cloudflare.com/ips/.
   - `lazydad-app-staging`: 0–1 replicas (scales to zero when idle). Calls the real LLMs.
     **Ingress allows listed IPs only** (the owner's `home` rule; Deploy Master adds its runner temporarily),
     so stray visitors can't wake it and spend LLM tokens.
@@ -201,8 +206,8 @@ Its second job, **`clean-database-migrations`**, runs against a throwaway SQL Se
    protects the running and the new image with tags, rolls the app to the image **by digest**
    (its version metadata is baked in; any old `App__Version` setting is removed), moves
    `deployed-<environment>` to it,
-   allows the runner through staging's IP
-   restrictions, and runs `tests/LazyDad.SmokeTests`
+   allows the runner through the app's IP
+   restrictions if it has any (staging's `home` rule, production's Cloudflare ranges), and runs `tests/LazyDad.SmokeTests`
    against it. If they fail, it restarts the new revision (a fresh startup tick) and runs them once more,
    counting only ticks completed after the restart (`SMOKE_TICKS_AFTER`).
 3. **roll-back**, only if production failed **after its new revision took traffic**: the reusable

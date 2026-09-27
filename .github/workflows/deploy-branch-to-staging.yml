@@ -39,7 +39,6 @@ jobs:
     with:
       environment: staging
       app-name: lazydad-app-staging
-      restricted-ingress: true
       run-migrations: ${{ inputs.run-migrations }}
       tag: ${{ needs.build.outputs.tag }}
       ref: ${{ needs.build.outputs.ref }}
