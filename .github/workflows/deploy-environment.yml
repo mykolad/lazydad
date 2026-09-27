@@ -26,11 +26,6 @@ on:
         description: Image digest (sha256:...) the revision is pinned to
         required: true
         type: string
-      restricted-ingress:
-        description: The app only allows listed IPs (staging), so allow this runner's IP during the smoke tests
-        required: false
-        default: false
-        type: boolean
       run-migrations:
         description: Apply the EF migration bundle before rolling out (branch deploys to staging opt in)
         required: true
@@ -91,7 +86,7 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       # The runner's IP is unpredictable: it's allowed through the SQL firewall only while migrating,
-      # and through staging's ingress only during the smoke tests.
+      # and through the app's IP restrictions (if it has any) only during the smoke tests.
       - name: Detect runner IP
         id: runner
         run: echo "ip=$(curl -fsS https://api.ipify.org)" >> "$GITHUB_OUTPUT"
@@ -201,12 +196,18 @@ jobs:
           docker tag "$REGISTRY/lazydad@${{ inputs.digest }}" "$dst"
           docker push -q "$dst"
 
-      # Staging's ingress denies everything but listed IPs; allow this runner only for the smoke tests.
-      # Ingress rules are app-level config, so this doesn't create a revision.
+      # With any Allow rule, Container Apps denies every other address: staging lists the owner's IP, and production
+      # behind Cloudflare lists Cloudflare's ranges (runbook section 12). Then allow this runner only for the smoke
+      # tests, which call the app's own address. Ingress rules are app-level config, so this doesn't create a revision.
       - name: Allow this runner through the app's IP restrictions
         id: ingress
-        if: ${{ inputs.restricted-ingress }}
         run: |
+          allows=$(az containerapp ingress access-restriction list -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
+            --query "length([?action=='Allow'])" -o tsv)
+          if [ "${allows:-0}" -eq 0 ]; then
+            echo "The app has no IP restrictions; the smoke tests can reach it as they are."
+            exit 0
+          fi
           rule="gh-${{ github.run_id }}-${{ github.run_attempt }}"
           az containerapp ingress access-restriction set -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
             --rule-name "$rule" --ip-address "${{ steps.runner.outputs.ip }}/32" --action Allow \

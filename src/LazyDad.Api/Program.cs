@@ -1,6 +1,7 @@
 using System.Threading.RateLimiting;
 using LazyDad.Api.Configuration;
 using LazyDad.Api.Controllers;
+using LazyDad.Api.Networking;
 using LazyDad.Api.Services;
 using LazyDad.Api.Telemetry;
 using LazyDad.Data;
@@ -16,7 +17,8 @@ builder.Services.AddControllers();
 // Traces, metrics and logs to Grafana Cloud, when OTEL_EXPORTER_OTLP_ENDPOINT is set (see TelemetryExtensions).
 builder.AddTelemetry();
 
-// Container Apps' ingress is the only way in; it appends the caller's address to X-Forwarded-For.
+// Container Apps' ingress is the only way in; it appends the caller's address to X-Forwarded-For. Behind Cloudflare
+// that caller is a Cloudflare edge server; CloudflareClientAddressMiddleware then takes the visitor from CF-Connecting-IP.
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
@@ -60,6 +62,7 @@ builder.Services.AddScoped<TopJokeService>();
 builder.Services.AddScoped<HtmlGeneratorService>();
 builder.Services.AddSingleton<SchedulerStatus>();
 builder.Services.Configure<AppInfoOptions>(builder.Configuration.GetSection(AppInfoOptions.SectionName));
+builder.Services.Configure<CloudflareOptions>(builder.Configuration.GetSection(CloudflareOptions.SectionName));
 builder.Services.AddHostedService<JokeSchedulerService>();
 
 var wwwrootPath = Path.Combine(builder.Environment.ContentRootPath, "wwwroot");
@@ -71,6 +74,7 @@ var app = builder.Build();
 // the stale internal WebRootFileProvider (which is snapshotted before wwwroot exists).
 var fileProvider = new PhysicalFileProvider(wwwrootPath);
 app.UseForwardedHeaders();
+app.UseMiddleware<CloudflareClientAddressMiddleware>();
 app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = fileProvider });
 app.UseStaticFiles(new StaticFileOptions { FileProvider = fileProvider });
 app.UseRateLimiter();

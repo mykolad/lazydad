@@ -161,8 +161,9 @@ az containerapp ingress access-restriction set -n lazydad-app-staging -g $RG `
 
 </details>
 
-Deploy Master adds the runner's IP for the duration of the smoke tests and removes it afterwards
-(`restricted-ingress: true` in `deploy-master.yml`). If your home IP changes, update the `home` rule.
+Deploy Environment adds the runner's IP for the duration of the smoke tests and removes it afterwards, for any app
+that has Allow rules (staging now, production too once it's behind Cloudflare, section 12). If your home IP
+changes, update the `home` rule.
 
 ## 6. GitHub: OIDC trust, environments, variables, secrets
 
@@ -998,3 +999,154 @@ can lift locks too. The fix is repository-scoped permissions (the registry's "RB
 Permissions" mode): previews write only to a `lazydad-preview` repository, and production's identity copies
 the image it deploys into a production-only `lazydad` repository with `az acr import` (same digest). That's a
 registry migration of its own, planned separately.
+
+## 12. `lazydad.fyi` behind Cloudflare: DDoS and bot protection
+
+Production gets a domain, `lazydad.fyi` (bought through Cloudflare Registrar, so its DNS is already on Cloudflare),
+served through Cloudflare's proxy on the **Free** plan:
+
+- **DDoS protection:** unmetered, included.
+- **Bots:** Block AI bots, AI Labyrinth, Bot Fight Mode, and a rate-limiting rule on votes. None of this makes the
+  site "humans only": an agent driving a real browser passes. Turnstile on votes is issue #35.
+- **The origin only answers Cloudflare:** otherwise anyone could skip all of it through the app's
+  `*.azurecontainerapps.io` address.
+
+Staging stays as it is, on its Azure address and open to your IP only. What changes in the repo (merged before
+step 2): the app takes the visitor's address from Cloudflare's `CF-Connecting-IP` header, but only for requests
+from Cloudflare's ranges (`CloudflareClientAddressMiddleware`, ranges in `appsettings.json`). Otherwise the vote rate
+limit would count every visitor behind the same Cloudflare edge server as one. Deploy Environment allows its
+runner through any app with IP restrictions, so deploys keep working after step 6.
+
+**1. Check the zone** (nothing to change, normally). A *zone* is Cloudflare's name for a domain in your account: its
+DNS records and all its settings. Open `lazydad.fyi` in the dashboard; its **Overview** should say plan **Free** and
+status **Active**. Active means the domain's nameservers are Cloudflare's, so the records and settings you add there
+are the ones the internet sees. Cloudflare Registrar sets up both when you buy a domain through it; a domain bought
+elsewhere would need its nameservers changed at that registrar first, and then a wait until the zone is Active.
+
+**2. Deploy the Cloudflare-aware app first.** It's on master once this section's PR is merged. Deploy Master
+rolls it out, and until step 5 nothing changes: no request comes from Cloudflare yet.
+
+**3. A certificate between Cloudflare and Azure.** Container Apps' free managed certificate can't be issued or
+renewed behind Cloudflare's proxy, so the origin uses a free **Cloudflare Origin CA** certificate, valid for 15
+years. Browsers don't trust it, but Cloudflare does, and only Cloudflare connects to the origin. In the dashboard:
+*SSL/TLS → Origin Server → Create Certificate*, key type RSA (2048), hostnames `lazydad.fyi` and `*.lazydad.fyi`,
+validity 15 years. Save the certificate as `origin.pem` and the private key as `origin.key`. The key is shown only
+once. Then turn them into a PFX (no password: it only exists for a minute) and upload it to the environment:
+
+```bash
+openssl pkcs12 -export -in origin.pem -inkey origin.key -out origin.pfx -passout pass:
+az containerapp env certificate upload -g $RG -n lazydad-cae --certificate-name lazydad-fyi-origin --certificate-file origin.pfx
+rm origin.key origin.pfx   # the key lives in the environment now; a new one is a new certificate (step 3 again)
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::CreateFromPemFile("$PWD/origin.pem", "$PWD/origin.key")
+[IO.File]::WriteAllBytes("$PWD/origin.pfx", $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx))
+az containerapp env certificate upload -g $RG -n lazydad-cae --certificate-name lazydad-fyi-origin --certificate-file origin.pfx
+Remove-Item origin.key, origin.pfx   # the key lives in the environment now; a new one is a new certificate (step 3 again)
+```
+
+</details>
+
+**4. Point the domain at the prod app, not proxied yet.** Azure checks that you own the domain (a TXT record) and
+where it points (for an apex domain, an A record to the environment's IP) before it accepts the hostname. So first
+add these in *DNS → Records*, both **DNS only** (grey cloud):
+
+| Type | Name | Content |
+|---|---|---|
+| `A` | `lazydad.fyi` (`@`) | the environment's IP, first command below |
+| `TXT` | `asuid` | the app's verification ID, second command below |
+
+```bash
+az containerapp env show -n lazydad-cae -g $RG --query properties.staticIp -o tsv
+az containerapp show -n lazydad-app -g $RG --query properties.customDomainVerificationId -o tsv
+# Once both records resolve (a minute or two):
+az containerapp hostname add --hostname lazydad.fyi -n lazydad-app -g $RG
+az containerapp hostname bind --hostname lazydad.fyi -n lazydad-app -g $RG --environment lazydad-cae --certificate lazydad-fyi-origin
+curl -sk https://lazydad.fyi/healthz   # -k: straight to Azure, whose Origin CA certificate only Cloudflare trusts
+```
+
+*PowerShell 7: the same commands, with `curl.exe` instead of `curl`, which PowerShell aliases in some setups.*
+
+**5. Turn on the proxy and the protections.**
+
+- *SSL/TLS → Overview*: encryption mode **Full (strict)** (Cloudflare to Azure is encrypted and the certificate
+  checked). *SSL/TLS → Edge Certificates*: **Always Use HTTPS** on, **Minimum TLS Version** 1.2.
+- *DNS → Records*: switch the `A` record to **Proxied** (orange cloud). Leave the `TXT` record as it is.
+  `curl -s https://lazydad.fyi/healthz` now works without `-k`: browsers get Cloudflare's certificate.
+- *Security → Bots*: **Block AI bots** (on all pages), **AI Labyrinth** on, **Bot Fight Mode** on. On the Free plan
+  no rule can make an exception to Bot Fight Mode, so check the uptime check still passes after step 6; turn Bot
+  Fight Mode off if it gets challenged.
+- *Security → WAF → Rate limiting rules* (the Free plan has one): name "Votes", expression
+  `(http.request.method eq "POST" and http.request.uri.path contains "/vote")`, counted per IP, 20 requests per
+  10 seconds, action **Block**. The app's own limit (30 a minute per visitor) stays behind it.
+- Optional, `www`: a `CNAME` `www` → `lazydad.fyi` (proxied), and *Rules → Redirect Rules*, template
+  "Redirect from WWW to root".
+
+**6. Make Cloudflare the only way in.** Allow only Cloudflare's IPv4 ranges on the prod app's ingress (Container Apps'
+ingress is IPv4; the app's own list also has the IPv6 ones, for visitors' addresses). With the first Allow rule,
+everyone else is denied, so for the few seconds this loop runs some Cloudflare edge servers still get a 403.
+Do it at a quiet time:
+
+```bash
+GEN=$(date +%Y%m%d)   # rules are named by date, so a later update can add the new list before removing this one
+i=0
+for range in $(curl -fsS https://www.cloudflare.com/ips-v4); do
+  i=$((i + 1))
+  az containerapp ingress access-restriction set -n lazydad-app -g $RG \
+    --rule-name "cloudflare-$GEN-$i" --ip-address "$range" --action Allow --description "Cloudflare $range" -o none
+done
+curl -s -o /dev/null -w '%{http_code}\n' https://lazydad-app.wittyfield-6bfb5662.westeurope.azurecontainerapps.io/healthz   # 403
+curl -s -o /dev/null -w '%{http_code}\n' https://lazydad.fyi/healthz                                                        # 200
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$GEN = Get-Date -Format yyyyMMdd   # rules are named by date, so a later update can add the new list before removing this one
+$i = 0
+foreach ($range in (Invoke-RestMethod https://www.cloudflare.com/ips-v4) -split "`n" | Where-Object { $_ }) {
+  $i++
+  az containerapp ingress access-restriction set -n lazydad-app -g $RG `
+    --rule-name "cloudflare-$GEN-$i" --ip-address $range --action Allow --description "Cloudflare $range" -o none
+}
+(Invoke-WebRequest https://lazydad-app.wittyfield-6bfb5662.westeurope.azurecontainerapps.io/healthz -SkipHttpErrorCheck).StatusCode   # 403
+(Invoke-WebRequest https://lazydad.fyi/healthz -SkipHttpErrorCheck).StatusCode                                                        # 200
+```
+
+</details>
+
+Then point Grafana's uptime check (section 10, step 3) at `https://lazydad.fyi/healthz`, and check it passes.
+Deploy Master's smoke tests keep using the Azure address: Deploy Environment sees the Allow rules and lets its
+runner through while they run. To undo step 6, remove every `cloudflare-*` rule (the loop below, with a `GEN`
+that matches none of them, for example `GEN=none`); with no Allow rules left, the app is open again.
+
+**Keeping the ranges current.** Cloudflare changes its ranges rarely, and announces it in advance. When it does,
+update `Cloudflare:IpRanges` in `appsettings.json` (a PR), and the ingress rules **new list first**: run step 6's
+loop again (a new date, so new rule names) while the old rules still admit every range, then remove the older
+rules. Removing first would leave the app with no Allow rules, open to everyone, and then admit only part of
+Cloudflare until the loop finished.
+
+```bash
+GEN=$(date +%Y%m%d)   # the date of the rules just added with step 6's loop; everything else goes
+for rule in $(az containerapp ingress access-restriction list -n lazydad-app -g $RG \
+    --query "[?starts_with(name, 'cloudflare-') && !starts_with(name, 'cloudflare-$GEN-')].name" -o tsv); do
+  az containerapp ingress access-restriction remove -n lazydad-app -g $RG --rule-name "$rule" -o none
+done
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$GEN = Get-Date -Format yyyyMMdd   # the date of the rules just added with step 6's loop; everything else goes
+foreach ($rule in az containerapp ingress access-restriction list -n lazydad-app -g $RG `
+    --query "[?starts_with(name, 'cloudflare-') && !starts_with(name, 'cloudflare-$GEN-')].name" -o tsv) {
+  az containerapp ingress access-restriction remove -n lazydad-app -g $RG --rule-name $rule -o none
+}
+```
+
+</details>
+
+Compare both lists with <https://www.cloudflare.com/ips/> now and then.
