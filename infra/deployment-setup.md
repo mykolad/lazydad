@@ -1091,11 +1091,12 @@ everyone else is denied, so for the few seconds this loop runs some Cloudflare e
 Do it at a quiet time:
 
 ```bash
+GEN=$(date +%Y%m%d)   # rules are named by date, so a later update can add the new list before removing this one
 i=0
 for range in $(curl -fsS https://www.cloudflare.com/ips-v4); do
   i=$((i + 1))
   az containerapp ingress access-restriction set -n lazydad-app -g $RG \
-    --rule-name "cloudflare-$i" --ip-address "$range" --action Allow --description "Cloudflare $range" -o none
+    --rule-name "cloudflare-$GEN-$i" --ip-address "$range" --action Allow --description "Cloudflare $range" -o none
 done
 curl -s -o /dev/null -w '%{http_code}\n' https://lazydad-app.wittyfield-6bfb5662.westeurope.azurecontainerapps.io/healthz   # 403
 curl -s -o /dev/null -w '%{http_code}\n' https://lazydad.fyi/healthz                                                        # 200
@@ -1104,11 +1105,12 @@ curl -s -o /dev/null -w '%{http_code}\n' https://lazydad.fyi/healthz            
 <details><summary>PowerShell 7</summary>
 
 ```powershell
+$GEN = Get-Date -Format yyyyMMdd   # rules are named by date, so a later update can add the new list before removing this one
 $i = 0
 foreach ($range in (Invoke-RestMethod https://www.cloudflare.com/ips-v4) -split "`n" | Where-Object { $_ }) {
   $i++
   az containerapp ingress access-restriction set -n lazydad-app -g $RG `
-    --rule-name "cloudflare-$i" --ip-address $range --action Allow --description "Cloudflare $range" -o none
+    --rule-name "cloudflare-$GEN-$i" --ip-address $range --action Allow --description "Cloudflare $range" -o none
 }
 (Invoke-WebRequest https://lazydad-app.wittyfield-6bfb5662.westeurope.azurecontainerapps.io/healthz -SkipHttpErrorCheck).StatusCode   # 403
 (Invoke-WebRequest https://lazydad.fyi/healthz -SkipHttpErrorCheck).StatusCode                                                        # 200
@@ -1118,9 +1120,33 @@ foreach ($range in (Invoke-RestMethod https://www.cloudflare.com/ips-v4) -split 
 
 Then point Grafana's uptime check (section 10, step 3) at `https://lazydad.fyi/healthz`, and check it passes.
 Deploy Master's smoke tests keep using the Azure address: Deploy Environment sees the Allow rules and lets its
-runner through while they run. To undo step 6, remove the `cloudflare-*` rules
-(`az containerapp ingress access-restriction remove -n lazydad-app -g $RG --rule-name cloudflare-<n>`).
+runner through while they run. To undo step 6, remove every `cloudflare-*` rule (the loop below, with a `GEN`
+that matches none of them, for example `GEN=none`); with no Allow rules left, the app is open again.
 
 **Keeping the ranges current.** Cloudflare changes its ranges rarely, and announces it in advance. When it does,
-update both the `cloudflare-*` ingress rules (step 6 again, after removing the old ones) and `Cloudflare:IpRanges`
-in `appsettings.json` (a PR). Compare them with <https://www.cloudflare.com/ips/> now and then.
+update `Cloudflare:IpRanges` in `appsettings.json` (a PR), and the ingress rules **new list first**: run step 6's
+loop again (a new date, so new rule names) while the old rules still admit every range, then remove the older
+rules. Removing first would leave the app with no Allow rules, open to everyone, and then admit only part of
+Cloudflare until the loop finished.
+
+```bash
+GEN=$(date +%Y%m%d)   # the date of the rules just added with step 6's loop; everything else goes
+for rule in $(az containerapp ingress access-restriction list -n lazydad-app -g $RG \
+    --query "[?starts_with(name, 'cloudflare-') && !starts_with(name, 'cloudflare-$GEN-')].name" -o tsv); do
+  az containerapp ingress access-restriction remove -n lazydad-app -g $RG --rule-name "$rule" -o none
+done
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$GEN = Get-Date -Format yyyyMMdd   # the date of the rules just added with step 6's loop; everything else goes
+foreach ($rule in az containerapp ingress access-restriction list -n lazydad-app -g $RG `
+    --query "[?starts_with(name, 'cloudflare-') && !starts_with(name, 'cloudflare-$GEN-')].name" -o tsv) {
+  az containerapp ingress access-restriction remove -n lazydad-app -g $RG --rule-name $rule -o none
+}
+```
+
+</details>
+
+Compare both lists with <https://www.cloudflare.com/ips/> now and then.
