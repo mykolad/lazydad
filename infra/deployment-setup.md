@@ -1159,7 +1159,8 @@ up with it without you having to notice:
 
 - **Every deploy syncs the ingress rules.** Deploy Environment reads Cloudflare's list from its API
   (`tools/cloudflare-ranges.sh sync`) and, on an app with `cloudflare-*` rules, adds new ranges first and only then
-  removes ones Cloudflare no longer lists. If the API can't be read, it leaves the rules alone with a warning.
+  removes ones Cloudflare no longer lists. If the API can't be read, it leaves the rules alone with a warning; it
+  never removes more than 3 ranges at once (more means something is off: it adds, warns, and leaves removals to you).
 - **A weekly check watches the app's own list.** *Check Cloudflare Ranges* (Mondays, or *Run workflow*) compares
   `Cloudflare:IpRanges` in `appsettings.json` with Cloudflare's list. If they differ, it fails and opens an issue,
   "Cloudflare's IP ranges changed", listing what to add and remove. The fix is a PR updating that list, and its

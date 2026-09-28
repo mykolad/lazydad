@@ -11,7 +11,8 @@
 #       If the Container App's ingress has cloudflare-* rules (it's locked to Cloudflare), makes them match
 #       Cloudflare's IPv4 ranges (Container Apps' ingress is IPv4): missing ranges are added first, as
 #       cloudflare-<rule-tag>-<n>, and only then are ranges Cloudflare no longer lists removed, so the app never
-#       admits less of Cloudflare than it should. Without cloudflare-* rules it does nothing.
+#       admits less of Cloudflare than it should. It refuses to remove more than 3 ranges at once. Without
+#       cloudflare-* rules it does nothing.
 set -euo pipefail
 
 api=https://api.cloudflare.com/client/v4/ips
@@ -29,12 +30,13 @@ ranges() {
     echo "Cloudflare's API didn't report success: $json" >&2
     return 1
   fi
+  # Duplicates removed before counting: the same range ten times must not pass as ten ranges.
   if [ "$family" = 4 ]; then
-    list=$(jq_text '.result.ipv4_cidrs[]' <<< "$json")
+    list=$(jq_text '.result.ipv4_cidrs[]' <<< "$json" | sort -u)
     pattern='^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$'
     minimum=10
   else
-    list=$(jq_text '.result.ipv6_cidrs[]' <<< "$json")
+    list=$(jq_text '.result.ipv6_cidrs[]' <<< "$json" | sort -u)
     pattern='^[0-9a-f:]+/[0-9]{1,3}$'
     minimum=3
   fi
@@ -43,7 +45,7 @@ ranges() {
     echo "$list" >&2
     return 1
   fi
-  sort -u <<< "$list"
+  echo "$list"
 }
 
 fetch() {
@@ -79,7 +81,7 @@ check() {
 }
 
 sync() {
-  local app=$1 group=$2 tag=$3 rules wanted have range name i=0 changed=0
+  local app=$1 group=$2 tag=$3 rules wanted have obsolete range name i=0 changed=0 max_removals=3
   rules=$(az containerapp ingress access-restriction list -n "$app" -g "$group" \
     --query "[?starts_with(name, 'cloudflare-')].[name, ipAddressRange]" -o tsv | tr -d '\r')
   if [ -z "$rules" ]; then
@@ -98,13 +100,22 @@ sync() {
       changed=1
     fi
   done
+  # Cloudflare's changes are small; removing more than a few ranges at once means something is off. The additions
+  # above stand (they only admit more), but nothing is removed until a person has looked.
+  obsolete=$(while IFS=$'\t' read -r name range; do
+    grep -qxF "$range" <<< "$wanted" || printf '%s\t%s\n' "$name" "$range"
+  done <<< "$rules")
+  if [ "$(grep -c . <<< "$obsolete")" -gt "$max_removals" ]; then
+    echo "Refusing to remove $(grep -c . <<< "$obsolete") ranges at once (at most $max_removals); remove them by hand if Cloudflare really dropped them:" >&2
+    echo "$obsolete" >&2
+    return 1
+  fi
   while IFS=$'\t' read -r name range; do
-    if ! grep -qxF "$range" <<< "$wanted"; then
-      az containerapp ingress access-restriction remove -n "$app" -g "$group" --rule-name "$name" -o none
-      echo "Removed $range ($name): Cloudflare no longer lists it."
-      changed=1
-    fi
-  done <<< "$rules"
+    [ -n "$name" ] || continue
+    az containerapp ingress access-restriction remove -n "$app" -g "$group" --rule-name "$name" -o none
+    echo "Removed $range ($name): Cloudflare no longer lists it."
+    changed=1
+  done <<< "$obsolete"
   if [ "$changed" = 0 ]; then
     echo "$app's Cloudflare rules match Cloudflare's $(grep -c . <<< "$wanted") IPv4 ranges."
   fi
@@ -116,5 +127,5 @@ case "$command" in
   fetch) fetch "$@" ;;
   check) check "$@" ;;
   sync) sync "$@" ;;
-  *) sed -n '2,14p' "$0" >&2; exit 2 ;;
+  *) sed -n '2,15p' "$0" >&2; exit 2 ;;
 esac
