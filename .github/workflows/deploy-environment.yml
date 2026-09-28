@@ -196,6 +196,20 @@ jobs:
           docker tag "$REGISTRY/lazydad@${{ inputs.digest }}" "$dst"
           docker push -q "$dst"
 
+      # Behind Cloudflare (runbook section 12), the app's ingress admits only Cloudflare's IPv4 ranges: bring them up
+      # to date with Cloudflare's published list on every deploy (new ranges added before old ones are removed).
+      # Apps without cloudflare-* rules (staging) are left alone. Not fatal: if Cloudflare's list can't be read, the
+      # rules stay as they are (still right, or at worst with extra additions), and the weekly Check Cloudflare Ranges
+      # run notices a real change. A rollback to a commit from before the script skips this.
+      - name: Sync Cloudflare's ranges on the app's ingress
+        run: |
+          if [ ! -f tools/cloudflare-ranges.sh ]; then
+            echo "This commit has no tools/cloudflare-ranges.sh; the ingress rules stay as they are."
+            exit 0
+          fi
+          bash tools/cloudflare-ranges.sh sync "${{ inputs.app-name }}" "$RESOURCE_GROUP" "r${{ github.run_id }}" ||
+            echo "::warning::Couldn't sync Cloudflare's ranges on ${{ inputs.app-name }}'s ingress; its rules are unchanged or only added to."
+
       # With any Allow rule, Container Apps denies every other address: staging lists the owner's IP, and production
       # behind Cloudflare lists Cloudflare's ranges (runbook section 12). Then allow this runner only for the smoke
       # tests, which call the app's own address. Ingress rules are app-level config, so this doesn't create a revision.

@@ -1154,11 +1154,21 @@ Deploy Master's smoke tests keep using the Azure address: Deploy Environment see
 runner through while they run. To undo step 6, remove every `cloudflare-*` rule (the loop below, with a `GEN`
 that matches none of them, for example `GEN=none`); with no Allow rules left, the app is open again.
 
-**Keeping the ranges current.** Cloudflare changes its ranges rarely, and announces it in advance. When it does,
-update `Cloudflare:IpRanges` in `appsettings.json` (a PR), and the ingress rules **new list first**: run step 6's
-loop again (a new date, so new rule names) while the old rules still admit every range, then remove the older
-rules. Removing first would leave the app with no Allow rules, open to everyone, and then admit only part of
-Cloudflare until the loop finished.
+**Keeping the ranges current.** Cloudflare changes its ranges rarely, and announces it in advance. Two things keep
+up with it without you having to notice:
+
+- **Every deploy syncs the ingress rules.** Deploy Environment reads Cloudflare's list from its API
+  (`tools/cloudflare-ranges.sh sync`) and, on an app with `cloudflare-*` rules, adds new ranges first and only then
+  removes ones Cloudflare no longer lists. If the API can't be read, it leaves the rules alone with a warning.
+- **A weekly check watches the app's own list.** *Check Cloudflare Ranges* (Mondays, or *Run workflow*) compares
+  `Cloudflare:IpRanges` in `appsettings.json` with Cloudflare's list. If they differ, it fails and opens an issue,
+  "Cloudflare's IP ranges changed", listing what to add and remove. The fix is a PR updating that list, and its
+  deploy also syncs the ingress rules. The check closes the issue once the lists match again.
+
+To check by hand: `bash tools/cloudflare-ranges.sh check src/LazyDad.Api/appsettings.json` (needs `jq`). To change
+the ingress rules by hand, add the new list first: run step 6's loop again (a new date, so new rule names) while
+the old rules still admit every range, then remove the older rules. Removing first would leave the app with no Allow
+rules, open to everyone, and then admit only part of Cloudflare until the loop finished.
 
 ```bash
 GEN=$(date +%Y%m%d)   # the date of the rules just added with step 6's loop; everything else goes
