@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016  # jq programs are single-quoted on purpose: their $variables are jq's, not the shell's.
 # Cloudflare's published IP ranges (https://www.cloudflare.com/ips/), behind the prod app's ingress rules and the
 # app's own list (Cloudflare:IpRanges in appsettings.json). See infra/deployment-setup.md, section 12.
 #
@@ -10,13 +11,16 @@
 #   cloudflare-ranges.sh sync <app> <resource-group> <rule-tag> on|off
 #       on (the environment's CLOUDFLARE_ONLY_INGRESS is true): the Container App admits only Cloudflare. Its
 #       cloudflare-* ingress rules are made to match Cloudflare's IPv4 ranges (Container Apps' ingress is IPv4),
-#       all of them created if there are none yet: missing ranges are added first, as cloudflare-<rule-tag>-<n>,
-#       and only then are ranges Cloudflare no longer lists removed, so the app never admits less of Cloudflare
-#       than it should. It refuses to remove more than 3 ranges at once.
+#       all of them created if there are none yet. Missing ranges are added (as cloudflare-<rule-tag>-<n>) and ranges
+#       Cloudflare no longer lists are removed in one update of the whole list (a PATCH), so it changes all at once:
+#       the app never admits only part of Cloudflare. It refuses to remove more than 3 ranges at once (it then only
+#       adds). Rules that aren't cloudflare-* (staging's home, a deploy's runner) are kept.
 #       off: any cloudflare-* rules are removed, so the app's own address is open again (with no other Allow rule).
 set -euo pipefail
 
 api=https://api.cloudflare.com/client/v4/ips
+# The Container Apps API version for the one-update ingress PATCH (apply_rules).
+api_version=2026-01-01
 
 # jq's text output, without the carriage returns jq adds on Windows (Git Bash); a no-op on Linux runners.
 jq_text() {
@@ -81,65 +85,98 @@ check() {
   return 1
 }
 
+# jq's compact JSON output, without Windows carriage returns (see jq_text).
+jq_json() {
+  jq -c "$@" | tr -d '\r'
+}
+
+# Writes the app's whole list of ingress rules in one update: a PATCH of just that property (a JSON merge patch, so
+# the rest of the app, its secrets included, stays as it is; a full PUT would need them). Azure applies the list as a
+# whole, so there's no moment with only some of the new rules. The PATCH finishes asynchronously: wait until the app
+# reports the new list.
+apply_rules() {
+  local app=$1 group=$2 id=$3 desired=$4 body state count expected
+  body=$(mktemp ./ingress-rules-XXXXXX.json)
+  jq -n --argjson rules "$desired" '{properties: {configuration: {ingress: {ipSecurityRestrictions: $rules}}}}' > "$body"
+  az rest --method patch --url "https://management.azure.com$id?api-version=$api_version" --body "@$body" -o none
+  rm -f "$body"
+  expected=$(jq 'length' <<< "$desired" | tr -d '\r')
+  for _ in $(seq 1 60); do
+    # By name, not --ids: Git Bash would rewrite a /subscriptions/... argument as a file path.
+    state=$(az containerapp show -n "$app" -g "$group" --query properties.provisioningState -o tsv | tr -d '\r')
+    count=$(az containerapp show -n "$app" -g "$group" \
+      --query "length(properties.configuration.ingress.ipSecurityRestrictions || \`[]\`)" -o tsv | tr -d '\r')
+    if [ "$state" = Succeeded ] && [ "$count" = "$expected" ]; then
+      return 0
+    fi
+    sleep 5
+  done
+  echo "The rules update didn't finish in 5 minutes (state '$state', $count rules, expected $expected)." >&2
+  return 1
+}
+
 sync() {
-  local app=$1 group=$2 tag=$3 mode=${4:-} rules wanted have obsolete range name i=0 changed=0 max_removals=3
+  local app=$1 group=$2 tag=$3 mode=${4:-} max_removals=3
+  local id current cloudflare others wanted wanted_json have missing added kept obsolete desired i=0 range
   case "$mode" in
     on | off) ;;
     *) echo "sync: the mode must be on or off, not '$mode'" >&2; return 2 ;;
   esac
-  rules=$(az containerapp ingress access-restriction list -n "$app" -g "$group" \
-    --query "[?starts_with(name, 'cloudflare-')].[name, ipAddressRange]" -o tsv | tr -d '\r')
+  id=$(az containerapp show -n "$app" -g "$group" --query id -o tsv | tr -d '\r')
+  current=$(az containerapp show -n "$app" -g "$group" \
+    --query "properties.configuration.ingress.ipSecurityRestrictions || \`[]\`" -o json | jq_json .)
+  # Only cloudflare-* rules are this script's; any other rule (staging's home, a deploy's runner) is kept as it is.
+  cloudflare=$(jq_json '[.[] | select(.name | startswith("cloudflare-"))]' <<< "$current")
+  others=$(jq_json '[.[] | select(.name | startswith("cloudflare-") | not)]' <<< "$current")
+
   if [ "$mode" = off ]; then
-    if [ -z "$rules" ]; then
+    if [ "$(jq 'length' <<< "$cloudflare" | tr -d '\r')" = 0 ]; then
       echo "$app isn't locked to Cloudflare (CLOUDFLARE_ONLY_INGRESS isn't true), and has no cloudflare-* rules."
       return 0
     fi
     # Turning the lock off: every Cloudflare rule goes, and with no Allow rule left the app admits every address.
     echo "::warning::CLOUDFLARE_ONLY_INGRESS isn't true: removing $app's cloudflare-* rules, so its own address is open again."
-    while IFS=$'\t' read -r name range; do
-      az containerapp ingress access-restriction remove -n "$app" -g "$group" --rule-name "$name" -o none
-      echo "Removed $range ($name)."
-    done <<< "$rules"
+    apply_rules "$app" "$group" "$id" "$others"
+    jq_text '.[] | "Removed \(.ipAddressRange) (\(.name))."' <<< "$cloudflare"
     return 0
   fi
-  # On: from here, the app admits only Cloudflare. Without rules yet, all of Cloudflare's ranges are added (the
-  # first Allow rule denies everyone else, so for the seconds this takes, not all of Cloudflare gets through).
+
+  # On: from here, the app admits only Cloudflare.
   wanted=$(ranges 4)
-  if [ -z "$rules" ]; then
-    echo "Locking $app to Cloudflare: adding a rule per IPv4 range."
-  fi
-  have=$(cut -f2 <<< "$rules" | sort -u)
-  # Add first: while this runs, every range Cloudflare uses stays admitted.
-  for range in $wanted; do
-    if ! grep -qxF "$range" <<< "$have"; then
-      i=$((i + 1))
-      az containerapp ingress access-restriction set -n "$app" -g "$group" --rule-name "cloudflare-$tag-$i" \
-        --ip-address "$range" --action Allow --description "Cloudflare $range" -o none
-      echo "Added $range (cloudflare-$tag-$i)."
-      changed=1
-    fi
-  done
+  wanted_json=$(jq -R . <<< "$wanted" | jq_json -s .)
+  have=$(jq_text '.[].ipAddressRange' <<< "$cloudflare" | sort -u)
+  missing=$(comm -23 <(echo "$wanted") <(echo "$have") | grep . || true)
+  added=$(for range in $missing; do
+    i=$((i + 1))
+    jq -n --arg name "cloudflare-$tag-$i" --arg range "$range" \
+      '{name: $name, ipAddressRange: $range, action: "Allow", description: ("Cloudflare " + $range)}'
+  done | jq_json -s .)
+  kept=$(jq_json --argjson wanted "$wanted_json" '[.[] | select(.ipAddressRange as $r | $wanted | index($r))]' <<< "$cloudflare")
+  obsolete=$(jq_json --argjson wanted "$wanted_json" '[.[] | select(.ipAddressRange as $r | $wanted | index($r) | not)]' <<< "$cloudflare")
+
   # Cloudflare's changes are small; removing more than a few ranges at once means something is off. The additions
-  # above stand (they only admit more), but nothing is removed until a person has looked.
-  obsolete=""
-  if [ -n "$rules" ]; then
-    obsolete=$(while IFS=$'\t' read -r name range; do
-      grep -qxF "$range" <<< "$wanted" || printf '%s\t%s\n' "$name" "$range"
-    done <<< "$rules")
+  # still go in (they only admit more), but nothing is removed until a person has looked.
+  local too_many=0
+  if [ "$(jq 'length' <<< "$obsolete" | tr -d '\r')" -gt "$max_removals" ]; then
+    too_many=1
+    kept=$cloudflare
+    obsolete='[]'
   fi
-  if [ "$(grep -c . <<< "$obsolete")" -gt "$max_removals" ]; then
-    echo "Refusing to remove $(grep -c . <<< "$obsolete") ranges at once (at most $max_removals); remove them by hand if Cloudflare really dropped them:" >&2
-    echo "$obsolete" >&2
-    return 1
-  fi
-  while IFS=$'\t' read -r name range; do
-    [ -n "$name" ] || continue
-    az containerapp ingress access-restriction remove -n "$app" -g "$group" --rule-name "$name" -o none
-    echo "Removed $range ($name): Cloudflare no longer lists it."
-    changed=1
-  done <<< "$obsolete"
-  if [ "$changed" = 0 ]; then
+  if [ "$(jq 'length' <<< "$added" | tr -d '\r')" = 0 ] && [ "$(jq 'length' <<< "$obsolete" | tr -d '\r')" = 0 ]; then
     echo "$app's Cloudflare rules match Cloudflare's $(grep -c . <<< "$wanted") IPv4 ranges."
+  else
+    if [ "$(jq 'length' <<< "$cloudflare" | tr -d '\r')" = 0 ]; then
+      echo "Locking $app to Cloudflare: adding a rule per IPv4 range, in one update."
+    fi
+    desired=$(jq_json -n --argjson a "$others" --argjson b "$kept" --argjson c "$added" '$a + $b + $c')
+    apply_rules "$app" "$group" "$id" "$desired"
+    jq_text '.[] | "Added \(.ipAddressRange) (\(.name))."' <<< "$added"
+    jq_text '.[] | "Removed \(.ipAddressRange) (\(.name)): Cloudflare no longer lists it."' <<< "$obsolete"
+  fi
+  if [ "$too_many" = 1 ]; then
+    echo "Refusing to remove more than $max_removals ranges at once; remove these by hand if Cloudflare really dropped them:" >&2
+    jq_text --argjson wanted "$wanted_json" '.[] | select(.ipAddressRange as $r | $wanted | index($r) | not) | "  \(.name)\t\(.ipAddressRange)"' <<< "$cloudflare" >&2
+    return 1
   fi
 }
 
@@ -149,5 +186,5 @@ case "$command" in
   fetch) fetch "$@" ;;
   check) check "$@" ;;
   sync) sync "$@" ;;
-  *) sed -n '2,16p' "$0" >&2; exit 2 ;;
+  *) sed -n '3,18p' "$0" >&2; exit 2 ;;
 esac

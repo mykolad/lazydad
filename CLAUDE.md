@@ -140,8 +140,8 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
     Cloudflare's IPv4 ranges (runbook section 12). The ranges also live in `appsettings.json` (`Cloudflare:IpRanges`).
     The switch is the `production` environment's `CLOUDFLARE_ONLY_INGRESS` variable: while it's `true`, every deploy
     creates the `cloudflare-*` ingress rules if missing and keeps them in sync with Cloudflare's API
-    (`tools/cloudflare-ranges.sh`: new first, then removals, at most 3 at once; skipped if the API can't be read);
-    otherwise the deploy removes them. The weekly **Check Cloudflare Ranges** workflow opens an issue when the
+    (`tools/cloudflare-ranges.sh`: one PATCH of the whole rule list, at most 3 removals at once; skipped if the API
+    can't be read); otherwise the deploy removes them. The weekly **Check Cloudflare Ranges** workflow opens an issue when the
     `appsettings.json` list no longer matches.
   - `lazydad-app-staging`: 0–1 replicas (scales to zero when idle). Calls the real LLMs.
     **Ingress allows listed IPs only** (the owner's `home` rule; Deploy Master adds its runner temporarily),
