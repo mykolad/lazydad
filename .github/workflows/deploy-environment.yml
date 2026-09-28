@@ -207,7 +207,9 @@ jobs:
             echo "This commit has no tools/cloudflare-ranges.sh; the ingress rules stay as they are."
             exit 0
           fi
-          bash tools/cloudflare-ranges.sh sync "${{ inputs.app-name }}" "$RESOURCE_GROUP" "r${{ github.run_id }}" ||
+          # The rule-name tag is unique per sync: a re-run (a new attempt) or the automatic rollback in the same run
+          # ("rb" instead of "r") must not reuse, and so overwrite, rules an earlier sync added.
+          bash tools/cloudflare-ranges.sh sync "${{ inputs.app-name }}" "$RESOURCE_GROUP" "${{ inputs.revision-prefix }}${{ github.run_id }}-${{ github.run_attempt }}" ||
             echo "::warning::Couldn't sync Cloudflare's ranges on ${{ inputs.app-name }}'s ingress; its rules are unchanged or only added to."
 
       # With any Allow rule, Container Apps denies every other address: staging lists the owner's IP, and production

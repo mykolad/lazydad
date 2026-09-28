@@ -47,9 +47,15 @@ ranges() {
 }
 
 fetch() {
+  local v4 v6
   case "${1:-both}" in
     4 | 6) ranges "$1" ;;
-    both) { ranges 4; ranges 6; } | sort -u ;;
+    both)
+      # Each family on its own: a failure of either must fail the whole fetch, not leave a partial list.
+      v4=$(ranges 4) || return 1
+      v6=$(ranges 6) || return 1
+      printf '%s\n%s\n' "$v4" "$v6" | sort -u
+      ;;
     *) echo "fetch: 4, 6 or nothing" >&2; return 2 ;;
   esac
 }
