@@ -229,19 +229,24 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Start_AfterTheStartupTick_SchedulesTheNextOneAnIntervalLater()
+    public async Task Start_AfterTheStartupTick_SchedulesTheNextRegularTickOnTheFixedGrid()
     {
         SetupModel("fast", () => Reply("Жарт"));
         var scheduler = CreateScheduler(Ukrainian("fast"));
+        var period = TimeSpan.FromHours(1);
         var started = DateTime.UtcNow;
 
         await scheduler.StartAsync(CancellationToken.None);
         await TickCompletedAsync();
         // The loop records the next tick right after the startup tick completes.
-        await NextTickAfterAsync(started.AddMinutes(30));
+        await NextTickAfterAsync(started.AddMinutes(29));
         await scheduler.StopAsync(CancellationToken.None);
 
-        Assert.InRange(status.NextTickAt!.Value, started.AddHours(1), DateTime.UtcNow.AddHours(1));
+        // A whole hour (the interval here), at least half an hour after the restart: not "an interval after the
+        // restart", so restarts don't move the rhythm. (Either instant may be the one the scheduler read.)
+        var next = status.NextTickAt!.Value;
+        Assert.Contains(next, new[] { TickSchedule.FirstDueAfterStartup(started, period), TickSchedule.FirstDueAfterStartup(DateTime.UtcNow, period) });
+        Assert.Equal(0, next.Ticks % period.Ticks);
     }
 
     [Fact]
@@ -283,15 +288,15 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     {
         SetupModel("fast", () => Reply("Жарт"));
         var scheduler = CreateScheduler(Ukrainian("fast"));
-        var before = DateTime.UtcNow;
+        var nextDue = TickSchedule.FirstDueAfterStartup(DateTime.UtcNow, TimeSpan.FromHours(1));
 
-        await scheduler.RunTickAsync(Ukrainian("fast"), true, CancellationToken.None);
+        await scheduler.RunTickAsync(Ukrainian("fast"), true, nextDue, CancellationToken.None);
 
         Assert.Single(saved);
-        // Until just before the next due time: 1h minus a margin (a tenth of the period, at most 5 min).
+        // Until just before the next due time: minus a margin (a tenth of the 1h period, at most 5 min). Every
+        // replica computes the same due times, so their ticks until then find the lease held.
         lockRepositoryMock.Verify(r => r.AcquireAsync(
-            "jokes:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(),
-            It.Is<DateTime>(expires => expires >= before.AddMinutes(55) && expires <= DateTime.UtcNow.AddMinutes(55)),
+            "jokes:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(), nextDue.AddMinutes(-5),
             It.IsAny<CancellationToken>()), Times.Once);
         lockRepositoryMock.Verify(r => r.TryAcquireAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -307,7 +312,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         using var ticks = Collect("lazydad.scheduler.ticks");
         using var leaderboard = Collect("lazydad.leaderboard.updates");
 
-        await scheduler.RunTickAsync(Ukrainian("fast"), false, CancellationToken.None);
+        await scheduler.RunTickAsync(Ukrainian("fast"), false, DateTime.UtcNow.AddHours(1), CancellationToken.None);
 
         Assert.Empty(saved);
         llmClientFactoryMock.Verify(f => f.CreateClient(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
@@ -328,7 +333,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
             .ReturnsAsync(true);
         var scheduler = CreateScheduler(Ukrainian("fast"));
 
-        await scheduler.RunTickAsync(Ukrainian("fast"), false, CancellationToken.None);
+        await scheduler.RunTickAsync(Ukrainian("fast"), false, DateTime.UtcNow.AddHours(1), CancellationToken.None);
 
         Assert.Single(saved);
         Assert.Equal("unchanged", Assert.Single(status.LastTicks).Leaderboard);

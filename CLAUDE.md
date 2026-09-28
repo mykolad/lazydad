@@ -49,7 +49,11 @@ tests/LazyDad.SmokeTests — smoke tests against a deployed app (run by Deploy M
   endpoint is rate-limited to 30 votes per minute per client IP: from `X-Forwarded-For` (set by the Container Apps
   ingress), or, for requests from Cloudflare's ranges, from `CF-Connecting-IP` (`CloudflareClientAddressMiddleware`;
   anyone can send that header, so only Cloudflare's count). Server-side dedupe needs sign-in, which doesn't exist yet.
-- One loop per enabled language (a delay to each due time, every `IntervalHours`) runs concurrently via `Task.WhenAll`.
+- One loop per enabled language runs concurrently via `Task.WhenAll`: a startup tick, then a delay to each regular
+  due time. **Due times are fixed UTC times** (`TickSchedule`: every whole `IntervalHours` since midnight UTC, so
+  00:00, 04:00, 08:00 … for 4 h), the same for every replica and unchanged by restarts. After a startup tick the
+  first regular one is at least half a period away, so a restart just before a due time doesn't add a second batch
+  minutes later.
   Within a tick, all of a language's `LlmModels` are called in parallel, each in its
   own DI scope (a `DbContext` must not be shared across concurrent calls); jokes are
   then persisted sequentially.
@@ -62,12 +66,13 @@ tests/LazyDad.SmokeTests — smoke tests against a deployed app (run by Deploy M
   delete + insert in one transaction.
 - Russian language support was removed (migration `RemoveRussianJokes` purges its rows).
 - **One batch per language per period across replicas** (`SchedulerLocks` table, `SchedulerLockRepository`):
-  a tick takes a lease `jokes:<language>` that lasts until just before the next due time (period minus
-  min(5 min, period/10)). A replica whose timer fires while another holds it skips (`/status` leaderboard
+  a tick takes a lease `jokes:<language>` that lasts until just before the next due time (that due time minus
+  min(5 min, period/10)); every replica computes the same due times, so their ticks until then skip. A replica whose timer fires while another holds it skips (`/status` leaderboard
   `skipped`); if the holder dies, the next replica whose timer fires takes over. Taking an expired lease is one
   atomic `UPDATE`, and the first insert is guarded by the primary key. The **startup tick always runs** and takes
   the lease: a new revision proves itself with it (smoke tests), while the old revision usually still holds it.
-  So a replica start (deploy, restart, scale-out) still means one extra batch.
+  So a replica start (deploy, restart, scale-out) still means one extra batch, but not a new rhythm: its lease
+  lasts until the first regular due time after it, which it or any replica then runs.
 - **Telemetry** (`src/LazyDad.Api/Telemetry`): OpenTelemetry traces, metrics and logs over OTLP to Grafana Cloud
   (EU), on only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (the Container Apps settings; runbook section 10). The standard
   `OTEL_*` variables apply, with `http/protobuf` as the default protocol. A trace per request (not `/healthz`) and per
