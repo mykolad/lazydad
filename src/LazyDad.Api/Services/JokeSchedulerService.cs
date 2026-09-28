@@ -151,10 +151,12 @@ public class JokeSchedulerService : BackgroundService
         var margin = TimeSpan.FromTicks(Math.Min(TimeSpan.FromMinutes(5).Ticks, period.Ticks / 10));
         var now = DateTime.UtcNow;
         var lockKey = $"jokes:{language.Language}";
-        // A regular tick that runs so late (say, after the host was suspended) that its lease would already have
-        // expired skips its slot: an expired lease is free to take, so every replica could generate the same batch.
-        // (A startup tick's next due time is at least half a period away.)
-        if (!startup && nextDue - margin <= now)
+        // A regular tick that runs late (say, after the host was suspended) keeps its slot only while at least half a
+        // period of lease is left: far longer than a batch takes, so no other replica can take the slot over while
+        // this one is still working. Later than that it skips the slot, since an expired (or soon expired) lease is
+        // free to take and several replicas could generate the same batch. On time, a tick gets almost a period;
+        // a startup tick's next due time is at least half a period away.
+        if (!startup && nextDue - margin - now < period / 2)
         {
             logger.LogWarning("The '{Language}' tick came too late for its slot (the next one is due {NextDue:o}); skipping it.",
                 language.Language, nextDue);

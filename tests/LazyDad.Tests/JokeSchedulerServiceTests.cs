@@ -324,24 +324,42 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         Assert.Empty(leaderboard.GetMeasurementSnapshot());
     }
 
-    [Fact]
-    public async Task PeriodicTick_TooLateForItsSlot_SkipsWithoutTakingAnExpiredLease()
+    [Theory]
+    [InlineData(3)]    // the lease would already have expired (inside the 5-minute margin)
+    [InlineData(20)]   // 15 minutes of lease: it could expire mid-batch and let another replica take the slot
+    public async Task PeriodicTick_TooLateForItsSlot_SkipsWithoutTakingAShortLease(int minutesToNextDue)
     {
-        // E.g. the host was suspended: the slot after this one is due in 3 minutes, inside the 5-minute margin, so
-        // the lease would already have expired. An expired lease is free to take, so every replica could run it.
+        // E.g. the host was suspended. With a 1h period, a regular tick needs at least half an hour of lease left.
         SetupModel("fast", () => Reply("Жарт"));
         lockRepositoryMock
             .Setup(r => r.TryAcquireAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
         var scheduler = CreateScheduler(Ukrainian("fast"));
 
-        await scheduler.RunTickAsync(Ukrainian("fast"), false, DateTime.UtcNow.AddMinutes(3), CancellationToken.None);
+        await scheduler.RunTickAsync(Ukrainian("fast"), false, DateTime.UtcNow.AddMinutes(minutesToNextDue), CancellationToken.None);
 
         Assert.Empty(saved);
         lockRepositoryMock.Verify(r => r.TryAcquireAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Never);
         llmClientFactoryMock.Verify(f => f.CreateClient(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
         Assert.Equal("skipped", Assert.Single(status.LastTicks).Leaderboard);
         Assert.Contains(schedulerLogger.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("too late for its slot"));
+    }
+
+    [Fact]
+    public async Task PeriodicTick_SomewhatLate_StillRunsWithEnoughLease()
+    {
+        // 40 minutes to the next due time: 35 minutes of lease, over half the 1h period.
+        SetupModel("fast", () => Reply("Жарт"));
+        lockRepositoryMock
+            .Setup(r => r.TryAcquireAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+        var nextDue = DateTime.UtcNow.AddMinutes(40);
+
+        await scheduler.RunTickAsync(Ukrainian("fast"), false, nextDue, CancellationToken.None);
+
+        Assert.Single(saved);
+        lockRepositoryMock.Verify(r => r.TryAcquireAsync("jokes:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(), nextDue.AddMinutes(-5), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
