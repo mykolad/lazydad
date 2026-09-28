@@ -3,6 +3,17 @@
 What was set up on 2026-09-24 to support `.github/workflows/deploy-master.yml` (Deploy Master). Every step used the `az`
 and `gh` CLIs. Keep this in sync with reality until it's replaced by Bicep (IaC is on the plan).
 
+**Status (2026-09-28):**
+
+| Section | State |
+|---|---|
+| 1–7: identities, staging, OIDC, registry purge | Set up 2026-09-24/25. Later sections changed parts of it: section 11 took staging away from `lazydad-github-cd`, and section 9 removed the SQL passwords that sections 2, 3 and 6 set up. |
+| 8: Azure OpenAI with managed identities | Done 2026-09-28: key authentication off. |
+| 9: Azure SQL with Entra ID | Done 2026-09-28: Entra-only, no SQL passwords anywhere. |
+| 10: Grafana Cloud | Done 2026-09-26/28: telemetry, uptime check, Log Analytics cap (0.1 GB/day). |
+| 11: staging-only deploy identity | Steps 1–6 done 2026-09-28. Step 7 (optional: narrower roles for prod's identity) not done. |
+| 12: `lazydad.fyi` behind Cloudflare | Done 2026-09-28: locked to Cloudflare (`CLOUDFLARE_ONLY_INGRESS`). |
+
 Each command block is bash (Git Bash on Windows). Under it, a collapsed **PowerShell 7** version does the same, or a
 note says the bash commands run unchanged. Both use the same variable names; set them once per session with the block
 below. Except `$PID` and `$ENV`, which PowerShell reserves (process id, and too close to the `$env:` drive): those are
@@ -317,6 +328,11 @@ only a few MB of unique data.
 
 ## 8. Azure OpenAI with managed identities, no API key (issue #10)
 
+> **Done 2026-09-28.** Both apps call Azure OpenAI as their system-assigned identities; `disableLocalAuth` is on,
+> the Key Vault copy is deleted, and `ROLLBACK_MIN_COMMIT` is #30's merge commit (`27d5dc5`). Learned on the way:
+> remove the `ApiKey` setting (a new revision) **before** the `openai-key` secret. Removing a secret that a setting
+> still references fails with `ContainerAppSecretRefNotFound`, and the whole update is rejected.
+
 The app uses the API key while `LlmProviders:AzureOpenAI:ApiKey` is set, and Entra ID when it's empty:
 `DefaultAzureCredential` picks the app's managed identity in Azure and your `az login` locally. So each
 environment switches when its key setting is removed, with no code change. Do staging first.
@@ -390,7 +406,13 @@ az resource update --ids $OPENAI_ID --set properties.disableLocalAuth=true
 
 ## 9. Azure SQL with Entra ID, no passwords (issue #11)
 
-Everything connects as `sqladmin` today. The target is least-privilege Entra identities and no SQL
+> **Done 2026-09-28.** The server is Entra-only; the apps connect as their system-assigned identities and migrations
+> run as each environment's deploy identity; the `SqlConnectionString` Key Vault secret is purged and no environment
+> has a `SQL_CONNECTION_STRING` secret. Learned on the way: `CREATE USER … WITH OBJECT_ID` requires the user name to
+> start with the identity's display name, and a system-assigned identity is named after its app, so staging's app
+> user is `[lazydad-app-staging]`, not `[lazydad-app]`.
+
+Before this section, everything connected as `sqladmin`. The target is least-privilege Entra identities and no SQL
 passwords anywhere. It uses the apps' **system-assigned identities**, one per app, so staging can't reach
 the prod database. Section 8 (Azure OpenAI) assigns the same ones; if you haven't done that yet:
 
@@ -697,12 +719,17 @@ az monitor log-analytics workspace update -g $RG -n workspace-lazydadrgseCk --qu
 
 ## 11. Branch previews can't reach production: a staging-only deploy identity
 
+> **Steps 1–6 done 2026-09-28**, tested with Deploy Branch to Staging (build, Entra ID migrations, rollout and smoke
+> tests all as `lazydad-github-staging`); step 7 (optional) not yet. Learned on the way: variables like `$ACR_ID`
+> come from the setup block at the top and are empty in a new terminal, so a role assignment with `--scope "$ACR_ID"`
+> fails; list the identity's roles afterwards (the last block of this section) to catch that.
+
 **Why.** Deploy Branch to Staging runs the chosen branch's own code in the `staging` GitHub environment: its
 workflow files, and its `dotnet build` (which can run any MSBuild target a package brings along). Until this
 section, the `staging` environment logged in as `lazydad-github-cd`, the identity that also deploys production.
 So code in a previewed branch, say a compromised package in a dependency update, could change production. Two
-more paths went through passwords that staging can read: its `SQL_CONNECTION_STRING` secret and the staging
-app's `sql-conn` secret are the `sqladmin` login, which reaches every database on the server.
+more paths went through passwords that staging could read: its `SQL_CONNECTION_STRING` secret and the staging
+app's `sql-conn` secret were the `sqladmin` login, which reached every database on the server.
 
 **The target:**
 
