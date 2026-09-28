@@ -201,7 +201,8 @@ jobs:
       # makes every deploy create those rules if there are none and keep them current with Cloudflare's published list
       # (new ranges added before old ones are removed); anything else removes them (staging never has it). Not fatal:
       # if Cloudflare's list can't be read, the rules stay as they are, and the weekly Check Cloudflare Ranges run
-      # notices a real change. A rollback to a commit from before the script skips this.
+      # notices a real change. An Azure error partway through can leave them partly changed; the warning says so and
+      # how to look. A rollback to a commit from before the script skips this.
       - name: Sync Cloudflare's ranges on the app's ingress
         env:
           MODE: ${{ vars.CLOUDFLARE_ONLY_INGRESS == 'true' && 'on' || 'off' }}
@@ -214,7 +215,7 @@ jobs:
           # ("rb" instead of "r") must not reuse, and so overwrite, rules an earlier sync added.
           bash tools/cloudflare-ranges.sh sync "${{ inputs.app-name }}" "$RESOURCE_GROUP" \
             "${{ inputs.revision-prefix }}${{ github.run_id }}-${{ github.run_attempt }}" "$MODE" ||
-            echo "::warning::Couldn't sync Cloudflare's ranges on ${{ inputs.app-name }}'s ingress (CLOUDFLARE_ONLY_INGRESS: $MODE); its rules are unchanged or only added to."
+            echo "::warning::Couldn't finish syncing Cloudflare's ranges on ${{ inputs.app-name }}'s ingress (CLOUDFLARE_ONLY_INGRESS: $MODE). Its rules may be partly changed; see the log above, and check them with: az containerapp ingress access-restriction list -n ${{ inputs.app-name }} -g $RESOURCE_GROUP -o table"
 
       # With any Allow rule, Container Apps denies every other address: staging lists the owner's IP, and production
       # behind Cloudflare lists Cloudflare's ranges (runbook section 12). Then allow this runner only for the smoke
