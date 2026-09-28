@@ -196,12 +196,15 @@ jobs:
           docker tag "$REGISTRY/lazydad@${{ inputs.digest }}" "$dst"
           docker push -q "$dst"
 
-      # Behind Cloudflare (runbook section 12), the app's ingress admits only Cloudflare's IPv4 ranges: bring them up
-      # to date with Cloudflare's published list on every deploy (new ranges added before old ones are removed).
-      # Apps without cloudflare-* rules (staging) are left alone. Not fatal: if Cloudflare's list can't be read, the
-      # rules stay as they are (still right, or at worst with extra additions), and the weekly Check Cloudflare Ranges
-      # run notices a real change. A rollback to a commit from before the script skips this.
+      # Behind Cloudflare (runbook section 12), the app's ingress admits only Cloudflare's IPv4 ranges. The environment's
+      # CLOUDFLARE_ONLY_INGRESS variable is the switch: "true" (production, once lazydad.fyi works through Cloudflare)
+      # makes every deploy create those rules if there are none and keep them current with Cloudflare's published list
+      # (new ranges added before old ones are removed); anything else removes them (staging never has it). Not fatal:
+      # if Cloudflare's list can't be read, the rules stay as they are, and the weekly Check Cloudflare Ranges run
+      # notices a real change. A rollback to a commit from before the script skips this.
       - name: Sync Cloudflare's ranges on the app's ingress
+        env:
+          MODE: ${{ vars.CLOUDFLARE_ONLY_INGRESS == 'true' && 'on' || 'off' }}
         run: |
           if [ ! -f tools/cloudflare-ranges.sh ]; then
             echo "This commit has no tools/cloudflare-ranges.sh; the ingress rules stay as they are."
@@ -209,8 +212,9 @@ jobs:
           fi
           # The rule-name tag is unique per sync: a re-run (a new attempt) or the automatic rollback in the same run
           # ("rb" instead of "r") must not reuse, and so overwrite, rules an earlier sync added.
-          bash tools/cloudflare-ranges.sh sync "${{ inputs.app-name }}" "$RESOURCE_GROUP" "${{ inputs.revision-prefix }}${{ github.run_id }}-${{ github.run_attempt }}" ||
-            echo "::warning::Couldn't sync Cloudflare's ranges on ${{ inputs.app-name }}'s ingress; its rules are unchanged or only added to."
+          bash tools/cloudflare-ranges.sh sync "${{ inputs.app-name }}" "$RESOURCE_GROUP" \
+            "${{ inputs.revision-prefix }}${{ github.run_id }}-${{ github.run_attempt }}" "$MODE" ||
+            echo "::warning::Couldn't sync Cloudflare's ranges on ${{ inputs.app-name }}'s ingress (CLOUDFLARE_ONLY_INGRESS: $MODE); its rules are unchanged or only added to."
 
       # With any Allow rule, Container Apps denies every other address: staging lists the owner's IP, and production
       # behind Cloudflare lists Cloudflare's ranges (runbook section 12). Then allow this runner only for the smoke
