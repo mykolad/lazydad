@@ -1079,9 +1079,40 @@ curl -sk https://lazydad.fyi/healthz   # -k: straight to Azure, whose Origin CA 
 - *Security → Bots*: **Block AI bots** (on all pages), **AI Labyrinth** on, **Bot Fight Mode** on. On the Free plan
   no rule can make an exception to Bot Fight Mode, so check the uptime check still passes after step 6; turn Bot
   Fight Mode off if it gets challenged.
-- *Security → WAF → Rate limiting rules* (the Free plan has one): name "Votes", expression
-  `(http.request.method eq "POST" and http.request.uri.path contains "/vote")`, counted per IP, 20 requests per
-  10 seconds, action **Block**. The app's own limit (30 a minute per visitor) stays behind it.
+- *Security → WAF → Rate limiting rules* (the Free plan has one, with a fixed 10-second period and block, and only
+  the path and verified-bot fields): name "Votes", expression `(http.request.uri.path contains "/vote")` (only POST
+  is served there), counted per IP, 20 requests per 10 seconds, action **Block**, duration 10 seconds. Cloudflare
+  counts **per data center**, and one visitor's requests can reach more than one (tests from home went to both
+  Tallinn and Riga), so it's a coarse flood guard. The app's own limit (30 a minute per visitor) is the exact
+  one, and stays behind it. To test, send no-op votes (they change no counts) and note which data center answered
+  (the end of the `CF-RAY` header). A Cloudflare block is a `429` with "error code: 1015"; the app's is a `429`
+  with an empty body:
+
+  ```bash
+  id=$(curl -s "https://lazydad.fyi/jokes/feed?sort=new&limit=1" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+  for i in $(seq 1 50); do
+    code=$(curl -s -D /tmp/h.txt -o /tmp/vote.txt -w '%{http_code}' -X POST "https://lazydad.fyi/jokes/$id/vote" \
+      -H 'Content-Type: application/json' -d '{"value":0,"previous":0}')
+    echo "$code-$(grep -q 'error code: 1015' /tmp/vote.txt && echo cloudflare || echo app) $(grep -i '^cf-ray' /tmp/h.txt | grep -o '[A-Z]\{3\}' | tail -1)"
+  done | sort | uniq -c
+  ```
+
+  <details><summary>PowerShell 7</summary>
+
+  ```powershell
+  $id = (Invoke-RestMethod 'https://lazydad.fyi/jokes/feed?sort=new&limit=1').items[0].id
+  $vote = @{ Uri = "https://lazydad.fyi/jokes/$id/vote"; Method = 'Post'; ContentType = 'application/json'
+             Body = '{"value":0,"previous":0}'; SkipHttpErrorCheck = $true }
+  1..50 | ForEach-Object {
+    $r = Invoke-WebRequest @vote
+    $by = if ($r.Content -match 'error code: 1015') { 'cloudflare' } else { 'app' }
+    "$($r.StatusCode)-$by $(([string]$r.Headers['CF-RAY']).Split('-')[-1])"
+  } | Group-Object | Select-Object Count, Name
+  ```
+
+  </details>
+
+  A data center that got more than 20 within 10 seconds answers `429-cloudflare` from then on, for 10 seconds.
 - Optional, `www`: a `CNAME` `www` → `lazydad.fyi` (proxied), and *Rules → Redirect Rules*, template
   "Redirect from WWW to root".
 
