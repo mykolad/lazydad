@@ -138,9 +138,11 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
     Public address: **`lazydad.fyi`**, through Cloudflare's proxy (Free plan: DDoS protection, bot settings, a rate-limit
     rule on votes), with a Cloudflare Origin CA certificate on the environment and the app's ingress limited to
     Cloudflare's IPv4 ranges (runbook section 12). The ranges also live in `appsettings.json` (`Cloudflare:IpRanges`).
-    `tools/cloudflare-ranges.sh` keeps them current: every deploy syncs the ingress rules with Cloudflare's API (new
-    first, then removals; skipped if the API can't be read), and the weekly **Check Cloudflare Ranges** workflow
-    opens an issue when the `appsettings.json` list no longer matches.
+    The switch is the `production` environment's `CLOUDFLARE_ONLY_INGRESS` variable: while it's `true`, every deploy
+    creates the `cloudflare-*` ingress rules if missing and keeps them in sync with Cloudflare's API
+    (`tools/cloudflare-ranges.sh`: new first, then removals, at most 3 at once; skipped if the API can't be read);
+    otherwise the deploy removes them. The weekly **Check Cloudflare Ranges** workflow opens an issue when the
+    `appsettings.json` list no longer matches.
   - `lazydad-app-staging`: 0–1 replicas (scales to zero when idle). Calls the real LLMs.
     **Ingress allows listed IPs only** (the owner's `home` rule; Deploy Master adds its runner temporarily),
     so stray visitors can't wake it and spend LLM tokens.

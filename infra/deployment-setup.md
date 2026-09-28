@@ -1116,19 +1116,19 @@ curl -sk https://lazydad.fyi/healthz   # -k: straight to Azure, whose Origin CA 
 - Optional, `www`: a `CNAME` `www` → `lazydad.fyi` (proxied), and *Rules → Redirect Rules*, template
   "Redirect from WWW to root".
 
-**6. Make Cloudflare the only way in.** Allow only Cloudflare's IPv4 ranges on the prod app's ingress (Container Apps'
-ingress is IPv4; the app's own list also has the IPv6 ones, for visitors' addresses). With the first Allow rule,
-everyone else is denied, so for the few seconds this loop runs some Cloudflare edge servers still get a 403.
-Do it at a quiet time:
+**6. Make Cloudflare the only way in.** Otherwise anyone could skip Cloudflare through the app's own
+`*.azurecontainerapps.io` address. The switch is a variable on the `production` GitHub environment,
+`CLOUDFLARE_ONLY_INGRESS`: while it's `true`, every deploy (Deploy Environment) makes the prod app's ingress admit
+only Cloudflare's IPv4 ranges, one `cloudflare-*` rule per range (Container Apps' ingress is IPv4; the app's own list
+also has the IPv6 ones, for visitors' addresses). Deploys then keep those rules current, and let their own runner
+through for the smoke tests, which call the Azure address. With the first Allow rule everyone else is denied, so for
+the few seconds the first deploy adds the rules, some Cloudflare edge servers still get a 403: turn it on at a quiet
+time. Staging never has the variable, so its ingress (your IP only) is left alone.
 
 ```bash
-GEN=$(date +%Y%m%d)   # rules are named by date, so a later update can add the new list before removing this one
-i=0
-for range in $(curl -fsS https://www.cloudflare.com/ips-v4); do
-  i=$((i + 1))
-  az containerapp ingress access-restriction set -n lazydad-app -g $RG \
-    --rule-name "cloudflare-$GEN-$i" --ip-address "$range" --action Allow --description "Cloudflare $range" -o none
-done
+gh variable set CLOUDFLARE_ONLY_INGRESS --env production --body true
+gh workflow run deploy-master.yml --ref master   # or let the next merge deploy it
+# Once Deploy Master is green (its production job logs "Locking lazydad-app to Cloudflare"):
 curl -s -o /dev/null -w '%{http_code}\n' https://lazydad-app.wittyfield-6bfb5662.westeurope.azurecontainerapps.io/healthz   # 403
 curl -s -o /dev/null -w '%{http_code}\n' https://lazydad.fyi/healthz                                                        # 200
 ```
@@ -1136,59 +1136,38 @@ curl -s -o /dev/null -w '%{http_code}\n' https://lazydad.fyi/healthz            
 <details><summary>PowerShell 7</summary>
 
 ```powershell
-$GEN = Get-Date -Format yyyyMMdd   # rules are named by date, so a later update can add the new list before removing this one
-$i = 0
-foreach ($range in (Invoke-RestMethod https://www.cloudflare.com/ips-v4) -split "`n" | Where-Object { $_ }) {
-  $i++
-  az containerapp ingress access-restriction set -n lazydad-app -g $RG `
-    --rule-name "cloudflare-$GEN-$i" --ip-address $range --action Allow --description "Cloudflare $range" -o none
-}
+gh variable set CLOUDFLARE_ONLY_INGRESS --env production --body true
+gh workflow run deploy-master.yml --ref master   # or let the next merge deploy it
+# Once Deploy Master is green (its production job logs "Locking lazydad-app to Cloudflare"):
 (Invoke-WebRequest https://lazydad-app.wittyfield-6bfb5662.westeurope.azurecontainerapps.io/healthz -SkipHttpErrorCheck).StatusCode   # 403
 (Invoke-WebRequest https://lazydad.fyi/healthz -SkipHttpErrorCheck).StatusCode                                                        # 200
 ```
 
 </details>
 
-Then point Grafana's uptime check (section 10, step 3) at `https://lazydad.fyi/healthz`, and check it passes.
-Deploy Master's smoke tests keep using the Azure address: Deploy Environment sees the Allow rules and lets its
-runner through while they run. To undo step 6, remove every `cloudflare-*` rule (the loop below, with a `GEN`
-that matches none of them, for example `GEN=none`); with no Allow rules left, the app is open again.
+Grafana's uptime check (section 10, step 3) goes through `https://lazydad.fyi/healthz`, so it keeps passing. To undo
+step 6: `gh variable delete CLOUDFLARE_ONLY_INGRESS --env production`, and deploy again; the deploy removes the
+`cloudflare-*` rules, and with no Allow rules left the app's own address is open again.
 
 **Keeping the ranges current.** Cloudflare changes its ranges rarely, and announces it in advance. Two things keep
 up with it without you having to notice:
 
-- **Every deploy syncs the ingress rules.** Deploy Environment reads Cloudflare's list from its API
-  (`tools/cloudflare-ranges.sh sync`) and, on an app with `cloudflare-*` rules, adds new ranges first and only then
-  removes ones Cloudflare no longer lists. If the API can't be read, it leaves the rules alone with a warning; it
-  never removes more than 3 ranges at once (more means something is off: it adds, warns, and leaves removals to you).
+- **Every deploy syncs the ingress rules.** While the switch is on, Deploy Environment reads Cloudflare's list from
+  its API (`tools/cloudflare-ranges.sh sync`), adds new ranges first and only then removes ones Cloudflare no longer
+  lists. If the API can't be read, it leaves the rules alone with a warning; it never removes more than 3 ranges at
+  once (more means something is off: it adds, warns, and leaves removals to you).
 - **A weekly check watches the app's own list.** *Check Cloudflare Ranges* (Mondays, or *Run workflow*) compares
   `Cloudflare:IpRanges` in `appsettings.json` with Cloudflare's list. If they differ, it fails and opens an issue,
   "Cloudflare's IP ranges changed", listing what to add and remove. The fix is a PR updating that list, and its
   deploy also syncs the ingress rules. The check closes the issue once the lists match again.
 
-To check by hand: `bash tools/cloudflare-ranges.sh check src/LazyDad.Api/appsettings.json` (needs `jq`). To change
-the ingress rules by hand, add the new list first: run step 6's loop again (a new date, so new rule names) while
-the old rules still admit every range, then remove the older rules. Removing first would leave the app with no Allow
-rules, open to everyone, and then admit only part of Cloudflare until the loop finished.
+By hand (needs `jq`), from the repository root, signed in with `az login`:
 
 ```bash
-GEN=$(date +%Y%m%d)   # the date of the rules just added with step 6's loop; everything else goes
-for rule in $(az containerapp ingress access-restriction list -n lazydad-app -g $RG \
-    --query "[?starts_with(name, 'cloudflare-') && !starts_with(name, 'cloudflare-$GEN-')].name" -o tsv); do
-  az containerapp ingress access-restriction remove -n lazydad-app -g $RG --rule-name "$rule" -o none
-done
+bash tools/cloudflare-ranges.sh check src/LazyDad.Api/appsettings.json                     # compare the app's list
+bash tools/cloudflare-ranges.sh sync lazydad-app $RG "manual-$(date +%Y%m%d%H%M)" on      # sync the ingress now
 ```
 
-<details><summary>PowerShell 7</summary>
-
-```powershell
-$GEN = Get-Date -Format yyyyMMdd   # the date of the rules just added with step 6's loop; everything else goes
-foreach ($rule in az containerapp ingress access-restriction list -n lazydad-app -g $RG `
-    --query "[?starts_with(name, 'cloudflare-') && !starts_with(name, 'cloudflare-$GEN-')].name" -o tsv) {
-  az containerapp ingress access-restriction remove -n lazydad-app -g $RG --rule-name $rule -o none
-}
-```
-
-</details>
+*PowerShell 7: run the same through Git Bash, for example `bash tools/cloudflare-ranges.sh check src/LazyDad.Api/appsettings.json`.*
 
 Compare both lists with <https://www.cloudflare.com/ips/> now and then.
