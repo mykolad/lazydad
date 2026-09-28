@@ -199,10 +199,10 @@ jobs:
       # Behind Cloudflare (runbook section 12), the app's ingress admits only Cloudflare's IPv4 ranges. The environment's
       # CLOUDFLARE_ONLY_INGRESS variable is the switch: "true" (production, once lazydad.fyi works through Cloudflare)
       # makes every deploy create those rules if there are none and keep them current with Cloudflare's published list
-      # (new ranges added before old ones are removed); anything else removes them (staging never has it). Not fatal:
-      # if Cloudflare's list can't be read, the rules stay as they are, and the weekly Check Cloudflare Ranges run
-      # notices a real change. An Azure error partway through can leave them partly changed; the warning says so and
-      # how to look. A rollback to a commit from before the script skips this.
+      # (one update of the whole rule list, so it changes at once); anything else removes them (staging never has it).
+      # Not fatal: if Cloudflare's list can't be read, the rules stay as they are, and the weekly Check Cloudflare Ranges
+      # run notices a real change. If the update itself fails, the warning says so and how to look at the rules. A
+      # rollback to a commit from before the script skips this.
       - name: Sync Cloudflare's ranges on the app's ingress
         env:
           MODE: ${{ vars.CLOUDFLARE_ONLY_INGRESS == 'true' && 'on' || 'off' }}

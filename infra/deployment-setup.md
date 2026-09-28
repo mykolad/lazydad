@@ -1121,9 +1121,9 @@ curl -sk https://lazydad.fyi/healthz   # -k: straight to Azure, whose Origin CA 
 `CLOUDFLARE_ONLY_INGRESS`: while it's `true`, every deploy (Deploy Environment) makes the prod app's ingress admit
 only Cloudflare's IPv4 ranges, one `cloudflare-*` rule per range (Container Apps' ingress is IPv4; the app's own list
 also has the IPv6 ones, for visitors' addresses). Deploys then keep those rules current, and let their own runner
-through for the smoke tests, which call the Azure address. With the first Allow rule everyone else is denied, so for
-the few seconds the first deploy adds the rules, some Cloudflare edge servers still get a 403: turn it on at a quiet
-time. Staging never has the variable, so its ingress (your IP only) is left alone.
+through for the smoke tests, which call the Azure address. The rules are written in a single update
+(about 20 seconds), so the app switches from "everyone" to "only Cloudflare" at once, with no moment where only part
+of Cloudflare gets through. Staging never has the variable, so its ingress (your IP only) is left alone.
 
 ```bash
 gh variable set CLOUDFLARE_ONLY_INGRESS --env production --body true
@@ -1153,9 +1153,9 @@ step 6: `gh variable delete CLOUDFLARE_ONLY_INGRESS --env production`, and deplo
 up with it without you having to notice:
 
 - **Every deploy syncs the ingress rules.** While the switch is on, Deploy Environment reads Cloudflare's list from
-  its API (`tools/cloudflare-ranges.sh sync`), adds new ranges first and only then removes ones Cloudflare no longer
-  lists. If the API can't be read, it leaves the rules alone with a warning; it never removes more than 3 ranges at
-  once (more means something is off: it adds, warns, and leaves removals to you).
+  its API (`tools/cloudflare-ranges.sh sync`), and adds new ranges and removes ones Cloudflare no longer lists, in
+  one update of the whole list. If the API can't be read, it leaves the rules alone with a warning; it never removes
+  more than 3 ranges at once (more means something is off: it adds, warns, and leaves removals to you).
 - **A weekly check watches the app's own list.** *Check Cloudflare Ranges* (Mondays, or *Run workflow*) compares
   `Cloudflare:IpRanges` in `appsettings.json` with Cloudflare's list. If they differ, it fails and opens an issue,
   "Cloudflare's IP ranges changed", listing what to add and remove. The fix is a PR updating that list, and its
