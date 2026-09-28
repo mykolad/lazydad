@@ -66,16 +66,17 @@ public class JokeSchedulerService : BackgroundService
         logger.LogInformation("Starting joke scheduler for language '{Language}' (every {Hours}h, {Count} model(s)).",
             language.Language, language.IntervalHours, language.LlmModels.Count);
 
-        // Generate immediately on startup, then on each period.
-        await RunTickAsync(language, startup: true, stoppingToken);
-
-        // Ticks are due every period from here (the page's countdown to the next batch). A delay to
-        // each due time rather than a PeriodicTimer: a timer keeps a tick that fell due during an
-        // overrunning one and fires it at once, while the published due time is already in the future.
+        // Generate immediately on startup, then at the regular due times: fixed UTC times (TickSchedule), so a
+        // restart adds its startup batch but doesn't move the rhythm. The first regular one is at least half a
+        // period away, so a restart just before a due time doesn't make two batches minutes apart.
         var period = TimeSpan.FromHours(language.IntervalHours);
-        var nextTick = DateTime.UtcNow + period;
+        var nextTick = TickSchedule.FirstDueAfterStartup(DateTime.UtcNow, period);
+        await RunTickAsync(language, startup: true, nextTick, stoppingToken);
+        // The page's countdown to the next batch.
         status.RecordNextTick(language.Language, nextTick);
 
+        // A delay to each due time rather than a PeriodicTimer: a timer keeps a tick that fell due during
+        // an overrunning one and fires it at once, while the published due time is already in the future.
         while (true)
         {
             var wait = nextTick - DateTime.UtcNow;
@@ -83,11 +84,11 @@ public class JokeSchedulerService : BackgroundService
                 await Task.Delay(wait, stoppingToken);
             stoppingToken.ThrowIfCancellationRequested();
 
-            await RunTickAsync(language, startup: false, stoppingToken);
+            await RunTickAsync(language, startup: false, TickSchedule.NextDue(nextTick, period), stoppingToken);
             // Advance only once the tick (jokes and leaderboard) is done: until then the due time
             // stays in the past, which tells the page to keep polling for the batch. Due times that
             // passed while an overrunning tick ran are skipped, not run back to back.
-            do nextTick += period; while (nextTick <= DateTime.UtcNow);
+            nextTick = TickSchedule.NextDue(DateTime.UtcNow, period);
             status.RecordNextTick(language.Language, nextTick);
         }
     }
@@ -96,7 +97,8 @@ public class JokeSchedulerService : BackgroundService
     /// Runs one tick. Any failure (e.g. a transient DB error while ranking the leaderboard) is
     /// logged, so the loop survives and retries on the next tick instead of stopping the host.
     /// </summary>
-    internal async Task RunTickAsync(LanguageOptions language, bool startup, CancellationToken stoppingToken)
+    /// <param name="nextDue">The language's next regular due time after this tick: the lease lasts until just before it.</param>
+    internal async Task RunTickAsync(LanguageOptions language, bool startup, DateTime nextDue, CancellationToken stoppingToken)
     {
         // One trace per tick: the lease, the LLM calls, the SQL commands and the judge show up under it.
         using var activity = LazyDadTelemetry.ActivitySource.StartActivity("joke tick");
@@ -104,11 +106,11 @@ public class JokeSchedulerService : BackgroundService
         activity?.SetTag("startup", startup);
         try
         {
-            if (!await TakeTurnAsync(language, startup, stoppingToken))
+            if (!await TakeTurnAsync(language, startup, nextDue, stoppingToken))
             {
                 status.Record(new TickStatus(language.Language, DateTime.UtcNow, true, [], "skipped", null));
                 metrics.RecordTick(language.Language, "skipped");
-                logger.LogInformation("Skipped the '{Language}' tick: another replica generated this period.", language.Language);
+                logger.LogInformation("Skipped the '{Language}' tick: another replica generated this period, or it came too late.", language.Language);
                 return;
             }
 
@@ -141,22 +143,34 @@ public class JokeSchedulerService : BackgroundService
     /// runs and takes the lease: a new revision proves itself with it (the deploy's smoke tests check it),
     /// and it usually starts while the old revision still holds the lease.
     /// </summary>
-    private async Task<bool> TakeTurnAsync(LanguageOptions language, bool startup, CancellationToken stoppingToken)
+    private async Task<bool> TakeTurnAsync(LanguageOptions language, bool startup, DateTime nextDue, CancellationToken stoppingToken)
     {
         var period = TimeSpan.FromHours(language.IntervalHours);
-        // Ends a little early, so the holder's own next due time finds it expired.
+        // Ends a little early, so the holder's own next due time finds it expired. Every replica computes the same
+        // due times (TickSchedule), so the others' ticks until then find it held and skip.
         var margin = TimeSpan.FromTicks(Math.Min(TimeSpan.FromMinutes(5).Ticks, period.Ticks / 10));
         var now = DateTime.UtcNow;
         var lockKey = $"jokes:{language.Language}";
+        // A regular tick that runs late (say, after the host was suspended) keeps its slot only while at least half a
+        // period of lease is left: far longer than a batch takes, so no other replica can take the slot over while
+        // this one is still working. Later than that it skips the slot, since an expired (or soon expired) lease is
+        // free to take and several replicas could generate the same batch. On time, a tick gets almost a period;
+        // a startup tick's next due time is at least half a period away.
+        if (!startup && nextDue - margin - now < period / 2)
+        {
+            logger.LogWarning("The '{Language}' tick came too late for its slot (the next one is due {NextDue:o}); skipping it.",
+                language.Language, nextDue);
+            return false;
+        }
 
         using var scope = scopeFactory.CreateScope();
         var locks = scope.ServiceProvider.GetRequiredService<ISchedulerLockRepository>();
         if (startup)
         {
-            await locks.AcquireAsync(lockKey, instanceId, now, now + period - margin, stoppingToken);
+            await locks.AcquireAsync(lockKey, instanceId, now, nextDue - margin, stoppingToken);
             return true;
         }
-        return await locks.TryAcquireAsync(lockKey, instanceId, now, now + period - margin, stoppingToken);
+        return await locks.TryAcquireAsync(lockKey, instanceId, now, nextDue - margin, stoppingToken);
     }
 
     private async Task<(IReadOnlyList<Joke> Saved, string Leaderboard)> GenerateAndPersistAsync(LanguageOptions language, CancellationToken stoppingToken)
