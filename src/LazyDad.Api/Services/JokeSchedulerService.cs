@@ -110,7 +110,7 @@ public class JokeSchedulerService : BackgroundService
             {
                 status.Record(new TickStatus(language.Language, DateTime.UtcNow, true, [], "skipped", null));
                 metrics.RecordTick(language.Language, "skipped");
-                logger.LogInformation("Skipped the '{Language}' tick: another replica generated this period.", language.Language);
+                logger.LogInformation("Skipped the '{Language}' tick: another replica generated this period, or it came too late.", language.Language);
                 return;
             }
 
@@ -151,6 +151,15 @@ public class JokeSchedulerService : BackgroundService
         var margin = TimeSpan.FromTicks(Math.Min(TimeSpan.FromMinutes(5).Ticks, period.Ticks / 10));
         var now = DateTime.UtcNow;
         var lockKey = $"jokes:{language.Language}";
+        // A regular tick that runs so late (say, after the host was suspended) that its lease would already have
+        // expired skips its slot: an expired lease is free to take, so every replica could generate the same batch.
+        // (A startup tick's next due time is at least half a period away.)
+        if (!startup && nextDue - margin <= now)
+        {
+            logger.LogWarning("The '{Language}' tick came too late for its slot (the next one is due {NextDue:o}); skipping it.",
+                language.Language, nextDue);
+            return false;
+        }
 
         using var scope = scopeFactory.CreateScope();
         var locks = scope.ServiceProvider.GetRequiredService<ISchedulerLockRepository>();

@@ -325,6 +325,26 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task PeriodicTick_TooLateForItsSlot_SkipsWithoutTakingAnExpiredLease()
+    {
+        // E.g. the host was suspended: the slot after this one is due in 3 minutes, inside the 5-minute margin, so
+        // the lease would already have expired. An expired lease is free to take, so every replica could run it.
+        SetupModel("fast", () => Reply("Жарт"));
+        lockRepositoryMock
+            .Setup(r => r.TryAcquireAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+
+        await scheduler.RunTickAsync(Ukrainian("fast"), false, DateTime.UtcNow.AddMinutes(3), CancellationToken.None);
+
+        Assert.Empty(saved);
+        lockRepositoryMock.Verify(r => r.TryAcquireAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Never);
+        llmClientFactoryMock.Verify(f => f.CreateClient(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        Assert.Equal("skipped", Assert.Single(status.LastTicks).Leaderboard);
+        Assert.Contains(schedulerLogger.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("too late for its slot"));
+    }
+
+    [Fact]
     public async Task PeriodicTick_WithTheLease_Generates()
     {
         SetupModel("fast", () => Reply("Жарт"));
