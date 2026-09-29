@@ -22,6 +22,10 @@ tests/LazyDad.SmokeTests — smoke tests against a deployed app (run by Deploy M
 - **`this.` only when required** to disambiguate a field from a same-named parameter.
 - **No default arguments** on method parameters — callers always pass explicitly
   (e.g. `CancellationToken cancellationToken`, never `= default`).
+- **Tests check behaviour, not logs.** Assert on outcomes: what's saved, returned or sent, `/status`, metrics, spans.
+  Never on log messages (their wording, level or content), and don't add tests whose only purpose is a log line:
+  logging is for diagnosing, and changing a message must not break a test. To wait for background work, wait for its
+  observable result (e.g. `SchedulerStatus`), not for a log line.
 
 ## Key design decisions
 
