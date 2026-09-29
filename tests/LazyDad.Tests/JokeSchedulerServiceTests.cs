@@ -203,6 +203,23 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Tick_WhenTheErrorBodyIsLong_LogsItsFirst2000Characters()
+    {
+        // 2,500 characters: the first 2,000 are "a", the rest "b", so the cut is visible.
+        var body = new string('a', 2000) + new string('b', 500);
+        var error = await ProviderErrorAsync(HttpStatusCode.BadRequest, body);
+        SetupModel("fast", () => Task.FromException<ChatResponse>(error));
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await TickCompletedAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        var logged = Assert.Single(schedulerLogger.Entries, e => e.Level == LogLevel.Error).Message;
+        Assert.EndsWith($"Provider response: {new string('a', 2000)}…", logged);
+    }
+
+    [Fact]
     public async Task Tick_WhenTheErrorBodyCannotBeRead_SaysItIsUnreadable()
     {
         // The SDK builds its exceptions with the body read into memory, so this is only a guard: a response whose body
