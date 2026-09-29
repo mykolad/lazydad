@@ -104,8 +104,7 @@ Credentials are stored in user secrets (never committed):
 # Entra ID with your az login (you are the server's Entra admin); no password:
 dotnet user-secrets set "ConnectionStrings:DefaultConnection" "Server=tcp:lazydad-sql-swedencentral.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True" --project src/LazyDad.Api
 dotnet user-secrets set "LlmProviders:AzureOpenAI:Endpoint"  "<endpoint>"              --project src/LazyDad.Api
-# No API key: the app uses Entra ID (your `az login`; needs the "Foundry User" role on lazydad-openai-resource).
-# dotnet user-secrets set "LlmProviders:AzureOpenAI:ApiKey" "<key>" --project src/LazyDad.Api  # only while key auth is on
+# No API key: key authentication is off; the app uses your `az login` (you have "Foundry User" on lazydad-openai-resource).
 ```
 
 Azure SQL firewall must allow the local machine's public IP.
@@ -128,10 +127,19 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
     deploys fail until then.
   - The app raises the SQL connect timeout to 60 s (`SqlConnectionStrings.WithResumeTimeout`), so a login waits
     for a paused database to resume instead of timing out after the default 15 s.
+  - **Entra-only authentication** (no SQL logins, `sqladmin` included; runbook section 9, done 2026-09-28). Database
+    users: `lazydad-app` (read/write) and `lazydad-github-cd` (ddladmin, read/write) in `lazydad-db`;
+    `lazydad-app-staging` and `lazydad-github-staging` likewise in `lazydad-db-staging`. The apps connect as their
+    system-assigned identities (`sql-conn-entra`: `Authentication=Active Directory Managed Identity`), migrations as
+    the environment's deploy identity, you as the server's Entra admin.
 - **Migrations** run in Deploy Master as an EF migration bundle, against staging and then prod (see below).
   The app never migrates on startup.
 - **Azure OpenAI** (`lazydad-openai-resource`, AI Services, eastus2): each `LlmModels[].Model` in config is the deployment name. Non-OpenAI models
   deployed there (e.g. `Kimi-K2.5`, a thinking model: 10–60 s and ~3–4k output tokens per joke) are called through the same Azure OpenAI chat API.
+  **Key authentication is off** (`disableLocalAuth`; runbook section 8, done 2026-09-28): both apps call it as their
+  system-assigned identities with the "Foundry User" role, so `LlmProviders:AzureOpenAI:ApiKey` is empty everywhere.
+  `ROLLBACK_MIN_COMMIT` (a repository variable, #30's merge commit) keeps Roll Back from choosing older images, which
+  only knew the key.
 - **Container Apps** (environment `lazydad-cae`, Consumption, 0.5 vCPU / 1 GiB):
   - `lazydad-app` (prod): **exactly one replica** (min = max = 1), no health probes yet.
     Scaling out (issue #6) is safe for joke generation (the scheduler lease); the vote rate limit is per replica.
@@ -229,9 +237,10 @@ Promotion is automatic: production runs only if staging's smoke tests pass. Azur
 OIDC through a managed identity per environment, each trusted via GitHub's immutable subject for its environment
 only (`repo:mykolad@<id>/lazydad@<id>:environment:<env>`), with `AZURE_CLIENT_ID` set per environment:
 `lazydad-github-cd` deploys production, `lazydad-github-staging` staging and the builds (runbook section 11). The
-staging identity can't change production, since branch previews run as it. Nothing secret lives in GitHub except
-each environment's `SQL_CONNECTION_STRING` (until the Entra ID switch, runbook section 9). Production only accepts
-deployments from `master`.
+staging identity can't change production, since branch previews run as it. No secrets live in GitHub: migrations
+log in to the database with Entra ID as the environment's deploy identity (the deploy workflow falls back to a
+`SQL_CONNECTION_STRING` environment secret only if one exists, and none does). Production only accepts deployments
+from `master`.
 
 The smoke tests check that `/healthz` reports the new version and revision, that the page and API are served,
 that the new revision itself saved a joke from every model configured in `appsettings.json` and ran
@@ -291,8 +300,8 @@ docker run -p 8080:8080 \
   lazydad
 ```
 
-The container has no Azure CLI and can't see your `az login`, so with no API key it authenticates to Azure
-OpenAI through `DefaultAzureCredential`'s environment credential: a **dev service principal** with the
-"Foundry User" role on `lazydad-openai-resource` (`az ad sp create-for-rbac`; keep its secret out of the repo).
-While key auth is still on, `-e LlmProviders__AzureOpenAI__ApiKey="..."` works instead. For everyday local
-work, `dotnet run` with your `az login` needs neither.
+The container has no Azure CLI and can't see your `az login`, so it authenticates through
+`DefaultAzureCredential`'s environment credential: a **dev service principal** (`az ad sp create-for-rbac`; keep its
+secret out of the repo) with the "Foundry User" role on `lazydad-openai-resource` and, since SQL is Entra-only, a user
+in the database it connects to (`CREATE USER [<sp name>] FROM EXTERNAL PROVIDER`, with the `Active Directory Default`
+connection string). For everyday local work, `dotnet run` with your `az login` needs neither.
