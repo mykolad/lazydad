@@ -1348,7 +1348,10 @@ database.
 
 **After a region outage** (Sweden Central down, the server unreachable), the swap above doesn't apply: there's no
 `lazydad-db` to rename, only its geo-redundant backups (at most about an hour old). The copy goes straight to a new
-server in another region, under the final name, and the app and the deploys point at that server:
+server in another region, under the final name, and the app and the deploys point at that server. The block first
+stops the prod app (deactivating its revision): if Sweden Central came back mid-way, the app would otherwise write
+votes and jokes to the old database again, and those writes would be lost when the app moves to the new one. The
+connection-string update at the end makes the new revision, which brings the app back:
 
 1. **A server in another region**, as in section 4 (Entra-only, you as the admin, the two firewall rules), e.g.
    `lazydad-sql-northeurope` in North Europe. The deploy identities' `LazyDad Deployer` role covers it already (it's
@@ -1370,6 +1373,8 @@ server in another region, under the final name, and the app and the deploys poin
 set -e   # stops at the first failure, like 3b
 S=lazydad-sql-swedencentral   # the unreachable server, whose geo-backups are restored
 NEW=lazydad-sql-northeurope
+REV=$(az containerapp show -n lazydad-app -g $RG --query properties.latestReadyRevisionName -o tsv)
+az containerapp revision deactivate -n lazydad-app -g $RG --revision $REV -o none   # no more writes to the old database
 ID=$(az sql db geo-backup list -g $RG -s $S --query "[?name=='lazydad-db'].id | [0]" -o tsv)
 az sql db geo-backup restore --geo-backup-id "$ID" --dest-database lazydad-db --dest-server $NEW -g $RG \
   --service-objective Basic --backup-storage-redundancy Geo -o none
@@ -1392,6 +1397,8 @@ az containerapp update -n lazydad-app -g $RG -o none --set-env-vars \
 $ErrorActionPreference = 'Stop'; $PSNativeCommandUseErrorActionPreference = $true   # stops at the first failure, like 3b
 $S = 'lazydad-sql-swedencentral'   # the unreachable server, whose geo-backups are restored
 $NEW = 'lazydad-sql-northeurope'
+$REV = az containerapp show -n lazydad-app -g $RG --query properties.latestReadyRevisionName -o tsv
+az containerapp revision deactivate -n lazydad-app -g $RG --revision $REV -o none   # no more writes to the old database
 $ID = az sql db geo-backup list -g $RG -s $S --query "[?name=='lazydad-db'].id | [0]" -o tsv
 az sql db geo-backup restore --geo-backup-id $ID --dest-database lazydad-db --dest-server $NEW -g $RG `
   --service-objective Basic --backup-storage-redundancy Geo -o none
