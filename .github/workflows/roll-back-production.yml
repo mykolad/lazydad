@@ -29,4 +29,3 @@ jobs:
       id-token: write
     with:
       version: ${{ inputs.version }}
-    secrets: inherit

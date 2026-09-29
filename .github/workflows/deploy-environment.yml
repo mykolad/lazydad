@@ -7,7 +7,7 @@ on:
   workflow_call:
     inputs:
       environment:
-        description: GitHub environment (holds SQL_CONNECTION_STRING; scopes the Azure OIDC login)
+        description: GitHub environment (scopes the Azure OIDC login)
         required: true
         type: string
       app-name:
@@ -102,26 +102,21 @@ jobs:
 
       - name: Apply EF migrations
         if: ${{ inputs.run-migrations }}
-        env:
-          SQL_CONNECTION_STRING: ${{ secrets.SQL_CONNECTION_STRING }}
         run: |
-          # While the environment still has a SQL_CONNECTION_STRING secret (SQL login), use it. Without
-          # one, log in with Entra ID (issue #11) as this job's identity: azure/login left the runner signed
-          # in as the environment's deploy identity (lazydad-github-cd for production, lazydad-github-staging
+          # No password: log in with Entra ID as this job's identity. azure/login left the runner signed in
+          # as the environment's deploy identity (lazydad-github-cd for production, lazydad-github-staging
           # for staging), which "Active Directory Default" picks up through the Azure CLI.
-          if [ -z "$SQL_CONNECTION_STRING" ]; then
-            case "${{ inputs.environment }}" in
-              production) database=lazydad-db ;;
-              staging) database=lazydad-db-staging ;;
-              *) echo "::error::No database known for environment '${{ inputs.environment }}'."; exit 1 ;;
-            esac
-            SQL_CONNECTION_STRING="Server=tcp:$SQL_SERVER.database.windows.net,1433;Database=$database;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60"
-            echo "Migrating $database with Entra ID (no SQL_CONNECTION_STRING secret)."
-          fi
+          case "${{ inputs.environment }}" in
+            production) database=lazydad-db ;;
+            staging) database=lazydad-db-staging ;;
+            *) echo "::error::No database known for environment '${{ inputs.environment }}'."; exit 1 ;;
+          esac
+          connection="Server=tcp:$SQL_SERVER.database.windows.net,1433;Database=$database;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60"
+          echo "Migrating $database with Entra ID."
           chmod +x ./efbundle
           # A paused serverless DB (staging) can take a minute to resume; retry the whole bundle.
           for attempt in 1 2 3; do
-            ./efbundle --connection "$SQL_CONNECTION_STRING" && exit 0
+            ./efbundle --connection "$connection" && exit 0
             echo "::warning::Migration attempt $attempt failed; retrying in 30s."
             sleep 30
           done
