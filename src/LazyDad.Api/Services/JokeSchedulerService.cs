@@ -47,7 +47,12 @@ public class JokeSchedulerService : BackgroundService
         // Every language that will run is due now, before any loop starts: the page's countdown uses
         // the earliest due time, which must stay in the past until every startup tick has completed.
         foreach (var language in enabledLanguages.Where(l => l.LlmModels.Count > 0))
+        {
             status.RecordNextTick(language.Language, DateTime.UtcNow);
+            metrics.Initialize(language.Language, language.LlmModels.Select(m => m.Model));
+        }
+        // Grafana must receive those zeros before a tick can add to them (see ExportNowAsync).
+        await metrics.ExportNowAsync();
 
         // Run one independent loop per language concurrently.
         // WhenAll propagates exceptions but each loop catches its own,

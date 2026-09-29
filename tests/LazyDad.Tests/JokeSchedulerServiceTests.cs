@@ -59,9 +59,13 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     private MetricCollector<long> Collect(string instrument)
         => new(metricsProvider.GetRequiredService<IMeterFactory>(), LazyDadTelemetry.Name, instrument);
 
-    /// <summary>Each measurement's tag values, e.g. "fast/saved" for the tags model and outcome, in order.</summary>
+    /// <summary>
+    /// Each counted measurement's tag values, e.g. "fast/saved" for the tags model and outcome, in order. The zeros
+    /// the scheduler records at startup (<see cref="SchedulerMetrics.Initialize"/>) count nothing, so they're left out.
+    /// </summary>
     private static IEnumerable<string> Measured(MetricCollector<long> collector, params string[] tags)
         => collector.GetMeasurementSnapshot()
+            .Where(m => m.Value != 0)
             .Select(m => string.Join('/', tags.Select(t => m.Tags[t])))
             .Order(StringComparer.Ordinal);
 
@@ -144,6 +148,33 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Start_StartsEverySeriesAtZero_SoTheFirstTickCounts()
+    {
+        SetupModel("fast", () => Reply("Швидкий жарт"));
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+        using var jokes = Collect("lazydad.jokes");
+        using var ticks = Collect("lazydad.scheduler.ticks");
+        using var leaderboard = Collect("lazydad.leaderboard.updates");
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await TickCompletedAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        // Every series exists at 0 before the startup tick adds to it, so increase() sees that tick too.
+        static IEnumerable<string> Zeros(MetricCollector<long> collector, params string[] tags)
+            => collector.GetMeasurementSnapshot()
+                .Where(m => m.Value == 0)
+                .Select(m => string.Join('/', tags.Select(t => m.Tags[t])))
+                .Order(StringComparer.Ordinal);
+        Assert.Equal(["fast/empty", "fast/failed", "fast/saved"], Zeros(jokes, "model", "outcome"));
+        Assert.Equal(["failed", "skipped", "succeeded"], Zeros(ticks, "outcome"));
+        Assert.Equal(["failed", "unchanged", "updated"], Zeros(leaderboard, "outcome"));
+        // Recorded before the tick: the first measurement is a zero, and the tick then counts once.
+        Assert.Equal(0, ticks.GetMeasurementSnapshot()[0].Value);
+        Assert.Equal(["succeeded"], Measured(ticks, "outcome"));
+    }
+
+    [Fact]
     public async Task Tick_WhenModelReturnsEmptyText_SavesNothing()
     {
         SetupModel("blank", () => Reply("   "));
@@ -219,7 +250,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
 
         // Counted as failed, and the tick's trace is marked as an error. The leaderboard never ran.
         Assert.Equal(["Ukrainian/failed"], Measured(ticks, "language", "outcome"));
-        Assert.Empty(leaderboard.GetMeasurementSnapshot());
+        Assert.Empty(Measured(leaderboard, "outcome"));
         Activity span;
         lock (spans) span = Assert.Single(spans, s => s.OperationName == "joke tick");
         Assert.Equal(ActivityStatusCode.Error, span.Status);
@@ -321,7 +352,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         Assert.Equal("skipped", tick.Leaderboard);
         Assert.Empty(tick.Jokes);
         Assert.Equal(["Ukrainian/skipped"], Measured(ticks, "language", "outcome"));
-        Assert.Empty(leaderboard.GetMeasurementSnapshot());
+        Assert.Empty(Measured(leaderboard, "outcome"));
     }
 
     [Theory]

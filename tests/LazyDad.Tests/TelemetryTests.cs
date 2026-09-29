@@ -106,6 +106,32 @@ public class TelemetryTests
         Assert.Contains("http.server.request.duration", collector.Body("/otlp/v1/metrics"));
     }
 
+    [Fact]
+    public async Task SchedulerMetrics_ExportsTheStartingZerosBeforeAnyTick()
+    {
+        await using var collector = await FakeCollector.StartAsync();
+        var builder = WebApplication.CreateBuilder();
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> { [TelemetryExtensions.EndpointKey] = $"{collector.Url}/otlp" });
+        builder.AddTelemetry();
+        await using var app = builder.Build();
+        var metrics = app.Services.GetRequiredService<SchedulerMetrics>();
+
+        // What the scheduler does at startup: the zeros go out in an export of their own, before any tick.
+        metrics.Initialize("Ukrainian", ["fast"]);
+        await metrics.ExportNowAsync();
+        await collector.WaitForAsync(["/otlp/v1/metrics"], TimeSpan.FromSeconds(30));
+        var first = Assert.Single(collector.Bodies("/otlp/v1/metrics"));
+        Assert.Contains("lazydad.scheduler.ticks", first);
+        Assert.Contains("skipped", first);       // a series no tick has touched yet: it can only be one of the zeros
+        Assert.Contains("lazydad.jokes", first);
+
+        // A tick right after: its 1 arrives in a later export, on top of the 0 Grafana already has.
+        metrics.RecordTick("Ukrainian", "failed");
+        Assert.True(app.Services.GetRequiredService<MeterProvider>().ForceFlush());
+        await collector.WaitForCountAsync("/otlp/v1/metrics", 2, TimeSpan.FromSeconds(30));
+        Assert.Contains("lazydad.scheduler.ticks", collector.Bodies("/otlp/v1/metrics")[1]);
+    }
+
     /// <summary>Accepts OTLP/HTTP exports and keeps what arrived.</summary>
     private sealed class FakeCollector : IAsyncDisposable
     {
@@ -127,10 +153,20 @@ public class TelemetryTests
                 await Task.Delay(50);
         }
 
-        public string Body(string path)
+        public async Task WaitForCountAsync(string path, int count, TimeSpan timeout)
+        {
+            var deadline = DateTime.UtcNow + timeout;
+            while (Bodies(path).Count < count && DateTime.UtcNow < deadline)
+                await Task.Delay(50);
+        }
+
+        public string Body(string path) => string.Concat(Bodies(path));
+
+        /// <summary>Each export to <paramref name="path"/>, in the order they arrived.</summary>
+        public IReadOnlyList<string> Bodies(string path)
         {
             lock (requests)
-                return string.Concat(requests.Where(r => r.Path == path).Select(r => Encoding.UTF8.GetString(r.Body)));
+                return requests.Where(r => r.Path == path).Select(r => Encoding.UTF8.GetString(r.Body)).ToList();
         }
 
         public static async Task<FakeCollector> StartAsync()
