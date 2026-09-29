@@ -285,7 +285,7 @@ where, and what protects them. Staging keeps the defaults (7 days, one datacente
 
 | Backup | Kept | Restores |
 |---|---|---|
-| Point-in-time (full weekly, differential every 12 hours, log every few minutes) | 7 days (Basic's maximum) | Any second in those 7 days |
+| Point-in-time (full weekly, differential every 12 hours (the setting: 12 or 24), transaction log about every 10 minutes) | 7 days (Basic's maximum) | Any second in those 7 days |
 | Long-term: each week's full backup | 7 weeks | That backup, even after the server is deleted |
 | Long-term: each month's first weekly full backup | 12 months | That backup, even after the server is deleted |
 
@@ -1277,12 +1277,17 @@ az sql db delete -g $RG -s $S -n lazydad-db-restored --yes
 
 *PowerShell 7: the same command.*
 
-**3b. For real: swap it in.** The lock and the long-term retention belong to the database, not its name, so they move
-to the new `lazydad-db` by hand. The app's open connections still point at the old database, so restart it last.
-Keep the old one until you're sure, then delete it: its own point-in-time backups go with it, but its long-term
-ones stay for their retention.
+**3b. For real: swap it in.** Close the Query editor first. A database with open connections can't be renamed, so
+the prod app stops for the swap: deactivating its only revision stops its replicas, and `lazydad.fyi` answers with
+errors for those few minutes. The lock and the long-term retention belong to the database, not its name, so they move
+to the new `lazydad-db` by hand. Then Deploy Master applies any migrations the backup predates (a restart wouldn't:
+migrations only run in the pipeline) and rolls out a fresh revision. It needs exactly one revision serving traffic,
+hence the reactivation before it. Keep the old database until you're sure, then delete it: its own point-in-time
+backups go with it, its long-term ones stay for their retention.
 
 ```bash
+REV=$(az containerapp show -n lazydad-app -g $RG --query properties.latestReadyRevisionName -o tsv)
+az containerapp revision deactivate -n lazydad-app -g $RG --revision $REV -o none
 az lock delete -n lazydad-db-no-delete -g $RG --namespace Microsoft.Sql \
   --parent servers/$S --resource-type databases --resource lazydad-db
 az sql db rename -g $RG -s $S -n lazydad-db --new-name lazydad-db-before-restore -o none
@@ -1292,13 +1297,15 @@ az sql db ltr-policy set -g $RG -s $S -n lazydad-db --weekly-retention P7W --mon
 az lock create -n lazydad-db-no-delete -t CanNotDelete -g $RG --namespace Microsoft.Sql \
   --parent servers/$S --resource-type databases --resource lazydad-db \
   --notes "The jokes and votes. Remove it only to restore (runbook section 12) or to retire the app." -o none
-az containerapp revision restart -n lazydad-app -g $RG \
-  --revision "$(az containerapp show -n lazydad-app -g $RG --query properties.latestReadyRevisionName -o tsv)"
+az containerapp revision activate -n lazydad-app -g $RG --revision $REV -o none
+gh workflow run deploy-master.yml -R $REPO --ref master   # migrations, then a new revision
 ```
 
 <details><summary>PowerShell 7</summary>
 
 ```powershell
+$REV = az containerapp show -n lazydad-app -g $RG --query properties.latestReadyRevisionName -o tsv
+az containerapp revision deactivate -n lazydad-app -g $RG --revision $REV -o none
 az lock delete -n lazydad-db-no-delete -g $RG --namespace Microsoft.Sql `
   --parent "servers/$S" --resource-type databases --resource lazydad-db
 az sql db rename -g $RG -s $S -n lazydad-db --new-name lazydad-db-before-restore -o none
@@ -1308,12 +1315,14 @@ az sql db ltr-policy set -g $RG -s $S -n lazydad-db --weekly-retention P7W --mon
 az lock create -n lazydad-db-no-delete -t CanNotDelete -g $RG --namespace Microsoft.Sql `
   --parent "servers/$S" --resource-type databases --resource lazydad-db `
   --notes 'The jokes and votes. Remove it only to restore (runbook section 12) or to retire the app.' -o none
-az containerapp revision restart -n lazydad-app -g $RG `
-  --revision (az containerapp show -n lazydad-app -g $RG --query properties.latestReadyRevisionName -o tsv)
+az containerapp revision activate -n lazydad-app -g $RG --revision $REV -o none
+gh workflow run deploy-master.yml -R $REPO --ref master   # migrations, then a new revision
 ```
 
 </details>
 
-Then check `https://lazydad.fyi/status`: the restart's startup tick saves new jokes into the restored database.
+Once Deploy Master is green, check `https://lazydad.fyi/status`: the new revision's startup tick saves jokes into the
+restored database.
+
 Restoring after a region outage is the same, except the copy lands on a server in another region (created as in
-section 4), so the app's connection string needs that server's name.
+section 4), so the app's connection string and Deploy Environment's `SQL_SERVER` need that server's name.
