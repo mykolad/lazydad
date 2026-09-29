@@ -9,6 +9,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
 
@@ -29,9 +30,6 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     private readonly Mock<ISchedulerLockRepository> lockRepositoryMock = new();
     private readonly Mock<ILlmClientFactory> llmClientFactoryMock = new();
     private readonly List<Joke> saved = [];
-    // Tests wait on the scheduler's own "tick completed" / "tick failed" logs: they are
-    // written after all tick work, so assertions never race the background loop.
-    private readonly CapturingLogger<JokeSchedulerService> schedulerLogger = new();
     private readonly SchedulerStatus status = new();
     private readonly ServiceProvider metricsProvider = new ServiceCollection().AddMetrics().BuildServiceProvider();
     private ServiceProvider? provider;
@@ -100,10 +98,15 @@ public sealed class JokeSchedulerServiceTests : IDisposable
 
         return new JokeSchedulerService(
             provider.GetRequiredService<IServiceScopeFactory>(), options, status,
-            new SchedulerMetrics(metricsProvider.GetRequiredService<IMeterFactory>()), schedulerLogger);
+            new SchedulerMetrics(metricsProvider.GetRequiredService<IMeterFactory>()), NullLogger<JokeSchedulerService>.Instance);
     }
 
-    private Task TickCompletedAsync() => schedulerLogger.WaitForAsync(LogLevel.Debug, "tick for 'Ukrainian' completed", Timeout);
+    /// <summary>
+    /// Waits until every language's startup tick is done, so assertions never race the background loop. The scheduler
+    /// moves the next due time into the future only after a tick's jokes, leaderboard and metrics are all recorded
+    /// (until then, the page keeps polling for the batch).
+    /// </summary>
+    private Task StartupTicksDoneAsync() => NextTickAfterAsync(DateTime.UtcNow);
 
     private void SetupModel(string model, Func<Task<ChatResponse>> reply)
     {
@@ -129,7 +132,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         using var leaderboard = Collect("lazydad.leaderboard.updates");
 
         await scheduler.StartAsync(CancellationToken.None);
-        await TickCompletedAsync();
+        await StartupTicksDoneAsync();
         await scheduler.StopAsync(CancellationToken.None);
 
         var joke = Assert.Single(saved);
@@ -170,7 +173,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         using var leaderboard = Collect("lazydad.leaderboard.updates");
 
         await scheduler.StartAsync(CancellationToken.None);
-        await TickCompletedAsync();
+        await StartupTicksDoneAsync();
         await scheduler.StopAsync(CancellationToken.None);
 
         // The tick itself succeeds: the new joke is saved, and only the leaderboard update failed.
@@ -191,7 +194,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         using var leaderboard = Collect("lazydad.leaderboard.updates");
 
         await scheduler.StartAsync(CancellationToken.None);
-        await TickCompletedAsync();
+        await StartupTicksDoneAsync();
         await scheduler.StopAsync(CancellationToken.None);
 
         // Every series exists at 0 before the startup tick adds to it, so increase() sees that tick too.
@@ -216,7 +219,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         using var jokes = Collect("lazydad.jokes");
 
         await scheduler.StartAsync(CancellationToken.None);
-        await TickCompletedAsync();
+        await StartupTicksDoneAsync();
         await scheduler.StopAsync(CancellationToken.None);
 
         Assert.Empty(saved);
@@ -237,7 +240,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         using var jokes = Collect("lazydad.jokes");
 
         await scheduler.StartAsync(CancellationToken.None);
-        await TickCompletedAsync();
+        await StartupTicksDoneAsync();
         await scheduler.StopAsync(CancellationToken.None);
 
         Assert.Empty(Assert.Single(status.LastTicks).Jokes);
@@ -262,15 +265,12 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         ActivitySource.AddActivityListener(listener);
 
         await scheduler.StartAsync(CancellationToken.None);
-        // Logged by the tick's catch block, i.e. after the exception has been handled.
-        await schedulerLogger.WaitForAsync(LogLevel.Error, "tick for 'Ukrainian' failed", Timeout);
-
-        Assert.DoesNotContain(schedulerLogger.Entries, e => e.Message.Contains("tick for 'Ukrainian' completed"));
+        // The failed startup tick is handled, and the loop schedules the next one.
+        await StartupTicksDoneAsync();
         await scheduler.StopAsync(CancellationToken.None);
 
-        // The error log is written inside the catch block, so "not completed" right after it
-        // proves little. StopAsync doesn't rethrow a faulted ExecuteTask either. The terminal
-        // state does prove it: a loop that survived ends cancelled by shutdown, never faulted.
+        // StopAsync doesn't rethrow a faulted ExecuteTask. The terminal state proves the loop survived: it ends
+        // cancelled by shutdown, never faulted.
         Assert.True(scheduler.ExecuteTask!.IsCanceled, $"Expected Canceled, was {scheduler.ExecuteTask.Status}.");
 
         // Recorded as a failed tick with only the exception type (/status is public).
@@ -300,7 +300,6 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         var started = DateTime.UtcNow;
 
         await scheduler.StartAsync(CancellationToken.None);
-        await TickCompletedAsync();
         // The loop records the next tick right after the startup tick completes.
         await NextTickAfterAsync(started.AddMinutes(29));
         await scheduler.StopAsync(CancellationToken.None);
@@ -325,7 +324,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         var started = DateTime.UtcNow;
 
         await scheduler.StartAsync(CancellationToken.None);
-        await TickCompletedAsync();
+        await TickRecordedAsync("Ukrainian");
         await Task.Delay(50);
 
         // Ukrainian has scheduled its next tick, but English is still generating: the page must
@@ -333,9 +332,17 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         Assert.True(status.NextTickAt <= DateTime.UtcNow, $"NextTickAt was {status.NextTickAt:o}.");
 
         slowReply.SetResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "Joke")]));
-        await schedulerLogger.WaitForAsync(LogLevel.Debug, "tick for 'English' completed", Timeout);
         await NextTickAfterAsync(started.AddMinutes(30));
         await scheduler.StopAsync(CancellationToken.None);
+    }
+
+    /// <summary>Waits until <paramref name="language"/>'s tick result is in <see cref="SchedulerStatus"/> (as on /status).</summary>
+    private async Task TickRecordedAsync(string language)
+    {
+        var deadline = DateTime.UtcNow + Timeout;
+        while (!status.LastTicks.Any(t => t.Language == language) && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+        Assert.Contains(status.LastTicks, t => t.Language == language);
     }
 
     private async Task NextTickAfterAsync(DateTime threshold)
