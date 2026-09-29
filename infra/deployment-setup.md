@@ -1299,11 +1299,11 @@ az lock create -n lazydad-db-no-delete -t CanNotDelete -g $RG --namespace Micros
   --parent servers/$S --resource-type databases --resource lazydad-db \
   --notes "The jokes and votes. Remove it only to restore (runbook section 12) or to retire the app." -o none
 # The restored database gets master's migrations (none, if the backup is recent enough), while nothing uses it.
-git switch master && git pull
-dotnet tool restore
-dotnet ef database update --project src/LazyDad.Data --startup-project src/LazyDad.Api \
-  --connection "Server=tcp:$S.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60"
-az containerapp revision activate -n lazydad-app -g $RG --revision $REV -o none
+# Each step runs only if the one before it succeeded: if anything fails, the app stays stopped.
+git switch master && git pull && dotnet tool restore &&
+  dotnet ef database update --project src/LazyDad.Data --startup-project src/LazyDad.Api \
+    --connection "Server=tcp:$S.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60" &&
+  az containerapp revision activate -n lazydad-app -g $RG --revision $REV -o none
 ```
 
 <details><summary>PowerShell 7</summary>
@@ -1321,11 +1321,11 @@ az lock create -n lazydad-db-no-delete -t CanNotDelete -g $RG --namespace Micros
   --parent "servers/$S" --resource-type databases --resource lazydad-db `
   --notes 'The jokes and votes. Remove it only to restore (runbook section 12) or to retire the app.' -o none
 # The restored database gets master's migrations (none, if the backup is recent enough), while nothing uses it.
-git switch master; git pull
-dotnet tool restore
-dotnet ef database update --project src/LazyDad.Data --startup-project src/LazyDad.Api `
-  --connection "Server=tcp:$S.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60"
-az containerapp revision activate -n lazydad-app -g $RG --revision $REV -o none
+# Each step runs only if the one before it succeeded (PowerShell 7's &&): if anything fails, the app stays stopped.
+git switch master && git pull && dotnet tool restore &&
+  dotnet ef database update --project src/LazyDad.Data --startup-project src/LazyDad.Api `
+    --connection "Server=tcp:$S.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60" &&
+  az containerapp revision activate -n lazydad-app -g $RG --revision $REV -o none
 ```
 
 </details>
