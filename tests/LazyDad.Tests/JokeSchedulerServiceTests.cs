@@ -1,9 +1,5 @@
-using System.ClientModel;
-using System.ClientModel.Primitives;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
-using System.Net;
-using System.Text;
 using LazyDad.Api.Configuration;
 using LazyDad.Api.Services;
 using LazyDad.Api.Telemetry;
@@ -13,6 +9,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
 
@@ -33,9 +30,6 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     private readonly Mock<ISchedulerLockRepository> lockRepositoryMock = new();
     private readonly Mock<ILlmClientFactory> llmClientFactoryMock = new();
     private readonly List<Joke> saved = [];
-    // Tests wait on the scheduler's own "tick completed" / "tick failed" logs: they are
-    // written after all tick work, so assertions never race the background loop.
-    private readonly CapturingLogger<JokeSchedulerService> schedulerLogger = new();
     private readonly SchedulerStatus status = new();
     private readonly ServiceProvider metricsProvider = new ServiceCollection().AddMetrics().BuildServiceProvider();
     private ServiceProvider? provider;
@@ -104,10 +98,15 @@ public sealed class JokeSchedulerServiceTests : IDisposable
 
         return new JokeSchedulerService(
             provider.GetRequiredService<IServiceScopeFactory>(), options, status,
-            new SchedulerMetrics(metricsProvider.GetRequiredService<IMeterFactory>()), schedulerLogger);
+            new SchedulerMetrics(metricsProvider.GetRequiredService<IMeterFactory>()), NullLogger<JokeSchedulerService>.Instance);
     }
 
-    private Task TickCompletedAsync() => schedulerLogger.WaitForAsync(LogLevel.Debug, "tick for 'Ukrainian' completed", Timeout);
+    /// <summary>
+    /// Waits until every language's startup tick is done, so assertions never race the background loop. The scheduler
+    /// moves the next due time into the future only after a tick's jokes, leaderboard and metrics are all recorded
+    /// (until then, the page keeps polling for the batch).
+    /// </summary>
+    private Task StartupTicksDoneAsync() => NextTickAfterAsync(DateTime.UtcNow);
 
     private void SetupModel(string model, Func<Task<ChatResponse>> reply)
     {
@@ -133,7 +132,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         using var leaderboard = Collect("lazydad.leaderboard.updates");
 
         await scheduler.StartAsync(CancellationToken.None);
-        await TickCompletedAsync();
+        await StartupTicksDoneAsync();
         await scheduler.StopAsync(CancellationToken.None);
 
         var joke = Assert.Single(saved);
@@ -151,36 +150,13 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         Assert.Equal(["Ukrainian/fast/saved", "Ukrainian/slow/failed"], Measured(jokes, "language", "model", "outcome"));
         Assert.Equal(["Ukrainian/succeeded"], Measured(ticks, "language", "outcome"));
         Assert.Equal(["Ukrainian/unchanged"], Measured(leaderboard, "language", "outcome"));
-        // A timeout has no error response to show.
-        Assert.Contains(schedulerLogger.Entries, e => e.Level == LogLevel.Error
-            && e.Message.Contains("Failed to generate joke for 'Ukrainian' (slow). Provider response: none"));
     }
 
     [Fact]
-    public async Task Tick_WhenTheProviderRejectsTheRequest_LogsItsErrorBody()
+    public async Task Tick_WhenTheJudgeFails_KeepsTheJokes_AndCountsTheLeaderboardAsFailed()
     {
-        const string body = """{"error":{"code":"invalid_request","message":"The request is not valid."}}""";
-        var error = await ProviderErrorAsync(HttpStatusCode.BadRequest, body);
-        SetupModel("fast", () => Task.FromException<ChatResponse>(error));
-        var scheduler = CreateScheduler(Ukrainian("fast"));
-
-        await scheduler.StartAsync(CancellationToken.None);
-        await TickCompletedAsync();
-        await scheduler.StopAsync(CancellationToken.None);
-
-        // The exception's message is only "Service request failed. Status: 400": the log adds the reason.
-        Assert.DoesNotContain("invalid_request", error.Message);
-        Assert.Contains(schedulerLogger.Entries, e => e.Level == LogLevel.Error
-            && e.Message.Contains($"Failed to generate joke for 'Ukrainian' (fast). Provider response: {body}"));
-    }
-
-    [Fact]
-    public async Task Tick_WhenTheProviderRejectsTheJudge_LogsItsErrorBody_AndTheLeaderboardFails()
-    {
-        const string body = """{"error":{"code":"invalid_request","message":"The judge request is not valid."}}""";
-        var error = await ProviderErrorAsync(HttpStatusCode.BadRequest, body);
         SetupModel("fast", () => Reply("Жарт"));
-        SetupModel("judge", () => Task.FromException<ChatResponse>(error));
+        SetupModel("judge", () => Task.FromException<ChatResponse>(new HttpRequestException("The judge is unavailable.")));
         topJokesOptions = new TopJokesOptions
         {
             Enabled = true,
@@ -197,77 +173,15 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         using var leaderboard = Collect("lazydad.leaderboard.updates");
 
         await scheduler.StartAsync(CancellationToken.None);
-        await TickCompletedAsync();
+        await StartupTicksDoneAsync();
         await scheduler.StopAsync(CancellationToken.None);
 
-        Assert.Equal("failed", Assert.Single(status.LastTicks).Leaderboard);
+        // The tick itself succeeds: the new joke is saved, and only the leaderboard update failed.
+        var tick = Assert.Single(status.LastTicks);
+        Assert.True(tick.Succeeded);
+        Assert.Equal("failed", tick.Leaderboard);
+        Assert.Single(saved);
         Assert.Equal(["failed"], Measured(leaderboard, "outcome"));
-        Assert.Contains(schedulerLogger.Entries, e => e.Level == LogLevel.Error
-            && e.Message.Contains($"Failed to update the top jokes for 'Ukrainian'. Provider response: {body}"));
-    }
-
-    [Fact]
-    public async Task Tick_WhenTheErrorBodyIsLong_LogsItsFirst2000Characters()
-    {
-        // 2,500 characters: the first 2,000 are "a", the rest "b", so the cut is visible.
-        var body = new string('a', 2000) + new string('b', 500);
-        var error = await ProviderErrorAsync(HttpStatusCode.BadRequest, body);
-        SetupModel("fast", () => Task.FromException<ChatResponse>(error));
-        var scheduler = CreateScheduler(Ukrainian("fast"));
-
-        await scheduler.StartAsync(CancellationToken.None);
-        await TickCompletedAsync();
-        await scheduler.StopAsync(CancellationToken.None);
-
-        var logged = Assert.Single(schedulerLogger.Entries, e => e.Level == LogLevel.Error).Message;
-        Assert.EndsWith($"Provider response: {new string('a', 2000)}…", logged);
-    }
-
-    [Fact]
-    public async Task Tick_WhenTheErrorBodyCannotBeRead_SaysItIsUnreadable()
-    {
-        // The SDK builds its exceptions with the body read into memory, so this is only a guard: a response whose body
-        // can't be read again must not turn the failure log itself into an exception.
-        var error = new ClientResultException("Service request failed.", new UnreadableResponse());
-        SetupModel("fast", () => Task.FromException<ChatResponse>(error));
-        var scheduler = CreateScheduler(Ukrainian("fast"));
-
-        await scheduler.StartAsync(CancellationToken.None);
-        await TickCompletedAsync();
-        await scheduler.StopAsync(CancellationToken.None);
-
-        Assert.Contains(schedulerLogger.Entries, e => e.Level == LogLevel.Error
-            && e.Message.Contains("Failed to generate joke for 'Ukrainian' (fast). Provider response: unreadable"));
-    }
-
-    /// <summary>The exception the OpenAI SDK throws for an error response, built from a real HTTP pipeline response.</summary>
-    private static async Task<ClientResultException> ProviderErrorAsync(HttpStatusCode status, string body)
-    {
-        var transport = new HttpClientPipelineTransport(new HttpClient(new StubHandler(status, body)));
-        var message = transport.CreateMessage();
-        message.Request.Method = "POST";
-        message.Request.Uri = new Uri("https://example.test/openai/deployments/fast/chat/completions");
-        await transport.ProcessAsync(message);
-        return await ClientResultException.CreateAsync(message.Response!);
-    }
-
-    private sealed class StubHandler(HttpStatusCode status, string body) : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            => Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") });
-    }
-
-    /// <summary>A 400 whose body was never read into memory, so reading <see cref="Content"/> throws, as it does in the SDK.</summary>
-    private sealed class UnreadableResponse : PipelineResponse
-    {
-        public override int Status => 400;
-        public override string ReasonPhrase => "Bad Request";
-        public override Stream? ContentStream { get; set; }
-        public override BinaryData Content => throw new InvalidOperationException("The response content was not buffered.");
-        protected override PipelineResponseHeaders HeadersCore => throw new NotSupportedException();
-        public override BinaryData BufferContent(CancellationToken cancellationToken) => throw new NotSupportedException();
-        public override ValueTask<BinaryData> BufferContentAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
-        public override void Dispose() { }
     }
 
     [Fact]
@@ -280,7 +194,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         using var leaderboard = Collect("lazydad.leaderboard.updates");
 
         await scheduler.StartAsync(CancellationToken.None);
-        await TickCompletedAsync();
+        await StartupTicksDoneAsync();
         await scheduler.StopAsync(CancellationToken.None);
 
         // Every series exists at 0 before the startup tick adds to it, so increase() sees that tick too.
@@ -305,10 +219,9 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         using var jokes = Collect("lazydad.jokes");
 
         await scheduler.StartAsync(CancellationToken.None);
-        await TickCompletedAsync();
+        await StartupTicksDoneAsync();
         await scheduler.StopAsync(CancellationToken.None);
 
-        Assert.Contains(schedulerLogger.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("empty response"));
         Assert.Empty(saved);
         var tick = Assert.Single(status.LastTicks);
         Assert.True(tick.Succeeded);
@@ -327,10 +240,9 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         using var jokes = Collect("lazydad.jokes");
 
         await scheduler.StartAsync(CancellationToken.None);
-        await TickCompletedAsync();
+        await StartupTicksDoneAsync();
         await scheduler.StopAsync(CancellationToken.None);
 
-        Assert.Contains(schedulerLogger.Entries, e => e.Level == LogLevel.Error && e.Message.Contains("Failed to persist joke"));
         Assert.Empty(Assert.Single(status.LastTicks).Jokes);
         Assert.Equal(["fast/failed"], Measured(jokes, "model", "outcome"));
     }
@@ -353,15 +265,12 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         ActivitySource.AddActivityListener(listener);
 
         await scheduler.StartAsync(CancellationToken.None);
-        // Logged by the tick's catch block, i.e. after the exception has been handled.
-        await schedulerLogger.WaitForAsync(LogLevel.Error, "tick for 'Ukrainian' failed", Timeout);
-
-        Assert.DoesNotContain(schedulerLogger.Entries, e => e.Message.Contains("tick for 'Ukrainian' completed"));
+        // The failed startup tick is handled, and the loop schedules the next one.
+        await StartupTicksDoneAsync();
         await scheduler.StopAsync(CancellationToken.None);
 
-        // The error log is written inside the catch block, so "not completed" right after it
-        // proves little. StopAsync doesn't rethrow a faulted ExecuteTask either. The terminal
-        // state does prove it: a loop that survived ends cancelled by shutdown, never faulted.
+        // StopAsync doesn't rethrow a faulted ExecuteTask. The terminal state proves the loop survived: it ends
+        // cancelled by shutdown, never faulted.
         Assert.True(scheduler.ExecuteTask!.IsCanceled, $"Expected Canceled, was {scheduler.ExecuteTask.Status}.");
 
         // Recorded as a failed tick with only the exception type (/status is public).
@@ -391,7 +300,6 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         var started = DateTime.UtcNow;
 
         await scheduler.StartAsync(CancellationToken.None);
-        await TickCompletedAsync();
         // The loop records the next tick right after the startup tick completes.
         await NextTickAfterAsync(started.AddMinutes(29));
         await scheduler.StopAsync(CancellationToken.None);
@@ -416,7 +324,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         var started = DateTime.UtcNow;
 
         await scheduler.StartAsync(CancellationToken.None);
-        await TickCompletedAsync();
+        await TickRecordedAsync("Ukrainian");
         await Task.Delay(50);
 
         // Ukrainian has scheduled its next tick, but English is still generating: the page must
@@ -424,9 +332,17 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         Assert.True(status.NextTickAt <= DateTime.UtcNow, $"NextTickAt was {status.NextTickAt:o}.");
 
         slowReply.SetResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "Joke")]));
-        await schedulerLogger.WaitForAsync(LogLevel.Debug, "tick for 'English' completed", Timeout);
         await NextTickAfterAsync(started.AddMinutes(30));
         await scheduler.StopAsync(CancellationToken.None);
+    }
+
+    /// <summary>Waits until <paramref name="language"/>'s tick result is in <see cref="SchedulerStatus"/> (as on /status).</summary>
+    private async Task TickRecordedAsync(string language)
+    {
+        var deadline = DateTime.UtcNow + Timeout;
+        while (!status.LastTicks.Any(t => t.Language == language) && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+        Assert.Contains(status.LastTicks, t => t.Language == language);
     }
 
     private async Task NextTickAfterAsync(DateTime threshold)
@@ -496,7 +412,6 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         lockRepositoryMock.Verify(r => r.TryAcquireAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Never);
         llmClientFactoryMock.Verify(f => f.CreateClient(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
         Assert.Equal("skipped", Assert.Single(status.LastTicks).Leaderboard);
-        Assert.Contains(schedulerLogger.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("too late for its slot"));
     }
 
     [Fact]
