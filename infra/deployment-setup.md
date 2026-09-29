@@ -1266,7 +1266,7 @@ A restore takes a few minutes for a database this size. It's billed as a second 
 
 ```sql
 SELECT (SELECT COUNT(*) FROM Jokes) AS jokes, (SELECT MAX(GeneratedAt) FROM Jokes) AS newest,
-       (SELECT SUM(Up + Down) FROM Jokes) AS votes, (SELECT COUNT(*) FROM TopJokes) AS top;
+       (SELECT SUM(Up + Down) FROM Jokes) AS votes, (SELECT COUNT(*) FROM TopJokes) AS top_jokes;
 ```
 
 **3a. Just a test: delete the copy.**
