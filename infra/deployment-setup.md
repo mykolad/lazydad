@@ -1033,6 +1033,17 @@ would look down and idle all the time.
   Metric names are Grafana's translation of the OpenTelemetry names; if one doesn't match, pick it in the query
   builder's metric browser.
 
+**5. The dashboard.** `infra/grafana/lazydad-dashboard.json` shows one app at a time (the *App* selector at the
+top): requests, errors and latency; ticks, jokes and leaderboard updates by outcome; LLM call duration and tokens per
+model; CPU and memory against the container's limits; SQL and outbound calls; and the logs. In Grafana:
+*Dashboards → New → Import*, upload the file, *Import*. The *Metrics* and *Logs* selectors at the top offer only the
+stack's `…-prom` and `…-logs` data sources (Grafana Cloud's names), so it picks those; other Loki data sources, such as
+`…-alert-state-history`, hold Grafana's own records, not the app's logs. Editing it in Grafana is fine; to keep a change, export
+it (*Share → Export*, with "Export for sharing externally" off) and replace the file in a PR.
+
+CPU and memory come from the app process's own metrics. The container's metrics would need Grafana's Azure Monitor data
+source, which signs in with an app registration secret: a stored credential this setup does without.
+
 The console logs keep going to Log Analytics (section 1) as the fallback, with no visitor data either.
 
 ## 12. Operations

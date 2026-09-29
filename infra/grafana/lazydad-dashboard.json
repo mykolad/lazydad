@@ -1,0 +1,271 @@
+{
+  "title": "LazyDad",
+  "uid": "lazydad-overview",
+  "description": "Requests, jokes, LLM calls, resources, database and logs of one LazyDad app (pick it in the job selector). Import it as described in infra/deployment-setup.md, section 11.",
+  "tags": ["lazydad"],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "time": { "from": "now-24h", "to": "now" },
+  "refresh": "5m",
+  "templating": {
+    "list": [
+      { "name": "prom", "label": "Metrics", "type": "datasource", "query": "prometheus", "regex": "/-prom$/", "hide": 0 },
+      { "name": "loki", "label": "Logs", "type": "datasource", "query": "loki", "regex": "/-logs$/", "hide": 0 },
+      {
+        "name": "job", "label": "App", "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${prom}" },
+        "query": { "query": "label_values(dotnet_process_cpu_count, job)", "refId": "job" },
+        "definition": "label_values(dotnet_process_cpu_count, job)",
+        "current": { "text": "lazydad-app", "value": "lazydad-app" },
+        "refresh": 2, "sort": 1, "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    { "type": "row", "title": "Overview (the whole time range)", "id": 1, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 } },
+    {
+      "type": "stat", "title": "Requests", "id": 2, "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "description": "Requests the app answered, not counting /healthz (the uptime checks).",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "blue" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "none", "textMode": "value" },
+      "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "instant": true,
+        "expr": "round(sum(increase(http_server_request_duration_seconds_count{job=\"$job\", http_route!=\"/healthz\"}[$__range])))" }]
+    },
+    {
+      "type": "stat", "title": "Server errors (5xx)", "id": 3, "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "description": "Share of requests answered with a 5xx status.",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "decimals": 1, "color": { "mode": "thresholds" },
+        "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 0.001 }, { "color": "red", "value": 0.01 }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "none", "textMode": "value" },
+      "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "instant": true,
+        "expr": "(sum(increase(http_server_request_duration_seconds_count{job=\"$job\", http_route!=\"/healthz\", http_response_status_code=~\"5..\"}[$__range])) or vector(0)) / sum(increase(http_server_request_duration_seconds_count{job=\"$job\", http_route!=\"/healthz\"}[$__range]))" }]
+    },
+    {
+      "type": "stat", "title": "Latency p95", "id": 4, "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "description": "95% of requests were answered at least this fast.",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 2, "color": { "mode": "thresholds" },
+        "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 0.5 }, { "color": "red", "value": 2 }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "none", "textMode": "value" },
+      "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "instant": true,
+        "expr": "histogram_quantile(0.95, sum by (le) (increase(http_server_request_duration_seconds_bucket{job=\"$job\", http_route!=\"/healthz\"}[$__range])))" }]
+    },
+    {
+      "type": "stat", "title": "Jokes saved", "id": 5, "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "description": "Jokes saved by all models (each tick saves one per model).",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "green" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "none", "textMode": "value" },
+      "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "instant": true,
+        "expr": "round(sum(increase(lazydad_jokes_total{job=\"$job\", outcome=\"saved\"}[$__range])) or vector(0))" }]
+    },
+    {
+      "type": "stat", "title": "Failed ticks and jokes", "id": 6, "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "description": "Failed scheduler ticks, plus jokes a model failed or returned empty. Should be 0.",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "thresholds" },
+        "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background", "graphMode": "none", "textMode": "value" },
+      "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "instant": true,
+        "expr": "round((sum(increase(lazydad_scheduler_ticks_total{job=\"$job\", outcome=\"failed\"}[$__range])) or vector(0)) + (sum(increase(lazydad_jokes_total{job=\"$job\", outcome=~\"failed|empty\"}[$__range])) or vector(0)))" }]
+    },
+    {
+      "type": "stat", "title": "Memory now", "id": 7, "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "description": "The app process's working set; the container has 1 GiB.",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "bytes", "decimals": 0, "color": { "mode": "thresholds" },
+        "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 644245094 }, { "color": "red", "value": 858993459 }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area", "textMode": "value" },
+      "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" },
+        "expr": "max(dotnet_process_memory_working_set_bytes{job=\"$job\"})" }]
+    },
+
+    { "type": "row", "title": "Requests", "id": 10, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 } },
+    {
+      "type": "timeseries", "title": "Requests per second, by route", "id": 11, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "description": "Not counting /healthz (the uptime checks). (no route) is a request that matched no endpoint (mostly 404s from scanners).",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{http_route}}",
+        "expr": "label_replace(sum by (http_route) (rate(http_server_request_duration_seconds_count{job=\"$job\", http_route!=\"/healthz\"}[$__rate_interval])), \"http_route\", \"(no route)\", \"http_route\", \"\")" }]
+    },
+    {
+      "type": "timeseries", "title": "Responses per second, by status code", "id": 12, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "description": "429 is the app's own vote rate limit; Cloudflare's blocks never reach the app.",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{http_response_status_code}}",
+        "expr": "sum by (http_response_status_code) (rate(http_server_request_duration_seconds_count{job=\"$job\", http_route!=\"/healthz\"}[$__rate_interval]))" }]
+    },
+    {
+      "type": "timeseries", "title": "Latency p50, p95 and p99 (all routes)", "id": 13, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 }, "interval": "15m",
+      "description": "Per 15 minutes with requests, not counting /healthz. Gaps are times without traffic.",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 0, "spanNulls": false, "showPoints": "always", "pointSize": 4 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "p99",
+          "expr": "histogram_quantile(0.99, sum by (le) (increase(http_server_request_duration_seconds_bucket{job=\"$job\", http_route!=\"/healthz\"}[$__interval])))" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "p95",
+          "expr": "histogram_quantile(0.95, sum by (le) (increase(http_server_request_duration_seconds_bucket{job=\"$job\", http_route!=\"/healthz\"}[$__interval])))" },
+        { "refId": "C", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "p50",
+          "expr": "histogram_quantile(0.5, sum by (le) (increase(http_server_request_duration_seconds_bucket{job=\"$job\", http_route!=\"/healthz\"}[$__interval])))" }
+      ]
+    },
+    {
+      "type": "timeseries", "title": "Vote rate limiter decisions (per hour)", "id": 14, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 }, "interval": "1h",
+      "description": "acquired = allowed; endpoint_limiter or global_limiter = rejected with 429; request_canceled = the client gave up while waiting.",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "min": 0, "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{aspnetcore_rate_limiting_result}}",
+        "expr": "round(sum by (aspnetcore_rate_limiting_result) (sum_over_time(((aspnetcore_rate_limiting_requests_total{job=\"$job\"} - aspnetcore_rate_limiting_requests_total{job=\"$job\"} offset 1m) >= 0 or aspnetcore_rate_limiting_requests_total{job=\"$job\"})[$__interval:1m])))" }]
+    },
+
+    { "type": "row", "title": "Jokes (per hour)", "id": 20, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 } },
+    {
+      "type": "timeseries", "title": "Scheduler ticks, by outcome", "id": 21, "gridPos": { "h": 8, "w": 8, "x": 0, "y": 23 }, "interval": "1h",
+      "description": "succeeded, failed, or skipped (another replica had the turn). A tick runs every 4 hours, and once at every replica start. Each bar adds up the counters' change minute by minute (after a restart, the count since it): increase() over the hour would miss a tick whose step falls between the last sample of one hour and the first of the next.",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1, "stacking": { "mode": "normal" } } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "failed" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
+          { "matcher": { "id": "byName", "options": "succeeded" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] },
+          { "matcher": { "id": "byName", "options": "skipped" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "text" } }] }
+        ] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{outcome}}",
+        "expr": "round(sum by (outcome) (sum_over_time(((lazydad_scheduler_ticks_total{job=\"$job\"} - lazydad_scheduler_ticks_total{job=\"$job\"} offset 1m) >= 0 or lazydad_scheduler_ticks_total{job=\"$job\"})[$__interval:1m])))" }]
+    },
+    {
+      "type": "timeseries", "title": "Jokes, by model and outcome", "id": 22, "gridPos": { "h": 8, "w": 8, "x": 8, "y": 23 }, "interval": "1h",
+      "description": "saved, empty (the model returned no text), or failed (generating or saving it).",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{model}} {{outcome}}",
+        "expr": "round(sum by (model, outcome) (sum_over_time(((lazydad_jokes_total{job=\"$job\"} - lazydad_jokes_total{job=\"$job\"} offset 1m) >= 0 or lazydad_jokes_total{job=\"$job\"})[$__interval:1m])))" }]
+    },
+    {
+      "type": "timeseries", "title": "Leaderboard updates, by outcome", "id": 23, "gridPos": { "h": 8, "w": 8, "x": 16, "y": 23 }, "interval": "1h",
+      "description": "After each tick that ran: updated (the judge changed the Top 3), unchanged, or failed.",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1, "stacking": { "mode": "normal" } } },
+        "overrides": [{ "matcher": { "id": "byName", "options": "failed" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{outcome}}",
+        "expr": "round(sum by (outcome) (sum_over_time(((lazydad_leaderboard_updates_total{job=\"$job\"} - lazydad_leaderboard_updates_total{job=\"$job\"} offset 1m) >= 0 or lazydad_leaderboard_updates_total{job=\"$job\"})[$__interval:1m])))" }]
+    },
+
+    { "type": "row", "title": "LLM calls (per hour)", "id": 30, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 } },
+    {
+      "type": "timeseries", "title": "Call duration p50 and p95, by model", "id": 31, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 }, "interval": "1h",
+      "description": "Per hour with calls; the judge's calls are the gpt-6-sol ones.",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "points", "pointSize": 7, "showPoints": "always" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "p95 {{gen_ai_request_model}}",
+          "expr": "histogram_quantile(0.95, sum by (le, gen_ai_request_model) (sum_over_time(((gen_ai_client_operation_duration_seconds_bucket{job=\"$job\"} - gen_ai_client_operation_duration_seconds_bucket{job=\"$job\"} offset 1m) >= 0 or gen_ai_client_operation_duration_seconds_bucket{job=\"$job\"})[$__interval:1m])))" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "p50 {{gen_ai_request_model}}",
+          "expr": "histogram_quantile(0.5, sum by (le, gen_ai_request_model) (sum_over_time(((gen_ai_client_operation_duration_seconds_bucket{job=\"$job\"} - gen_ai_client_operation_duration_seconds_bucket{job=\"$job\"} offset 1m) >= 0 or gen_ai_client_operation_duration_seconds_bucket{job=\"$job\"})[$__interval:1m])))" }
+      ]
+    },
+    {
+      "type": "timeseries", "title": "Tokens, by model and type", "id": 32, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 }, "interval": "1h",
+      "description": "input and output tokens per hour. Thinking models (Kimi-K2.5) count their reasoning as output.",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{gen_ai_request_model}} {{gen_ai_token_type}}",
+        "expr": "round(sum by (gen_ai_request_model, gen_ai_token_type) (sum_over_time(((gen_ai_client_token_usage_sum{job=\"$job\"} - gen_ai_client_token_usage_sum{job=\"$job\"} offset 1m) >= 0 or gen_ai_client_token_usage_sum{job=\"$job\"})[$__interval:1m])))" }]
+    },
+
+    { "type": "row", "title": "Resources", "id": 40, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 } },
+    {
+      "type": "timeseries", "title": "CPU (cores)", "id": 41, "gridPos": { "h": 8, "w": 8, "x": 0, "y": 41 },
+      "description": "CPU time the app process used per second. The container has 0.5 vCPU (the dashed line).",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 3, "min": 0, "color": { "mode": "palette-classic" },
+        "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "thresholdsStyle": { "mode": "dashed" } },
+        "thresholds": { "mode": "absolute", "steps": [{ "color": "transparent", "value": null }, { "color": "red", "value": 0.5 }] } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{cpu_mode}}",
+        "expr": "sum by (cpu_mode) (rate(dotnet_process_cpu_time_seconds_total{job=\"$job\"}[$__rate_interval]))" }]
+    },
+    {
+      "type": "timeseries", "title": "Memory", "id": 42, "gridPos": { "h": 8, "w": 8, "x": 8, "y": 41 },
+      "description": "Working set (what the container counts) and the managed heap after the last garbage collection. The container has 1 GiB (the dashed line).",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0, "color": { "mode": "palette-classic" },
+        "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "thresholdsStyle": { "mode": "dashed" } },
+        "thresholds": { "mode": "absolute", "steps": [{ "color": "transparent", "value": null }, { "color": "red", "value": 1073741824 }] } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "working set",
+          "expr": "sum(dotnet_process_memory_working_set_bytes{job=\"$job\"})" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "managed heap",
+          "expr": "sum(dotnet_gc_last_collection_heap_size_bytes{job=\"$job\"})" }
+      ]
+    },
+    {
+      "type": "timeseries", "title": "Exceptions and garbage collections", "id": 43, "gridPos": { "h": 8, "w": 8, "x": 16, "y": 41 },
+      "description": "Exceptions thrown per minute by type, handled ones included: CredentialUnavailableException is DefaultAzureCredential trying its sign-in options in turn, and the socket, IO and canceled ones are mostly connections closing. A new type, or many more of one, is worth a look. Plus garbage collections per minute.",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 1, "min": 0, "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 0 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "exception {{error_type}}",
+          "expr": "sum by (error_type) (rate(dotnet_exceptions_total{job=\"$job\"}[$__rate_interval])) * 60" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "GC {{gc_heap_generation}}",
+          "expr": "sum by (gc_heap_generation) (rate(dotnet_gc_collections_total{job=\"$job\"}[$__rate_interval])) * 60" }
+      ]
+    },
+
+    { "type": "row", "title": "Database and outbound calls", "id": 50, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 49 } },
+    {
+      "type": "timeseries", "title": "SQL commands: per minute and p95 duration", "id": 51, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 50 },
+      "description": "Gaps in the duration are times without SQL commands (the scheduler and visitors cause them).",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 0, "spanNulls": false, "showPoints": "auto" } },
+        "overrides": [{ "matcher": { "id": "byName", "options": "p95 duration" }, "properties": [{ "id": "unit", "value": "s" }, { "id": "custom.axisPlacement", "value": "right" }] }] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "commands per minute",
+          "expr": "sum(rate(db_client_operation_duration_seconds_count{job=\"$job\"}[$__rate_interval])) * 60" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "p95 duration",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(db_client_operation_duration_seconds_bucket{job=\"$job\"}[$__rate_interval])))" }
+      ]
+    },
+    {
+      "type": "timeseries", "title": "Outbound HTTP calls per minute, by host", "id": 52, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 50 },
+      "description": "The app's calls out: the AI endpoint, Grafana (telemetry), and localhost, which is Container Apps' managed identity endpoint (the app's sign-in tokens).",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 1, "min": 0, "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{server_address}}",
+        "expr": "sum by (server_address) (rate(http_client_request_duration_seconds_count{job=\"$job\"}[$__rate_interval])) * 60" }]
+    },
+
+    { "type": "row", "title": "Logs", "id": 60, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 58 } },
+    {
+      "type": "logs", "title": "Warnings and errors", "id": 61, "gridPos": { "h": 10, "w": 24, "x": 0, "y": 59 },
+      "datasource": { "type": "loki", "uid": "${loki}" },
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true, "dedupStrategy": "none" },
+      "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "${loki}" },
+        "expr": "{service_name=\"$job\"} | severity_text=~\"(?i)warn.*|error|critical|fatal\"" }]
+    },
+    {
+      "type": "logs", "title": "All logs", "id": 62, "gridPos": { "h": 10, "w": 24, "x": 0, "y": 69 },
+      "datasource": { "type": "loki", "uid": "${loki}" },
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true, "dedupStrategy": "none" },
+      "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "${loki}" }, "expr": "{service_name=\"$job\"}" }]
+    }
+  ]
+}
