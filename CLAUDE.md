@@ -166,7 +166,10 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
 - `/status` returns the version, revision and this process's last scheduler tick per language
   (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details).
 - **Monitoring:** a Grafana Cloud stack (free tier, `eu-north`) gets both apps' telemetry, one service per app
-  (`job="lazydad-app"`, `"lazydad-app-staging"`), with the uptime check and email alerts on prod. The OTLP credentials are
+  (`job="lazydad-app"`, `"lazydad-app-staging"`), with the uptime check and email alerts on prod. The dashboard is
+  `infra/grafana/lazydad-dashboard.json` (imported by hand; keep it in sync with metric and label names).
+  `SchedulerMetrics.Initialize` starts every scheduler series at 0 when the scheduler starts, so `increase()` also
+  counts the first tick after a replica start. The OTLP credentials are
   Key Vault secrets that the apps reference with their system-assigned identities: `OtlpHeaders` for prod, and
   `OtlpHeadersStaging`, a separate Grafana token, for staging (runbook section 11). Each app can read only its own
   secret, so branch previews (which run on staging) can't read prod's token. Console logs also stay in the environment's Log Analytics workspace (30 days,

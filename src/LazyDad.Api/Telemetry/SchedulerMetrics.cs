@@ -23,6 +23,23 @@ public sealed class SchedulerMetrics
             "Leaderboard updates after each tick that ran, by outcome: updated, unchanged, or failed.");
     }
 
+    /// <summary>
+    /// Starts every series a language can report at 0. A counter series only appears with its first measurement,
+    /// and Prometheus' <c>increase()</c> and <c>rate()</c> count only what happens after a series' first sample. So
+    /// without this, the first tick after each replica start (deploy, restart, scale-out) would never show in charts
+    /// or alerts, not even a failed one.
+    /// </summary>
+    public void Initialize(string language, IEnumerable<string> models)
+    {
+        foreach (var outcome in (string[])["succeeded", "failed", "skipped"])
+            ticks.Add(0, new("language", language), new("outcome", outcome));
+        foreach (var outcome in (string[])["updated", "unchanged", "failed"])
+            leaderboardUpdates.Add(0, new("language", language), new("outcome", outcome));
+        foreach (var model in models)
+            foreach (var outcome in (string[])["saved", "empty", "failed"])
+                jokes.Add(0, new("language", language), new("model", model), new("outcome", outcome));
+    }
+
     public void RecordTick(string language, string outcome)
         => ticks.Add(1, new("language", language), new("outcome", outcome));
 
