@@ -1358,12 +1358,17 @@ server in another region, under the final name, and the app and the deploys poin
 3. **Apply master's migrations** to it, as in 3b (the `dotnet ef database update` line, with `$NEW` as the server).
 4. **Point the prod app at it.** A new connection string makes a new revision, which starts on the new server; check
    `https://lazydad.fyi/status` before relying on it.
-5. **Point the deploys at it:** Deploy Environment's `SQL_SERVER` (in `.github/workflows/deploy-environment.yml`)
-   names the server, so change it in a PR. Until then, a deploy's migration step can't reach the database.
+5. **Point production's deploys at it**, in a PR: Deploy Environment's `SQL_SERVER` (in
+   `.github/workflows/deploy-environment.yml`) is one value for both environments, so choose the server per
+   environment in its migration step, next to the database name (production: the new server; staging: the old
+   one). Changing `SQL_SERVER` itself would send staging's migrations to the new server, where its database isn't,
+   and Deploy Master would fail at staging. Until the PR is merged, production's migration step can't reach its
+   database.
 
 ```bash
 (
 set -e   # stops at the first failure, like 3b
+S=lazydad-sql-swedencentral   # the unreachable server, whose geo-backups are restored
 NEW=lazydad-sql-northeurope
 ID=$(az sql db geo-backup list -g $RG -s $S --query "[?name=='lazydad-db'].id | [0]" -o tsv)
 az sql db geo-backup restore --geo-backup-id "$ID" --dest-database lazydad-db --dest-server $NEW -g $RG \
@@ -1385,6 +1390,7 @@ az containerapp update -n lazydad-app -g $RG -o none --set-env-vars \
 ```powershell
 & {
 $ErrorActionPreference = 'Stop'; $PSNativeCommandUseErrorActionPreference = $true   # stops at the first failure, like 3b
+$S = 'lazydad-sql-swedencentral'   # the unreachable server, whose geo-backups are restored
 $NEW = 'lazydad-sql-northeurope'
 $ID = az sql db geo-backup list -g $RG -s $S --query "[?name=='lazydad-db'].id | [0]" -o tsv
 az sql db geo-backup restore --geo-backup-id $ID --dest-database lazydad-db --dest-server $NEW -g $RG `
