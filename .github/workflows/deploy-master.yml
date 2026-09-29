@@ -49,7 +49,6 @@ jobs:
       tag: ${{ needs.build.outputs.tag }}
       ref: ${{ needs.build.outputs.ref }}
       digest: ${{ needs.build.outputs.digest }}
-    secrets: inherit
 
   production:
     needs: [build, staging]
@@ -64,7 +63,6 @@ jobs:
       tag: ${{ needs.build.outputs.tag }}
       ref: ${{ needs.build.outputs.ref }}
       digest: ${{ needs.build.outputs.digest }}
-    secrets: inherit
 
   # Production failed after its new revision took traffic (e.g. the smoke tests, even after their
   # retry): put back the image that served before. Roll Back does nothing if the revision this run
@@ -84,4 +82,3 @@ jobs:
       # Read from production's revisions by the production job itself (outputs survive its failure),
       # so a tag moved by anyone else can't choose the rollback target.
       previous-digest: ${{ needs.production.outputs.previous-digest }}
-    secrets: inherit

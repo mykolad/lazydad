@@ -240,8 +240,8 @@ OIDC through a managed identity per environment, each trusted via GitHub's immut
 only (`repo:mykolad@<id>/lazydad@<id>:environment:<env>`), with `AZURE_CLIENT_ID` set per environment:
 `lazydad-github-cd` deploys production, `lazydad-github-staging` staging and the builds (runbook section 6). The
 staging identity can't change production, since branch previews run as it. No secrets live in GitHub: migrations
-log in to the database with Entra ID as the environment's deploy identity (the deploy workflow falls back to a
-`SQL_CONNECTION_STRING` environment secret only if one exists, and none does). Production only accepts deployments
+log in to the database with Entra ID as the environment's deploy identity, and no workflow reads or passes on a
+secret (no `secrets: inherit`). Production only accepts deployments
 from `master`.
 
 The smoke tests check that `/healthz` reports the new version and revision, that the page and API are served,

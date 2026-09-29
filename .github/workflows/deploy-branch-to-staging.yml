@@ -43,4 +43,3 @@ jobs:
       tag: ${{ needs.build.outputs.tag }}
       ref: ${{ needs.build.outputs.ref }}
       digest: ${{ needs.build.outputs.digest }}
-    secrets: inherit

@@ -243,4 +243,3 @@ jobs:
       tag: ${{ needs.resolve.outputs.tag }}
       ref: ${{ needs.resolve.outputs.ref }}
       digest: ${{ needs.resolve.outputs.digest }}
-    secrets: inherit
