@@ -196,7 +196,7 @@ jobs:
           docker tag "$REGISTRY/lazydad@${{ inputs.digest }}" "$dst"
           docker push -q "$dst"
 
-      # Behind Cloudflare (runbook section 12), the app's ingress admits only Cloudflare's IPv4 ranges. The environment's
+      # Behind Cloudflare (runbook section 10), the app's ingress admits only Cloudflare's IPv4 ranges. The environment's
       # CLOUDFLARE_ONLY_INGRESS variable is the switch: "true" (production, once lazydad.fyi works through Cloudflare)
       # makes every deploy create those rules if there are none and keep them current with Cloudflare's published list
       # (one update of the whole rule list, so it changes at once); anything else removes them (staging never has it).
@@ -218,7 +218,7 @@ jobs:
             echo "::warning::Couldn't finish syncing Cloudflare's ranges on ${{ inputs.app-name }}'s ingress (CLOUDFLARE_ONLY_INGRESS: $MODE). Its rules may be partly changed; see the log above, and check them with: az containerapp ingress access-restriction list -n ${{ inputs.app-name }} -g $RESOURCE_GROUP -o table"
 
       # With any Allow rule, Container Apps denies every other address: staging lists the owner's IP, and production
-      # behind Cloudflare lists Cloudflare's ranges (runbook section 12). Then allow this runner only for the smoke
+      # behind Cloudflare lists Cloudflare's ranges (runbook section 10). Then allow this runner only for the smoke
       # tests, which call the app's own address. Ingress rules are app-level config, so this doesn't create a revision.
       - name: Allow this runner through the app's IP restrictions
         id: ingress

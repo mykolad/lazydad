@@ -1,7 +1,7 @@
 namespace LazyDad.Api.Configuration;
 
 /// <summary>
-/// The site is served through Cloudflare's proxy (runbook section 12). <see cref="IpRanges"/> is Cloudflare's published
+/// The site is served through Cloudflare's proxy (runbook section 10). <see cref="IpRanges"/> is Cloudflare's published
 /// list (https://www.cloudflare.com/ips/): requests from these addresses are Cloudflare's edge servers.
 /// </summary>
 public class CloudflareOptions

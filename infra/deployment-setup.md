@@ -1,265 +1,156 @@
-# Deployment one-time setup (Azure + GitHub)
+# Deployment setup (Azure + GitHub), from an empty subscription
 
-What was set up on 2026-09-24 to support `.github/workflows/deploy-master.yml` (Deploy Master). Every step used the `az`
-and `gh` CLIs. Keep this in sync with reality until it's replaced by Bicep (IaC is on the plan).
+Everything behind Deploy Master, created in order with the `az` and `gh` CLIs, and without a single password, key or
+connection-string secret: the apps and the pipelines sign in with managed identities (Entra ID). The only secrets
+are the Grafana Cloud write tokens, kept in Key Vault. Keep this in sync with reality until it's replaced by Bicep
+(IaC is on the plan).
 
-**Status (2026-09-28):**
-
-| Section | State |
+| Section | Creates |
 |---|---|
-| 1–7: identities, staging, OIDC, registry purge | Set up 2026-09-24/25. Later sections changed parts of it: section 11 took staging away from `lazydad-github-cd`, and section 9 removed the SQL passwords that sections 2, 3 and 6 set up. |
-| 8: Azure OpenAI with managed identities | Done 2026-09-28: key authentication off. |
-| 9: Azure SQL with Entra ID | Done 2026-09-28: Entra-only, no SQL passwords anywhere. |
-| 10: Grafana Cloud | Done 2026-09-26/28: telemetry, uptime check, Log Analytics cap (0.1 GB/day). |
-| 11: staging-only deploy identity | Steps 1–6 done 2026-09-28. Step 7 (optional: narrower roles for prod's identity) not done. |
-| 12: `lazydad.fyi` behind Cloudflare | Done 2026-09-28: locked to Cloudflare (`CLOUDFLARE_ONLY_INGRESS`). |
+| 1 | Resource group, Log Analytics workspace, Container Apps environment |
+| 2 | Container registry and its weekly purge |
+| 3 | Key Vault |
+| 4 | Azure SQL server (Entra-only) and both databases |
+| 5 | Azure OpenAI (AI Services, key authentication off) and the model deployments |
+| 6 | Identities: registry pull, and one deploy identity per GitHub environment |
+| 7 | The two Container Apps and their roles |
+| 8 | Database users |
+| 9 | GitHub environments and variables; the first deploy |
+| 10 | `lazydad.fyi` behind Cloudflare |
+| 11 | Monitoring and logs: Grafana Cloud |
+| 12 | Operations: checks, token rotation, Cloudflare's ranges, registry purge, manual rollback |
+
+What it all looks like at the end:
+
+| Resource | Name | Region | Settings |
+|---|---|---|---|
+| Resource group | `lazydad-rg` | West Europe | |
+| Log Analytics workspace | `workspace-lazydadrgseCk` | West Europe | 30 days, 0.1 GB/day cap |
+| Container Apps environment | `lazydad-cae` | West Europe | Consumption |
+| Container registry | `lazydadacr` | West Europe | Basic, admin user off |
+| Key Vault | `lazydad-kv` | West Europe | RBAC, soft delete 90 days, no purge protection |
+| SQL server | `lazydad-sql-swedencentral` | Sweden Central | Entra-only authentication, TLS 1.2 |
+| Database | `lazydad-db` | | Basic (5 DTU, 2 GB) |
+| Database | `lazydad-db-staging` | | serverless, free offer |
+| AI Services | `lazydad-openai-resource` | East US 2 | S0, key authentication off |
+| Container App | `lazydad-app` (prod) | West Europe | 1 replica, `lazydad.fyi` |
+| Container App | `lazydad-app-staging` | West Europe | 0–1 replicas, your IP only |
+
+| Identity | Kind | Signs in as it | Roles |
+|---|---|---|---|
+| `lazydad-app` | system-assigned | the prod app | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeaders`; read/write in `lazydad-db` |
+| `lazydad-app-staging` | system-assigned | the staging app | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeadersStaging`; read/write in `lazydad-db-staging` |
+| `lazydad-acr-pull` | user-assigned | both apps, to pull images | `AcrPull` on the registry |
+| `lazydad-github-cd` | user-assigned | GitHub's `production` environment | `AcrPush` + `Reader` on the registry; `Contributor` on `lazydad-app`; `LazyDad Deployer`; migrations in `lazydad-db` |
+| `lazydad-github-staging` | user-assigned | GitHub's `staging` environment (branch previews too) | `AcrPush` + `Reader` on the registry; `Contributor` on `lazydad-app-staging`; `LazyDad Deployer`; migrations in `lazydad-db-staging` |
+| you | your account | local runs, this runbook | `Owner`; the SQL server's Entra admin; `Foundry User`; `Key Vault Secrets Officer` |
+
+## Before you start
+
+You need the Azure CLI (`az login` as an Owner of the subscription), the GitHub CLI (`gh auth login` as the repo's
+owner) and a clone of the repository: run everything from its root.
 
 Each command block is bash (Git Bash on Windows). Under it, a collapsed **PowerShell 7** version does the same, or a
-note says the bash commands run unchanged. Both use the same variable names; set them once per session with the block
-below. Except `$PID` and `$ENV`, which PowerShell reserves (process id, and too close to the `$env:` drive): those are
-`$APP_PID` and `$ENV_NAME` there.
+note says the bash commands run unchanged. Both use the same variable names, except `$PID` and `$ENV`, which
+PowerShell reserves (process id, and too close to the `$env:` drive): those are `$APP_PID` and `$ENV_NAME` there.
+Every block reads the IDs it needs itself, so a new terminal only needs the block below first.
 
 > In Git Bash, `export MSYS_NO_PATHCONV=1` first. Otherwise the `/subscriptions/...` scopes get
 > rewritten as file paths and role assignments fail with `MissingSubscription`.
 
 > In PowerShell on Windows, `az` is `az.cmd`, so every argument also passes through `cmd`. Arguments in single quotes
 > (the PowerShell blocks use them for anything with spaces, `;`, `,`, `^` or `$`) arrive intact, but `cmd` drops the
-> double quotes inside JSON (none of these blocks pass JSON to `az`), and treats `<...>` in an argument without spaces as
-> a redirection: replace every `<placeholder>` before running a command.
+> double quotes inside JSON (so the blocks pass JSON to `az` in files), and treats `<...>` in an argument without
+> spaces as a redirection: replace every `<placeholder>` before running a command.
 
 ```bash
+export MSYS_NO_PATHCONV=1   # Git Bash only
 RG=lazydad-rg
-ACR_ID=$(az acr show -n lazydadacr --query id -o tsv)
+REPO=mykolad/lazydad        # -R on every gh command: it then works outside the clone too
 ```
 
 <details><summary>PowerShell 7</summary>
 
 ```powershell
 $RG = 'lazydad-rg'
-$ACR_ID = az acr show -n lazydadacr --query id -o tsv
+$REPO = 'mykolad/lazydad'   # -R on every gh command: it then works outside the clone too
 ```
 
 </details>
 
-## 1. Identities
-
-| Identity | Used by | Roles |
-|---|---|---|
-| `lazydad-acr-pull` | both Container Apps, to pull images | `AcrPull` on `lazydadacr` |
-| `lazydad-github-cd` | GitHub Actions (OIDC), to deploy | `AcrPush` + `Reader` on `lazydadacr`; `Contributor` on `lazydad-app`, `lazydad-app-staging`, `lazydad-cae`; `SQL Server Contributor` on `lazydad-sql-swedencentral` (temporary firewall rules) |
-
-Section 11 later gives staging its own deploy identity (`lazydad-github-staging`), so that branch previews can't
-reach production, and narrows these roles.
+An empty subscription also has to register the resource providers once (each takes a minute or two), and the
+Container Apps commands come from an `az` extension:
 
 ```bash
-az identity create -g $RG -n lazydad-acr-pull -l westeurope
-az identity create -g $RG -n lazydad-github-cd -l westeurope
-PULL_PID=$(az identity show -g $RG -n lazydad-acr-pull --query principalId -o tsv)
-CD_PID=$(az identity show -g $RG -n lazydad-github-cd --query principalId -o tsv)
-
-az role assignment create --assignee-object-id $PULL_PID --assignee-principal-type ServicePrincipal --role AcrPull --scope "$ACR_ID"
-az role assignment create --assignee-object-id $CD_PID --assignee-principal-type ServicePrincipal --role AcrPush --scope "$ACR_ID"
-az role assignment create --assignee-object-id $CD_PID --assignee-principal-type ServicePrincipal --role Reader  --scope "$ACR_ID"   # az acr login resolves the registry via ARM
-az role assignment create --assignee-object-id $CD_PID --assignee-principal-type ServicePrincipal --role "SQL Server Contributor" \
-  --scope "$(az sql server show -g $RG -n lazydad-sql-swedencentral --query id -o tsv)"
-# Contributor on lazydad-app, lazydad-app-staging (after step 3) and the environment (join/action on update):
-for id in $(az resource list -g $RG --query "[?name=='lazydad-app' || name=='lazydad-app-staging' || name=='lazydad-cae'].id" -o tsv); do
-  az role assignment create --assignee-object-id $CD_PID --assignee-principal-type ServicePrincipal --role Contributor --scope "$id"
+for ns in Microsoft.App Microsoft.OperationalInsights Microsoft.ContainerRegistry Microsoft.KeyVault \
+          Microsoft.Sql Microsoft.CognitiveServices Microsoft.ManagedIdentity; do
+  az provider register -n $ns --wait
 done
+az extension add -n containerapp --upgrade
 ```
 
 <details><summary>PowerShell 7</summary>
 
 ```powershell
-az identity create -g $RG -n lazydad-acr-pull -l westeurope
-az identity create -g $RG -n lazydad-github-cd -l westeurope
-$PULL_PID = az identity show -g $RG -n lazydad-acr-pull --query principalId -o tsv
-$CD_PID = az identity show -g $RG -n lazydad-github-cd --query principalId -o tsv
-
-az role assignment create --assignee-object-id $PULL_PID --assignee-principal-type ServicePrincipal --role AcrPull --scope $ACR_ID
-az role assignment create --assignee-object-id $CD_PID --assignee-principal-type ServicePrincipal --role AcrPush --scope $ACR_ID
-az role assignment create --assignee-object-id $CD_PID --assignee-principal-type ServicePrincipal --role Reader  --scope $ACR_ID   # az acr login resolves the registry via ARM
-az role assignment create --assignee-object-id $CD_PID --assignee-principal-type ServicePrincipal --role 'SQL Server Contributor' `
-  --scope (az sql server show -g $RG -n lazydad-sql-swedencentral --query id -o tsv)
-# Contributor on lazydad-app, lazydad-app-staging (after step 3) and the environment (join/action on update):
-foreach ($id in az resource list -g $RG --query "[?name=='lazydad-app' || name=='lazydad-app-staging' || name=='lazydad-cae'].id" -o tsv) {
-  az role assignment create --assignee-object-id $CD_PID --assignee-principal-type ServicePrincipal --role Contributor --scope $id
+foreach ($ns in 'Microsoft.App', 'Microsoft.OperationalInsights', 'Microsoft.ContainerRegistry', 'Microsoft.KeyVault',
+                'Microsoft.Sql', 'Microsoft.CognitiveServices', 'Microsoft.ManagedIdentity') {
+  az provider register -n $ns --wait
 }
+az extension add -n containerapp --upgrade
 ```
 
 </details>
 
-## 2. Staging database (free offer)
+## 1. Resource group, logs and the Container Apps environment
+
+The environment sends the apps' console output to a Log Analytics workspace: the fallback log, next to Grafana
+(section 11), and the place to look when a revision doesn't start at all. 30 days, and a 0.1 GB daily cap: the apps
+log about 8 MB a month (at most 2.2 MB a day, 2026-09-26), so the cap never bites in normal use but stops a logging
+bug from running up a bill. The workspace's name is the one the portal generated; any name works.
 
 ```bash
-az sql db create -g $RG -s lazydad-sql-swedencentral -n lazydad-db-staging \
-  --edition GeneralPurpose --compute-model Serverless --family Gen5 --capacity 1 --min-capacity 0.5 \
-  --auto-pause-delay 60 --use-free-limit --free-limit-exhaustion-behavior AutoPause --backup-storage-redundancy Local
+az group create -n $RG -l westeurope -o none
+az monitor log-analytics workspace create -g $RG -n workspace-lazydadrgseCk -l westeurope \
+  --retention-time 30 --quota 0.1 -o none
+# The environment writes to the workspace with its shared key: handed from one resource to the other here, never shown.
+az containerapp env create -g $RG -n lazydad-cae -l westeurope --logs-destination log-analytics \
+  --logs-workspace-id "$(az monitor log-analytics workspace show -g $RG -n workspace-lazydadrgseCk --query customerId -o tsv)" \
+  --logs-workspace-key "$(az monitor log-analytics workspace get-shared-keys -g $RG -n workspace-lazydadrgseCk --query primarySharedKey -o tsv)" \
+  -o none
 ```
 
 <details><summary>PowerShell 7</summary>
 
 ```powershell
-az sql db create -g $RG -s lazydad-sql-swedencentral -n lazydad-db-staging `
-  --edition GeneralPurpose --compute-model Serverless --family Gen5 --capacity 1 --min-capacity 0.5 `
-  --auto-pause-delay 60 --use-free-limit --free-limit-exhaustion-behavior AutoPause --backup-storage-redundancy Local
+az group create -n $RG -l westeurope -o none
+az monitor log-analytics workspace create -g $RG -n workspace-lazydadrgseCk -l westeurope `
+  --retention-time 30 --quota 0.1 -o none
+# The environment writes to the workspace with its shared key: handed from one resource to the other here, never shown.
+az containerapp env create -g $RG -n lazydad-cae -l westeurope --logs-destination log-analytics `
+  --logs-workspace-id (az monitor log-analytics workspace show -g $RG -n workspace-lazydadrgseCk --query customerId -o tsv) `
+  --logs-workspace-key (az monitor log-analytics workspace get-shared-keys -g $RG -n workspace-lazydadrgseCk --query primarySharedKey -o tsv) `
+  -o none
 ```
 
 </details>
 
-The connection string is prod's with `Database=lazydad-db-staging` (same server login).
-Apply the schema once with `dotnet ef database update --connection "<staging>"`; Deploy Master keeps it current after that.
+The environment gets the Consumption workload profile (pay per use, scale to zero) and a static IP, which
+`lazydad.fyi` points at (section 10).
 
-## 3. Staging Container App
+## 2. Container registry and its weekly purge
 
-```bash
-PULL_ID=$(az identity show -g $RG -n lazydad-acr-pull --query id -o tsv)
-az containerapp create -n lazydad-app-staging -g $RG --environment lazydad-cae \
-  --image lazydadacr.azurecr.io/lazydad:<tag> \
-  --user-assigned "$PULL_ID" --registry-server lazydadacr.azurecr.io --registry-identity "$PULL_ID" \
-  --ingress external --target-port 8080 --min-replicas 0 --max-replicas 1 --cpu 0.5 --memory 1Gi \
-  --secrets "sql-conn=<staging conn>" "openai-endpoint=<endpoint>" "openai-key=<key>" \
-  --env-vars ConnectionStrings__DefaultConnection=secretref:sql-conn \
-             LlmProviders__AzureOpenAI__Endpoint=secretref:openai-endpoint \
-             LlmProviders__AzureOpenAI__ApiKey=secretref:openai-key
-```
-
-<details><summary>PowerShell 7</summary>
-
-```powershell
-$PULL_ID = az identity show -g $RG -n lazydad-acr-pull --query id -o tsv
-az containerapp create -n lazydad-app-staging -g $RG --environment lazydad-cae `
-  --image 'lazydadacr.azurecr.io/lazydad:<tag>' `
-  --user-assigned $PULL_ID --registry-server lazydadacr.azurecr.io --registry-identity $PULL_ID `
-  --ingress external --target-port 8080 --min-replicas 0 --max-replicas 1 --cpu 0.5 --memory 1Gi `
-  --secrets 'sql-conn=<staging conn>' 'openai-endpoint=<endpoint>' 'openai-key=<key>' `
-  --env-vars ConnectionStrings__DefaultConnection=secretref:sql-conn `
-             LlmProviders__AzureOpenAI__Endpoint=secretref:openai-endpoint `
-             LlmProviders__AzureOpenAI__ApiKey=secretref:openai-key
-```
-
-</details>
-
-## 4. Prod: pull with managed identity, disable the ACR admin user
+Basic tier, with the admin user (a username and password) off: everything pulls and pushes with Entra ID.
 
 ```bash
-az containerapp identity assign -n lazydad-app -g $RG --user-assigned "$PULL_ID"
-az containerapp registry set -n lazydad-app -g $RG --server lazydadacr.azurecr.io --identity "$PULL_ID"
-az containerapp update -n lazydad-app -g $RG --revision-suffix mi-pull   # a real pull proves it works
-az containerapp secret remove -n lazydad-app -g $RG --secret-names lazydadacrazurecrio-lazydadacr
-az acr update -n lazydadacr --admin-enabled false
+az acr create -g $RG -n lazydadacr -l westeurope --sku Basic --admin-enabled false -o none
 ```
 
-*PowerShell 7: the same commands.*
+*PowerShell 7: the same command.*
 
-## 5. Staging: allow listed IPs only
-
-Staging is public by default, and every cold start runs a real LLM joke tick, so any visitor or
-crawler would cost tokens. With at least one `Allow` rule, Container Apps denies everyone else
-(`403 RBAC: access denied`, answered at the ingress without waking the app):
+Every deploy pushes a new `lazydad:<short-sha>` image. An **ACR Task** (it runs inside the registry, on a cron
+schedule in UTC, and costs fractions of a cent per run) deletes old ones every Sunday at 03:00 UTC:
 
 ```bash
-az containerapp ingress access-restriction set -n lazydad-app-staging -g $RG \
-  --rule-name home --ip-address <your-public-ip>/32 --action Allow --description "Owner's home IP"
-```
-
-<details><summary>PowerShell 7</summary>
-
-```powershell
-az containerapp ingress access-restriction set -n lazydad-app-staging -g $RG `
-  --rule-name home --ip-address '<your-public-ip>/32' --action Allow --description "Owner's home IP"
-```
-
-</details>
-
-Deploy Environment adds the runner's IP for the duration of the smoke tests and removes it afterwards, for any app
-that has Allow rules (staging now, production too once it's behind Cloudflare, section 12). If your home IP
-changes, update the `home` rule.
-
-## 6. GitHub: OIDC trust, environments, variables, secrets
-
-The federated credentials use GitHub's **immutable subject** format,
-`repo:<owner>@<owner_id>/<repo>@<repo_id>:environment:<env>`. This repo emits it (it was created
-after 2026-07-15; check with `gh api repos/mykolad/lazydad/actions/oidc/customization/sub`, which
-shows `use_immutable_subject: true`). The numeric IDs never change or get reused, so a renamed,
-transferred or re-created repository can't inherit the trust. The name-based subjects
-(`repo:mykolad/lazydad:...`) would never match this repo's tokens.
-
-```bash
-PREFIX="repo:mykolad@$(gh api users/mykolad --jq .id)/lazydad@$(gh api repos/mykolad/lazydad --jq .id)"
-for env in staging production; do
-  az identity federated-credential create -g $RG --identity-name lazydad-github-cd -n github-$env-immutable \
-    --issuer https://token.actions.githubusercontent.com \
-    --subject "$PREFIX:environment:$env" --audiences api://AzureADTokenExchange
-
-  gh api -X PUT repos/mykolad/lazydad/environments/$env \
-    --input - <<< '{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}'
-  gh api -X POST repos/mykolad/lazydad/environments/$env/deployment-branch-policies -f name=master -f type=branch
-done
-
-gh variable set AZURE_CLIENT_ID       --body "$(az identity show -g $RG -n lazydad-github-cd --query clientId -o tsv)"
-gh variable set AZURE_TENANT_ID       --body "$(az account show --query tenantId -o tsv)"
-gh variable set AZURE_SUBSCRIPTION_ID --body "$(az account show --query id -o tsv)"
-
-# Pipe the values in so they never appear on a command line:
-printf '%s' "<staging conn>" | gh secret set SQL_CONNECTION_STRING --env staging
-printf '%s' "<prod conn>"    | gh secret set SQL_CONNECTION_STRING --env production
-```
-
-<details><summary>PowerShell 7</summary>
-
-```powershell
-$PREFIX = "repo:mykolad@$(gh api users/mykolad --jq .id)/lazydad@$(gh api repos/mykolad/lazydad --jq .id)"
-foreach ($envName in 'staging', 'production') {
-  # ${PREFIX} in braces: "$PREFIX:environment" would read as a scoped variable.
-  az identity federated-credential create -g $RG --identity-name lazydad-github-cd -n "github-$envName-immutable" `
-    --issuer https://token.actions.githubusercontent.com `
-    --subject "${PREFIX}:environment:$envName" --audiences api://AzureADTokenExchange
-
-  '{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' |
-    gh api -X PUT "repos/mykolad/lazydad/environments/$envName" --input -
-  gh api -X POST "repos/mykolad/lazydad/environments/$envName/deployment-branch-policies" -f name=master -f type=branch
-}
-
-gh variable set AZURE_CLIENT_ID       --body (az identity show -g $RG -n lazydad-github-cd --query clientId -o tsv)
-gh variable set AZURE_TENANT_ID       --body (az account show --query tenantId -o tsv)
-gh variable set AZURE_SUBSCRIPTION_ID --body (az account show --query id -o tsv)
-
-# Without --body, gh prompts for the value with hidden input: it's never on a command line or in the history.
-# (Not a pipe: PowerShell would add a trailing newline to the secret.)
-gh secret set SQL_CONNECTION_STRING --env staging
-gh secret set SQL_CONNECTION_STRING --env production
-```
-
-</details>
-
-Jobs log in only through an environment (the federated subjects are `environment:staging` and
-`environment:production`), so a workflow that doesn't use one can't get an Azure token. Since section 11, each
-environment trusts its own identity (`AZURE_CLIENT_ID` is set per environment).
-
-Branch deploys to staging (Deploy Branch to Staging): `staging` also accepts `*/*` branches, and
-`production` stays master-only. In GitHub's patterns `*` doesn't cross `/`, so `*/*` matches `feature/x`.
-The federated credential matches the environment, not the branch, so nothing changes in Azure:
-
-```bash
-gh api -X POST repos/mykolad/lazydad/environments/staging/deployment-branch-policies -f name='*/*' -f type=branch
-```
-
-<details><summary>PowerShell 7</summary>
-
-```powershell
-gh api -X POST repos/mykolad/lazydad/environments/staging/deployment-branch-policies -f 'name=*/*' -f type=branch
-```
-
-</details>
-
-## 7. Registry cleanup: weekly purge of old images
-
-Every deploy pushes a new `lazydad:<short-sha>` image. An **ACR Task** (it runs inside the registry,
-on a cron schedule in UTC, and costs fractions of a cent per run) deletes old ones every Sunday at 03:00 UTC:
-
-```bash
-# Git Bash: export MSYS_NO_PATHCONV=1 first, or /dev/null gets rewritten.
 az acr task create --registry lazydadacr --name purge-old-images --schedule "0 3 * * 0" \
   --cmd "acr purge --filter 'lazydad:^[0-9a-f]{7}.*$' --ago 30d --keep 10 --untagged" --context /dev/null
 ```
@@ -279,8 +170,7 @@ What it keeps:
   deleted, not all tags.
 - `--untagged` removes manifests that nothing references anymore. `--keep` applies to those
   separately too: the 10 newest eligible untagged manifests are also kept, so a dry run can show fewer
-  manifest deletions than you'd expect. The untagged entries from the April `docker buildx` pushes are
-  still referenced by their index tags, so they're removed once those tags age out.
+  manifest deletions than you'd expect.
 - **whatever an environment runs**, even if failed deploys pushed many newer images and no deploy
   succeeded for over 30 days. That takes two things together:
   1. **Revisions are pinned to the image digest** (`lazydad@sha256:…`), not the commit tag. Container Apps
@@ -290,472 +180,184 @@ What it keeps:
      tags (`^[0-9a-f]{7}`), and Deploy Environment tags in two phases, so the job can stop at any point:
      - **before the rollout**, it re-tags the image of the revision **serving traffic** as `deployed-<env>`
        (not the app's desired image, which after a failed rollout names the failed one; repairing any
-       earlier interrupted run), and also as `previous-<env>` (so a manual rollback can return to it; the automatic rollback gets its
-       digest from the deploy job itself).
+       earlier interrupted run), and also as `previous-<env>` (so a manual rollback can return to it; the automatic
+       rollback gets its digest from the deploy job itself).
        This is fatal on failure, and only then does it tag the new digest `deploying-<env>`;
      - **after the rollout**, it moves `deployed-<env>` to the new digest.
 
      Those tags survive the purge, so the manifest is never "untagged" and the pinned digest stays pullable.
 
-Preview what it would delete, check runs, or run it now:
+Storage for context: 336 MB of Basic's 10 GB on 2026-09-25. Layers are shared, so each deploy adds only a few MB of
+unique data. Section 12 shows how to preview a purge, and how to roll back by hand without losing the image.
+
+## 3. Key Vault
+
+It holds only what really is a secret: the Grafana Cloud write tokens (section 11). The AI endpoint and the database
+connection strings contain no credentials, so they're plain app settings. Access goes through Azure roles (RBAC), per
+secret where it matters: each app can read only its own token.
 
 ```bash
-az acr run --registry lazydadacr --cmd "acr purge --filter 'lazydad:^[0-9a-f]{7}.*$' --ago 30d --keep 10 --untagged --dry-run" /dev/null
-az acr task list-runs --registry lazydadacr --name purge-old-images -o table
-az acr task run --registry lazydadacr --name purge-old-images
+az keyvault create -g $RG -n lazydad-kv -l westeurope --enable-rbac-authorization true --retention-days 90 -o none
+# Owner manages the vault but can't read or write secrets: that's a data role.
+az role assignment create --assignee "$(az ad signed-in-user show --query id -o tsv)" \
+  --role "Key Vault Secrets Officer" --scope "$(az keyvault show -n lazydad-kv --query id -o tsv)" -o none
 ```
 
 <details><summary>PowerShell 7</summary>
 
 ```powershell
-az acr run --registry lazydadacr --cmd 'acr purge --filter ''lazydad:^[0-9a-f]{7}.*$'' --ago 30d --keep 10 --untagged --dry-run' /dev/null
-az acr task list-runs --registry lazydadacr --name purge-old-images -o table
-az acr task run --registry lazydadacr --name purge-old-images
+az keyvault create -g $RG -n lazydad-kv -l westeurope --enable-rbac-authorization true --retention-days 90 -o none
+# Owner manages the vault but can't read or write secrets: that's a data role.
+az role assignment create --assignee (az ad signed-in-user show --query id -o tsv) `
+  --role 'Key Vault Secrets Officer' --scope (az keyvault show -n lazydad-kv --query id -o tsv) -o none
 ```
 
 </details>
 
-Deploy Master and Roll Back Production (both through Deploy Environment) handle both. For a **manual rollback** outside the pipelines
-(e.g. to an image built before images carried their version, which Roll Back Production refuses), do the same yourself:
-deploy by digest (`az acr repository show -n lazydadacr --image lazydad:<tag> --query digest -o tsv`, then
-`--image lazydadacr.azurecr.io/lazydad@<digest>`), and move the `deployed-*` tag to it or lock the image
-(`az acr repository update -n lazydadacr --image lazydad:<tag> --delete-enabled false`). An image built
-before #17 reports version `dev` unless you also pass `--set-env-vars App__Version=<tag>`; the next pipeline
-deploy removes that setting again.
+A deleted secret stays recoverable for 90 days (soft delete). Purge protection is off on purpose, so a leaked token
+can also be purged at once (`az keyvault secret purge`); with it on, it would stay recoverable until the 90 days end.
+The vault's name is global, and a deleted vault keeps it for the same 90 days.
 
-Storage for context: 336 MB of Basic's 10 GB on 2026-09-25. Layers are shared, so each deploy adds
-only a few MB of unique data.
+## 4. Azure SQL: an Entra-only server and both databases
 
-## 8. Azure OpenAI with managed identities, no API key (issue #10)
-
-> **Done 2026-09-28.** Both apps call Azure OpenAI as their system-assigned identities; `disableLocalAuth` is on,
-> the Key Vault copy is deleted, and `ROLLBACK_MIN_COMMIT` is #30's merge commit (`27d5dc5`). Learned on the way:
-> remove the `ApiKey` setting (a new revision) **before** the `openai-key` secret. Removing a secret that a setting
-> still references fails with `ContainerAppSecretRefNotFound`, and the whole update is rejected.
-
-The app uses the API key while `LlmProviders:AzureOpenAI:ApiKey` is set, and Entra ID when it's empty:
-`DefaultAzureCredential` picks the app's managed identity in Azure and your `az login` locally. So each
-environment switches when its key setting is removed, with no code change. Do staging first.
+**Entra-only authentication** from the start: the server has no SQL logins at all, so there is no admin password to
+keep, rotate or leak. You are its Entra admin; the apps and the pipelines get database users of their own in
+section 8.
 
 ```bash
-OPENAI_ID=$(az cognitiveservices account show -n lazydad-openai-resource -g $RG --query id -o tsv)
+az sql server create -g $RG -n lazydad-sql-swedencentral -l swedencentral --minimal-tls-version 1.2 \
+  --enable-ad-only-auth --external-admin-principal-type User \
+  --external-admin-name "$(az ad signed-in-user show --query userPrincipalName -o tsv)" \
+  --external-admin-sid "$(az ad signed-in-user show --query id -o tsv)" -o none
 
-# 1. A system-assigned identity per app (data access stays per environment), with inference rights.
-#    "Foundry User" covers the OpenAI and the non-OpenAI deployments (Kimi-K2.5); verified with a user account.
-#    "Cognitive Services OpenAI User" is narrower, but may not cover non-OpenAI models.
-for app in lazydad-app-staging lazydad-app; do
-  az containerapp identity assign -n $app -g $RG --system-assigned -o none
-  PID=$(az containerapp show -n $app -g $RG --query identity.principalId -o tsv)
-  az role assignment create --assignee-object-id $PID --assignee-principal-type ServicePrincipal \
-    --role "Foundry User" --scope "$OPENAI_ID"
-done
-# Your own account needs the same role for local runs without a key.
+# Container Apps (no virtual network) reach it as "Azure services"; the login still needs an Entra identity with a
+# database user. Your own IP, for local runs and the queries in section 8 (update it when it changes).
+az sql server firewall-rule create -g $RG -s lazydad-sql-swedencentral -n AllowAzureServices \
+  --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0 -o none
+MY_IP=$(curl -s https://api.ipify.org)
+az sql server firewall-rule create -g $RG -s lazydad-sql-swedencentral -n AllowLocalDev \
+  --start-ip-address $MY_IP --end-ip-address $MY_IP -o none
 
-# 2. Switch one app at a time, staging first (wait a few minutes after the role assignment: RBAC takes a
-#    while to apply). Dropping the key setting makes a new revision that uses Entra ID; the openai-key
-#    secret stays for now, so switching back is one command.
-APP=lazydad-app-staging     # then lazydad-app
-az containerapp update -n $APP -g $RG --remove-env-vars LlmProviders__AzureOpenAI__ApiKey -o none
-#    Check the new revision's startup tick on /status: a joke from every model, leaderboard not "failed".
-#    If a model rejects the identity, switch back:
-#      az containerapp update -n $APP -g $RG --set-env-vars LlmProviders__AzureOpenAI__ApiKey=secretref:openai-key -o none
-#    Once it works, remove the now-unused secret, then repeat for production.
-az containerapp secret remove -n $APP -g $RG --secret-names openai-key
-
-# 3. Only once BOTH apps run without the key (disabling key auth breaks anything still using it): remove the
-#    other copies, then turn key auth off for good.
-az keyvault secret delete --vault-name lazydad-kv -n AzureOpenAIApiKey
-dotnet user-secrets remove "LlmProviders:AzureOpenAI:ApiKey" --project src/LazyDad.Api
-# Images from before the Entra ID support only know the key: stop Roll Back Production from choosing them.
-gh variable set ROLLBACK_MIN_COMMIT --body "<merge commit of the Entra ID PR on master>"
-az resource update --ids "$OPENAI_ID" --set properties.disableLocalAuth=true
+az sql db create -g $RG -s lazydad-sql-swedencentral -n lazydad-db \
+  --service-objective Basic --max-size 2GB --backup-storage-redundancy Local -o none
+az sql db create -g $RG -s lazydad-sql-swedencentral -n lazydad-db-staging \
+  --edition GeneralPurpose --compute-model Serverless --family Gen5 --capacity 1 --min-capacity 0.5 \
+  --auto-pause-delay 60 --use-free-limit --free-limit-exhaustion-behavior AutoPause --backup-storage-redundancy Local -o none
 ```
 
 <details><summary>PowerShell 7</summary>
 
 ```powershell
-$OPENAI_ID = az cognitiveservices account show -n lazydad-openai-resource -g $RG --query id -o tsv
+az sql server create -g $RG -n lazydad-sql-swedencentral -l swedencentral --minimal-tls-version 1.2 `
+  --enable-ad-only-auth --external-admin-principal-type User `
+  --external-admin-name (az ad signed-in-user show --query userPrincipalName -o tsv) `
+  --external-admin-sid (az ad signed-in-user show --query id -o tsv) -o none
 
-# 1. A system-assigned identity per app, with inference rights (see the bash version for the role choice).
-foreach ($name in 'lazydad-app-staging', 'lazydad-app') {
-  az containerapp identity assign -n $name -g $RG --system-assigned -o none
-  # Not $PID: that's PowerShell's own (read-only) process id.
-  $APP_PID = az containerapp show -n $name -g $RG --query identity.principalId -o tsv
-  az role assignment create --assignee-object-id $APP_PID --assignee-principal-type ServicePrincipal `
-    --role 'Foundry User' --scope $OPENAI_ID
+# Container Apps (no virtual network) reach it as "Azure services"; the login still needs an Entra identity with a
+# database user. Your own IP, for local runs and the queries in section 8 (update it when it changes).
+az sql server firewall-rule create -g $RG -s lazydad-sql-swedencentral -n AllowAzureServices `
+  --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0 -o none
+$MY_IP = Invoke-RestMethod https://api.ipify.org
+az sql server firewall-rule create -g $RG -s lazydad-sql-swedencentral -n AllowLocalDev `
+  --start-ip-address $MY_IP --end-ip-address $MY_IP -o none
+
+az sql db create -g $RG -s lazydad-sql-swedencentral -n lazydad-db `
+  --service-objective Basic --max-size 2GB --backup-storage-redundancy Local -o none
+az sql db create -g $RG -s lazydad-sql-swedencentral -n lazydad-db-staging `
+  --edition GeneralPurpose --compute-model Serverless --family Gen5 --capacity 1 --min-capacity 0.5 `
+  --auto-pause-delay 60 --use-free-limit --free-limit-exhaustion-behavior AutoPause --backup-storage-redundancy Local -o none
+```
+
+</details>
+
+- **Prod is Basic** (about $5 a month), not serverless: the scheduler wakes the database every 4 hours, so a
+  serverless one would hardly ever pause, and cost about $74 a month.
+- **Staging is serverless on the free offer** (100k vCore-seconds a month, one database per subscription). It pauses
+  when idle; if the free amount runs out it stays paused until next month, and staging deploys fail until then.
+- Deploys add a firewall rule for their runner while migrating, and remove it afterwards.
+
+## 5. Azure OpenAI: AI Services without keys
+
+One AI Services resource holds every model the app calls (each `LlmModels[].Model` in `appsettings.json` is a
+deployment name). Key authentication is off from the start: the apps call it as their managed identities, and you
+as your `az login`.
+
+```bash
+az cognitiveservices account create -g $RG -n lazydad-openai-resource -l eastus2 --kind AIServices --sku S0 \
+  --custom-domain lazydad-openai-resource --yes -o none
+az resource update -g $RG -n lazydad-openai-resource --resource-type Microsoft.CognitiveServices/accounts \
+  --set properties.disableLocalAuth=true -o none
+
+# name, model format, version, capacity (thousands of tokens per minute), all "Global Standard"
+deploy_model() {
+  az cognitiveservices account deployment create -g $RG -n lazydad-openai-resource --deployment-name "$1" \
+    --model-name "$1" --model-format "$2" --model-version "$3" --sku-name GlobalStandard --sku-capacity "$4" -o none
 }
-# Your own account needs the same role for local runs without a key.
+deploy_model Kimi-K2.5  MoonshotAI 1          1    # joke writer
+deploy_model gpt-6-luna OpenAI     2026-09-22 10   # joke writer
+deploy_model gpt-6-sol  OpenAI     2026-09-22 10   # the leaderboard's judge
 
-# 2. Switch one app at a time, staging first (wait a few minutes after the role assignment).
-$APP = 'lazydad-app-staging'     # then lazydad-app
-az containerapp update -n $APP -g $RG --remove-env-vars LlmProviders__AzureOpenAI__ApiKey -o none
-#    Check the new revision's startup tick on /status. If a model rejects the identity, switch back:
-#      az containerapp update -n $APP -g $RG --set-env-vars LlmProviders__AzureOpenAI__ApiKey=secretref:openai-key -o none
-#    Once it works, remove the now-unused secret, then repeat for production.
-az containerapp secret remove -n $APP -g $RG --secret-names openai-key
-
-# 3. Only once BOTH apps run without the key: remove the other copies, then turn key auth off for good.
-az keyvault secret delete --vault-name lazydad-kv -n AzureOpenAIApiKey
-dotnet user-secrets remove 'LlmProviders:AzureOpenAI:ApiKey' --project src/LazyDad.Api
-# Images from before the Entra ID support only know the key: stop Roll Back Production from choosing them.
-gh variable set ROLLBACK_MIN_COMMIT --body '<merge commit of the Entra ID PR on master>'
-az resource update --ids $OPENAI_ID --set properties.disableLocalAuth=true
-```
-
-</details>
-
-## 9. Azure SQL with Entra ID, no passwords (issue #11)
-
-> **Done 2026-09-28.** The server is Entra-only; the apps connect as their system-assigned identities and migrations
-> run as each environment's deploy identity; the `SqlConnectionString` Key Vault secret is purged and no environment
-> has a `SQL_CONNECTION_STRING` secret. Learned on the way: `CREATE USER … WITH OBJECT_ID` requires the user name to
-> start with the identity's display name, and a system-assigned identity is named after its app, so staging's app
-> user is `[lazydad-app-staging]`, not `[lazydad-app]`.
-
-Before this section, everything connected as `sqladmin`. The target is least-privilege Entra identities and no SQL
-passwords anywhere. It uses the apps' **system-assigned identities**, one per app, so staging can't reach
-the prod database. Section 8 (Azure OpenAI) assigns the same ones; if you haven't done that yet:
-
-```bash
-for app in lazydad-app-staging lazydad-app; do
-  az containerapp identity assign -n $app -g $RG --system-assigned -o none
-done
+# Your own inference rights, for local runs:
+az role assignment create --assignee "$(az ad signed-in-user show --query id -o tsv)" --role "Foundry User" \
+  --scope "$(az cognitiveservices account show -g $RG -n lazydad-openai-resource --query id -o tsv)" -o none
 ```
 
 <details><summary>PowerShell 7</summary>
 
 ```powershell
-foreach ($name in 'lazydad-app-staging', 'lazydad-app') {
-  az containerapp identity assign -n $name -g $RG --system-assigned -o none
+az cognitiveservices account create -g $RG -n lazydad-openai-resource -l eastus2 --kind AIServices --sku S0 `
+  --custom-domain lazydad-openai-resource --yes -o none
+az resource update -g $RG -n lazydad-openai-resource --resource-type Microsoft.CognitiveServices/accounts `
+  --set properties.disableLocalAuth=true -o none
+
+# name, model format, version, capacity (thousands of tokens per minute), all "Global Standard"
+function Add-ModelDeployment($Name, $Format, $Version, $Capacity) {
+  az cognitiveservices account deployment create -g $RG -n lazydad-openai-resource --deployment-name $Name `
+    --model-name $Name --model-format $Format --model-version $Version --sku-name GlobalStandard --sku-capacity $Capacity -o none
 }
+Add-ModelDeployment Kimi-K2.5  MoonshotAI '1'          1    # joke writer
+Add-ModelDeployment gpt-6-luna OpenAI     '2026-09-22' 10   # joke writer
+Add-ModelDeployment gpt-6-sol  OpenAI     '2026-09-22' 10   # the leaderboard's judge
+
+# Your own inference rights, for local runs:
+az role assignment create --assignee (az ad signed-in-user show --query id -o tsv) --role 'Foundry User' `
+  --scope (az cognitiveservices account show -g $RG -n lazydad-openai-resource --query id -o tsv) -o none
 ```
 
 </details>
 
-| Principal | Database | Roles |
-|---|---|---|
-| `lazydad-app` (system-assigned) | `lazydad-db` | `db_datareader`, `db_datawriter` |
-| `lazydad-app-staging` (system-assigned) | `lazydad-db-staging` | `db_datareader`, `db_datawriter` |
-| `lazydad-github-cd` (production's migrations) | `lazydad-db` | `db_ddladmin`, `db_datareader`, `db_datawriter` |
-| `lazydad-github-staging` (staging's migrations, section 11) | `lazydad-db-staging` | `db_ddladmin`, `db_datareader`, `db_datawriter` |
+- The deployments update themselves when a new default version of the model comes out.
+- **"Foundry User"** covers both the OpenAI models and the others (Kimi-K2.5, which the app also calls through the
+  Azure OpenAI chat API); "Cognitive Services OpenAI User" is narrower but may not cover non-OpenAI models.
+- The app's endpoint setting is `https://lazydad-openai-resource.cognitiveservices.azure.com/` (the custom domain).
+- The app uses Entra ID whenever `LlmProviders:AzureOpenAI:ApiKey` is empty, which it is everywhere:
+  `DefaultAzureCredential` picks the app's managed identity in Azure, and your `az login` locally.
 
-**1. Create the database users**, as the server's Entra admin (your account). Use the portal's Query editor,
-Azure Data Studio or `sqlcmd -G`. `WITH OBJECT_ID` avoids a directory lookup by display name:
+## 6. Identities: pulling images, and a deploy identity per environment
 
-```bash
-az containerapp show -n lazydad-app -g $RG --query identity.principalId -o tsv          # <app-oid>
-az containerapp show -n lazydad-app-staging -g $RG --query identity.principalId -o tsv  # <staging-oid>
-az identity show -g $RG -n lazydad-github-cd --query principalId -o tsv                # <cd-oid>
-```
+**Pulling.** Both apps pull images as one user-assigned identity, `lazydad-acr-pull`, which can do nothing else.
 
-*PowerShell 7: the same commands.*
+**Deploying.** GitHub Actions signs in to Azure with OpenID Connect (OIDC): each job gets a short-lived token from
+GitHub, and Azure swaps it for one of a managed identity that trusts it. There's no stored credential at all. There
+are two deploy identities, one per GitHub environment, because Deploy Branch to Staging runs a branch's own code in
+the `staging` environment: its workflow files, and its `dotnet build` (which can run any MSBuild target a package
+brings along). So a previewed branch, say one with a compromised package in a dependency update, has everything
+staging's identity has. That's why it has nothing in production:
 
-```sql
--- In lazydad-db:
-CREATE USER [lazydad-app] FROM EXTERNAL PROVIDER WITH OBJECT_ID = '<app-oid>';
-ALTER ROLE db_datareader ADD MEMBER [lazydad-app];
-ALTER ROLE db_datawriter ADD MEMBER [lazydad-app];
-CREATE USER [lazydad-github-cd] FROM EXTERNAL PROVIDER WITH OBJECT_ID = '<cd-oid>';
-ALTER ROLE db_ddladmin ADD MEMBER [lazydad-github-cd];
-ALTER ROLE db_datareader ADD MEMBER [lazydad-github-cd];
-ALTER ROLE db_datawriter ADD MEMBER [lazydad-github-cd];
-
--- In lazydad-db-staging: the same, with [lazydad-app-staging] and <staging-oid> instead of the prod app, and
--- [lazydad-github-staging] (section 11; its object id instead of <cd-oid>) instead of [lazydad-github-cd].
-```
-
-**2. Switch staging, then prod**, one app at a time. The password connection string stays in `sql-conn`
-until the lock-down, so switching back is one command:
-
-```bash
-APP=lazydad-app-staging; DB=lazydad-db-staging; ENV=staging     # then: lazydad-app / lazydad-db / production
-# A new secret with the managed-identity connection string (system-assigned needs no User Id), and a
-# revision that uses it. The old revision serves until the new one is up.
-az containerapp secret set -n $APP -g $RG --secrets \
-  "sql-conn-entra=Server=tcp:lazydad-sql-swedencentral.database.windows.net,1433;Database=$DB;Authentication=Active Directory Managed Identity;Encrypt=True"
-az containerapp update -n $APP -g $RG --set-env-vars ConnectionStrings__DefaultConnection=secretref:sql-conn-entra \
-  --revision-suffix entra-sql -o none
-# Check the new revision's startup tick on /status: jokes saved, leaderboard not "failed". If it can't
-# reach the database, switch back:
-#   az containerapp update -n $APP -g $RG --set-env-vars ConnectionStrings__DefaultConnection=secretref:sql-conn --revision-suffix password-sql -o none
-
-# CD: without the environment secret, Deploy Environment migrates with Entra ID as the environment's deploy identity
-# (lazydad-github-cd for production, lazydad-github-staging for staging: section 11).
-gh secret delete SQL_CONNECTION_STRING --env $ENV
-```
-
-<details><summary>PowerShell 7</summary>
-
-```powershell
-# $ENV_NAME, not $ENV: too close to PowerShell's $env: drive.
-$APP = 'lazydad-app-staging'; $DB = 'lazydad-db-staging'; $ENV_NAME = 'staging'     # then: lazydad-app / lazydad-db / production
-az containerapp secret set -n $APP -g $RG --secrets `
-  "sql-conn-entra=Server=tcp:lazydad-sql-swedencentral.database.windows.net,1433;Database=$DB;Authentication=Active Directory Managed Identity;Encrypt=True"
-az containerapp update -n $APP -g $RG --set-env-vars ConnectionStrings__DefaultConnection=secretref:sql-conn-entra `
-  --revision-suffix entra-sql -o none
-# Check the new revision's startup tick on /status. If it can't reach the database, switch back:
-#   az containerapp update -n $APP -g $RG --set-env-vars ConnectionStrings__DefaultConnection=secretref:sql-conn --revision-suffix password-sql -o none
-
-# CD: without the environment secret, Deploy Environment migrates with Entra ID as the environment's deploy identity
-# (lazydad-github-cd for production, lazydad-github-staging for staging: section 11).
-gh secret delete SQL_CONNECTION_STRING --env $ENV_NAME
-```
-
-</details>
-
-Run **Deploy Master** (or Deploy Branch to Staging with *run-migrations* for staging): the migration step logs
-"Migrating <database> with Entra ID", and the smoke tests prove the app reads and writes. If the migration
-can't log in, put the secret back (`gh secret set SQL_CONNECTION_STRING --env $ENV`) and check the
-deploy identity's user in that database (`lazydad-github-staging` or `lazydad-github-cd`). Then repeat for production.
-
-**3. Lock down**, only once both apps **and** both migration runs work without the password:
-
-```bash
-# Every stored copy of the password goes. Key Vault only soft-deletes, so purge too (allowed while purge
-# protection is off; otherwise it stays recoverable until the retention period ends).
-az keyvault secret delete --vault-name lazydad-kv -n SqlConnectionString
-az keyvault secret purge  --vault-name lazydad-kv -n SqlConnectionString
-for app in lazydad-app-staging lazydad-app; do az containerapp secret remove -n $app -g $RG --secret-names sql-conn; done
-dotnet user-secrets set "ConnectionStrings:DefaultConnection" \
-  "Server=tcp:lazydad-sql-swedencentral.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True" \
-  --project src/LazyDad.Api
-# sqladmin stops working everywhere, so any copy of the password left anywhere is useless from here on.
-az sql server ad-only-auth enable -g $RG -n lazydad-sql-swedencentral
-```
-
-<details><summary>PowerShell 7</summary>
-
-```powershell
-az keyvault secret delete --vault-name lazydad-kv -n SqlConnectionString
-az keyvault secret purge  --vault-name lazydad-kv -n SqlConnectionString
-foreach ($name in 'lazydad-app-staging', 'lazydad-app') { az containerapp secret remove -n $name -g $RG --secret-names sql-conn }
-dotnet user-secrets set 'ConnectionStrings:DefaultConnection' `
-  'Server=tcp:lazydad-sql-swedencentral.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True' `
-  --project src/LazyDad.Api
-az sql server ad-only-auth enable -g $RG -n lazydad-sql-swedencentral
-```
-
-</details>
-
-Entra-only authentication can be turned off again (`ad-only-auth disable`) if something was missed.
-The CI job `clean-database-migrations` uses SQL auth against its own throwaway container, so it's unaffected.
-
-## 10. Monitoring and logs: Grafana Cloud
-
-The app sends traces, metrics and logs over OpenTelemetry (OTLP) straight to a Grafana Cloud stack in the EU
-(free tier; no collector or agent to run). Only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set: local runs, tests and
-older images send nothing. What goes out, and what doesn't:
-
-- **Traces:** one per request (`/healthz` excluded, uptime checks would flood them) and one per scheduler tick
-  (`joke tick`), with its lease, LLM calls (model, duration, tokens) and SQL commands under it.
-- **Metrics:** requests (rate, errors, latency per route), rate-limited votes, LLM duration and tokens per model
-  (`gen_ai_client_*`), SQL, .NET runtime, and the scheduler's own counters: `lazydad_scheduler_ticks_total`
-  (outcome `succeeded`/`failed`/`skipped`), `lazydad_jokes_total` (per model, `saved`/`empty`/`failed`),
-  `lazydad_leaderboard_updates_total`.
-- **Logs:** everything the app logs through `ILogger`, linked to its trace. That includes model output the app logs
-  on purpose: each saved joke's text, and the judge's raw answer when it's invalid (to debug it). It's only about
-  the (public) jokes; the LLM spans themselves don't record prompts or responses.
-- **Never:** visitor IPs, user agents or any other visitor data (`PersonalDataFilter` strips them before export).
-  Nothing the app logs is about visitors; keep it that way.
-
-Each app reports as its own service (`service.name` = the Container App's name, so `job="lazydad-app"` in PromQL).
-The console logs still go to Log Analytics as the fallback (step 4).
-
-**1. Token, into Key Vault.** In Grafana Cloud: *Connections → OpenTelemetry (OTLP) → View connection details*,
-generate a token (it can write metrics, logs and traces); the instance ID is shown there too. Keep the token out of
-the repo and chat. The one copy lives in Key Vault as `OtlpHeaders` (a placeholder since the original setup), in
-`OTEL_EXPORTER_OTLP_HEADERS`'s format: basic auth `<instance id>:<token>`, the space URL-encoded (per the OTLP spec).
-Both apps reference it, so a new token is one update.
-
-```bash
-KV_ID=$(az keyvault show -n lazydad-kv --query id -o tsv)
-INSTANCE_ID=<instance id from the connection details>
-read -rs TOKEN   # paste the token; not echoed, not in the shell history
-AUTH=$(printf '%s:%s' "$INSTANCE_ID" "$TOKEN" | base64 -w0); unset TOKEN
-# Check the credentials first (the app doesn't log export failures): 200 or 204 = accepted, 401 = wrong token or instance ID.
-curl -s -o /dev/null -w '%{http_code}\n' -X POST -H "Authorization: Basic $AUTH" -H 'Content-Type: application/json' \
-  -d '{"resourceLogs":[]}' https://otlp-gateway-prod-eu-north-0.grafana.net/otlp/v1/logs
-az keyvault secret set --vault-name lazydad-kv -n OtlpHeaders --value "Authorization=Basic%20$AUTH" -o none
-unset AUTH
-```
-
-<details><summary>PowerShell 7</summary>
-
-```powershell
-$KV_ID = az keyvault show -n lazydad-kv --query id -o tsv
-$INSTANCE_ID = '<instance id from the connection details>'
-$TOKEN = Read-Host 'Grafana token' -MaskInput   # not echoed; Read-Host input isn't saved in the history
-# "${INSTANCE_ID}:" in braces: "$INSTANCE_ID:" would read as a scoped variable.
-$AUTH = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("${INSTANCE_ID}:$TOKEN")); Remove-Variable TOKEN
-# Check the credentials first: 200 or 204 = accepted, 401 = wrong token or instance ID.
-(Invoke-WebRequest -Method Post -Uri https://otlp-gateway-prod-eu-north-0.grafana.net/otlp/v1/logs `
-  -Headers @{ Authorization = "Basic $AUTH" } -ContentType application/json `
-  -Body '{"resourceLogs":[]}' -SkipHttpErrorCheck).StatusCode
-az keyvault secret set --vault-name lazydad-kv -n OtlpHeaders --value "Authorization=Basic%20$AUTH" -o none
-# Confirm the vault holds exactly that value (prints only True or False):
-(az keyvault secret show --vault-name lazydad-kv -n OtlpHeaders --query value -o tsv) -eq "Authorization=Basic%20$AUTH"
-Remove-Variable AUTH
-```
-
-</details>
-
-**2. Per app, staging first.** Deploys keep these settings (Deploy Environment only swaps the image), and images
-from before this change ignore them, so rollbacks are fine. Each app reads the secret with its system-assigned
-identity: prod's already reads the vault (`Key Vault Secrets User` on all of it); staging gets that role on this
-one secret only, so it can't read prod's other secrets. (Section 11 later gives staging a token of its own.)
-
-```bash
-# Staging only: its identity (section 8 or 9 may have assigned it already; this is then a no-op) and access to the secret.
-az containerapp identity assign -n lazydad-app-staging -g $RG --system-assigned -o none
-STAGING_ID=$(az containerapp show -n lazydad-app-staging -g $RG --query identity.principalId -o tsv)
-az role assignment create --assignee-object-id $STAGING_ID --assignee-principal-type ServicePrincipal \
-  --role "Key Vault Secrets User" --scope "$KV_ID/secrets/OtlpHeaders" -o none
-# Wait a few minutes for the role to apply: a reference the identity can't read fails the new revision (the old one keeps serving).
-
-APP=lazydad-app-staging; ENV=staging     # then: lazydad-app / production
-az containerapp secret set -n $APP -g $RG \
-  --secrets "otlp-headers=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/OtlpHeaders,identityref:system"
-az containerapp update -n $APP -g $RG -o none --set-env-vars \
-  OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-eu-north-0.grafana.net/otlp \
-  OTEL_EXPORTER_OTLP_HEADERS=secretref:otlp-headers \
-  OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=$ENV
-```
-
-<details><summary>PowerShell 7</summary>
-
-```powershell
-# Staging only: its identity (a no-op if section 8 or 9 assigned it already) and access to the secret.
-az containerapp identity assign -n lazydad-app-staging -g $RG --system-assigned -o none
-$STAGING_ID = az containerapp show -n lazydad-app-staging -g $RG --query identity.principalId -o tsv
-az role assignment create --assignee-object-id $STAGING_ID --assignee-principal-type ServicePrincipal `
-  --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/OtlpHeaders" -o none
-# Wait a few minutes for the role to apply: a reference the identity can't read fails the new revision.
-
-$APP = 'lazydad-app-staging'; $ENV_NAME = 'staging'     # then: lazydad-app / production
-az containerapp secret set -n $APP -g $RG `
-  --secrets 'otlp-headers=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/OtlpHeaders,identityref:system'
-az containerapp update -n $APP -g $RG -o none --set-env-vars `
-  OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-eu-north-0.grafana.net/otlp `
-  OTEL_EXPORTER_OTLP_HEADERS=secretref:otlp-headers `
-  "OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=$ENV_NAME"
-```
-
-</details>
-
-Check in Grafana's *Explore*: logs `{service_name="lazydad-app-staging"}`, a `joke tick` trace from the new
-revision's startup tick, and the metric `lazydad_jokes_total`. If nothing arrives although the `curl` check passed,
-compare the app's settings with the commands above (`az containerapp show -n $APP -g $RG --query
-properties.template.containers[0].env`). To switch telemetry off again:
-`az containerapp update -n $APP -g $RG --remove-env-vars OTEL_EXPORTER_OTLP_ENDPOINT -o none`.
-
-Then, on prod only, remove the placeholders from the original setup (the app never read them; the endpoint isn't secret):
-
-```bash
-az containerapp update -n lazydad-app -g $RG --remove-env-vars OpenTelemetry__Endpoint OpenTelemetry__Headers -o none
-az containerapp secret remove -n lazydad-app -g $RG --secret-names otlp-endpoint
-az keyvault secret delete --vault-name lazydad-kv -n OtlpEndpoint
-```
-
-*PowerShell 7: the same commands.*
-
-A new token later (expired or leaked), per environment: each app has its own secret once section 11 is done
-(`OtlpHeaders` for `lazydad-app`, `OtlpHeadersStaging` for `lazydad-app-staging`; before that, both use
-`OtlpHeaders`). Store the new token in that app's secret as in step 1, then restart that app's active revision:
-the value is read when a replica starts. Revoke the old token in Grafana.
-
-```bash
-APP=lazydad-app; SECRET=OtlpHeaders     # or: lazydad-app-staging / OtlpHeadersStaging
-# INSTANCE_ID as in step 1; the curl check there works for the new token too.
-read -rs TOKEN
-AUTH=$(printf '%s:%s' "$INSTANCE_ID" "$TOKEN" | base64 -w0); unset TOKEN
-az keyvault secret set --vault-name lazydad-kv -n $SECRET --value "Authorization=Basic%20$AUTH" -o none
-unset AUTH
-az containerapp revision restart -n $APP -g $RG \
-  --revision "$(az containerapp show -n $APP -g $RG --query properties.latestReadyRevisionName -o tsv)"
-```
-
-<details><summary>PowerShell 7</summary>
-
-```powershell
-$APP = 'lazydad-app'; $SECRET = 'OtlpHeaders'     # or: lazydad-app-staging / OtlpHeadersStaging
-# $INSTANCE_ID as in step 1; the Invoke-WebRequest check there works for the new token too.
-$TOKEN = Read-Host 'Grafana token' -MaskInput
-$AUTH = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("${INSTANCE_ID}:$TOKEN")); Remove-Variable TOKEN
-az keyvault secret set --vault-name lazydad-kv -n $SECRET --value "Authorization=Basic%20$AUTH" -o none
-Remove-Variable AUTH
-az containerapp revision restart -n $APP -g $RG `
-  --revision (az containerapp show -n $APP -g $RG --query properties.latestReadyRevisionName -o tsv)
-```
-
-</details>
-
-**3. Uptime check and alerts (prod only).** Staging's ingress admits listed IPs only, and it scales to zero, so it
-would look down and idle all the time.
-
-- *Testing & synthetics → Synthetics → Add check → HTTP*:
-  `https://lazydad-app.wittyfield-6bfb5662.westeurope.azurecontainerapps.io/healthz`, every 5 minutes from 2–3 EU
-  probes (well inside the free tier's executions), with its built-in alert when the check fails.
-- *Alerting → Contact points*: your email. Then *Alert rules* (Prometheus data source), evaluated every 5 minutes:
-
-  | Alert | Query | Condition |
-  |---|---|---|
-  | A scheduler tick failed | `sum(increase(lazydad_scheduler_ticks_total{job="lazydad-app", outcome="failed"}[15m]))` | > 0 |
-  | No joke saved for 5 hours (ticks run every 4) | `sum(increase(lazydad_jokes_total{job="lazydad-app", outcome="saved"}[5h]))` | < 1; *no data* also alerts |
-  | A model failed or returned nothing | `sum by (model) (increase(lazydad_jokes_total{job="lazydad-app", outcome=~"failed\|empty"}[4h]))` | > 0 |
-  | Server errors | `sum(increase(http_server_request_duration_seconds_count{job="lazydad-app", http_response_status_code=~"5.."}[15m]))` | > 2 |
-
-  Metric names are Grafana's translation of the OpenTelemetry names; if one doesn't match, pick it in the query
-  builder's metric browser.
-
-**4. Log Analytics: cap the fallback.** The console logs keep going to the Container Apps environment's workspace
-(30 days). They were about 8 MB a month, at most 2.2 MB a day (2026-09-26), so a 0.1 GB daily cap never bites
-in normal use but stops a logging bug from running up a bill:
-
-```bash
-az monitor log-analytics workspace update -g $RG -n workspace-lazydadrgseCk --quota 0.1
-```
-
-*PowerShell 7: the same commands.*
-
-## 11. Branch previews can't reach production: a staging-only deploy identity
-
-> **Steps 1–6 done 2026-09-28**, tested with Deploy Branch to Staging (build, Entra ID migrations, rollout and smoke
-> tests all as `lazydad-github-staging`); step 7 (optional) not yet. Learned on the way: variables like `$ACR_ID`
-> come from the setup block at the top and are empty in a new terminal, so a role assignment with `--scope "$ACR_ID"`
-> fails; list the identity's roles afterwards (the last block of this section) to catch that.
-
-**Why.** Deploy Branch to Staging runs the chosen branch's own code in the `staging` GitHub environment: its
-workflow files, and its `dotnet build` (which can run any MSBuild target a package brings along). Until this
-section, the `staging` environment logged in as `lazydad-github-cd`, the identity that also deploys production.
-So code in a previewed branch, say a compromised package in a dependency update, could change production. Two
-more paths went through passwords that staging could read: its `SQL_CONNECTION_STRING` secret and the staging
-app's `sql-conn` secret were the `sqladmin` login, which reached every database on the server.
-
-**The target:**
-
-| GitHub environment | Logs in as | Can change |
+| GitHub environment | Signs in as | Can change |
 |---|---|---|
 | `staging` (`*/*` branches and `master`) | `lazydad-github-staging` | `lazydad-app-staging`; push images; SQL firewall rules; the staging DB schema |
 | `production` (`master` only) | `lazydad-github-cd` | `lazydad-app`; push images; SQL firewall rules; the prod DB schema |
 
-Both still push to the same registry, so staging could re-point tags like `previous-production` or `<sha>`. So
-nothing that decides what production runs trusts a tag: Deploy Master deploys the digest its own build produced,
-its automatic rollback returns to the digest the production job read from production's revisions (a job output),
-and the Roll Back workflow only accepts an image whose digest production's own revisions ran.
+Both push to the same registry, so staging could re-point tags like `previous-production` or `<sha>`. So nothing
+that decides what production runs trusts a tag: Deploy Master deploys the digest its own build produced, its
+automatic rollback returns to the digest the production job read from production's revisions (a job output), and the
+Roll Back workflow only accepts an image whose digest production's own revisions ran.
 
-**How GitHub picks the identity.** `azure/login` uses `vars.AZURE_CLIENT_ID`. A variable set on an environment
-overrides the repository's for jobs in that environment, and every job that logs in to Azure runs in one. Azure
-accepts the login because each identity has a *federated credential* for exactly one subject,
-`repo:mykolad@<id>/lazydad@<id>:environment:<env>` (section 6). So the staging identity can't be used from the
-`production` environment, and the other way round.
-
-Do this before sections 8 and 9 if you haven't done those yet: section 9 then creates the staging database's
-deploy user for `lazydad-github-staging` right away (step 3 here does it otherwise).
-
-**1. A custom role for what a deploy needs outside its app.** The built-in roles reach too far: `Contributor`
-on the Container Apps environment could delete it (and the prod app with it), and `SQL Server Contributor`
-could delete the prod database. A deploy only has to *join* the environment (`az containerapp update` checks
-that) and open and close its SQL firewall rule:
+**1. A custom role for what a deploy needs outside its app.** The built-in roles reach too far: `Contributor` on the
+Container Apps environment could delete it (and the prod app with it), and `SQL Server Contributor` could delete
+the prod database. A deploy only has to *join* the environment (`az containerapp update` checks that) and open and
+close its SQL firewall rule:
 
 ```bash
 RG_ID=$(az group show -n $RG --query id -o tsv)
@@ -774,7 +376,7 @@ cat > lazydad-deployer.json <<JSON
   "AssignableScopes": ["$RG_ID"]
 }
 JSON
-az role definition create --role-definition @lazydad-deployer.json
+az role definition create --role-definition @lazydad-deployer.json -o none
 rm lazydad-deployer.json
 ```
 
@@ -782,7 +384,7 @@ rm lazydad-deployer.json
 
 ```powershell
 $RG_ID = az group show -n $RG --query id -o tsv
-# A file, not an argument: az.cmd would strip the JSON's quotes (see the note at the top).
+# A file, not an argument: az.cmd would strip the JSON's quotes (see "Before you start").
 [ordered]@{
   Name             = 'LazyDad Deployer'
   Description      = "Deploy Environment's needs outside the app it deploys: join the Container Apps environment, open and close SQL firewall rules."
@@ -796,238 +398,349 @@ $RG_ID = az group show -n $RG --query id -o tsv
   )
   AssignableScopes = @($RG_ID)
 } | ConvertTo-Json | Set-Content lazydad-deployer.json
-az role definition create --role-definition '@lazydad-deployer.json'
+az role definition create --role-definition '@lazydad-deployer.json' -o none
 Remove-Item lazydad-deployer.json
 ```
 
 </details>
 
-**2. The staging identity**, its roles, and its trust in the `staging` environment only:
+**2. The identities, their roles, and each deploy identity's trust in its environment only.** The federated
+credentials use GitHub's **immutable subject** format, `repo:<owner>@<owner_id>/<repo>@<repo_id>:environment:<env>`.
+This repo emits it (it was created after 2026-07-15; `gh api repos/mykolad/lazydad/actions/oidc/customization/sub`
+shows `use_immutable_subject: true`). The numeric IDs never change or get reused, so a renamed, transferred or
+re-created repository can't inherit the trust. Name-based subjects (`repo:mykolad/lazydad:...`) would never match
+this repo's tokens. A role assignment right after an identity is created can fail with "principal not found": run
+it again a minute later.
 
 ```bash
-az identity create -g $RG -n lazydad-github-staging -l westeurope
-STG_PID=$(az identity show -g $RG -n lazydad-github-staging --query principalId -o tsv)
-STG_APP_ID=$(az containerapp show -n lazydad-app-staging -g $RG --query id -o tsv)
-for role in AcrPush Reader; do   # push images; Reader because az acr login looks the registry up in ARM
-  az role assignment create --assignee-object-id $STG_PID --assignee-principal-type ServicePrincipal --role $role --scope "$ACR_ID"
-done
-az role assignment create --assignee-object-id $STG_PID --assignee-principal-type ServicePrincipal --role Contributor --scope "$STG_APP_ID"
-az role assignment create --assignee-object-id $STG_PID --assignee-principal-type ServicePrincipal --role "LazyDad Deployer" --scope "$RG_ID"
+RG_ID=$(az group show -n $RG --query id -o tsv)
+ACR_ID=$(az acr show -n lazydadacr --query id -o tsv)
+PREFIX="repo:mykolad@$(gh api users/mykolad --jq .id)/lazydad@$(gh api repos/$REPO --jq .id)"
 
-PREFIX="repo:mykolad@$(gh api users/mykolad --jq .id)/lazydad@$(gh api repos/mykolad/lazydad --jq .id)"
-az identity federated-credential create -g $RG --identity-name lazydad-github-staging -n github-staging-immutable \
-  --issuer https://token.actions.githubusercontent.com \
-  --subject "$PREFIX:environment:staging" --audiences api://AzureADTokenExchange
+az identity create -g $RG -n lazydad-acr-pull -l westeurope -o none
+az role assignment create --assignee-object-id "$(az identity show -g $RG -n lazydad-acr-pull --query principalId -o tsv)" \
+  --assignee-principal-type ServicePrincipal --role AcrPull --scope "$ACR_ID" -o none
+
+for pair in lazydad-github-cd:production lazydad-github-staging:staging; do
+  id=${pair%%:*}; env=${pair#*:}
+  az identity create -g $RG -n $id -l westeurope -o none
+  principal=$(az identity show -g $RG -n $id --query principalId -o tsv)
+  # Push images; Reader because az acr login looks the registry up in Azure Resource Manager.
+  for role in AcrPush Reader; do
+    az role assignment create --assignee-object-id $principal --assignee-principal-type ServicePrincipal \
+      --role $role --scope "$ACR_ID" -o none
+  done
+  az role assignment create --assignee-object-id $principal --assignee-principal-type ServicePrincipal \
+    --role "LazyDad Deployer" --scope "$RG_ID" -o none
+  az identity federated-credential create -g $RG --identity-name $id -n github-$env-immutable \
+    --issuer https://token.actions.githubusercontent.com \
+    --subject "$PREFIX:environment:$env" --audiences api://AzureADTokenExchange -o none
+done
 ```
 
 <details><summary>PowerShell 7</summary>
 
 ```powershell
-az identity create -g $RG -n lazydad-github-staging -l westeurope
-$STG_PID = az identity show -g $RG -n lazydad-github-staging --query principalId -o tsv
-$STG_APP_ID = az containerapp show -n lazydad-app-staging -g $RG --query id -o tsv
-foreach ($role in 'AcrPush', 'Reader') {   # push images; Reader because az acr login looks the registry up in ARM
-  az role assignment create --assignee-object-id $STG_PID --assignee-principal-type ServicePrincipal --role $role --scope $ACR_ID
-}
-az role assignment create --assignee-object-id $STG_PID --assignee-principal-type ServicePrincipal --role Contributor --scope $STG_APP_ID
-az role assignment create --assignee-object-id $STG_PID --assignee-principal-type ServicePrincipal --role 'LazyDad Deployer' --scope $RG_ID
+$RG_ID = az group show -n $RG --query id -o tsv
+$ACR_ID = az acr show -n lazydadacr --query id -o tsv
+$PREFIX = "repo:mykolad@$(gh api users/mykolad --jq .id)/lazydad@$(gh api repos/$REPO --jq .id)"
 
-$PREFIX = "repo:mykolad@$(gh api users/mykolad --jq .id)/lazydad@$(gh api repos/mykolad/lazydad --jq .id)"
-az identity federated-credential create -g $RG --identity-name lazydad-github-staging -n github-staging-immutable `
-  --issuer https://token.actions.githubusercontent.com `
-  --subject "${PREFIX}:environment:staging" --audiences api://AzureADTokenExchange
+az identity create -g $RG -n lazydad-acr-pull -l westeurope -o none
+az role assignment create --assignee-object-id (az identity show -g $RG -n lazydad-acr-pull --query principalId -o tsv) `
+  --assignee-principal-type ServicePrincipal --role AcrPull --scope $ACR_ID -o none
+
+foreach ($pair in @{ Id = 'lazydad-github-cd'; Env = 'production' }, @{ Id = 'lazydad-github-staging'; Env = 'staging' }) {
+  az identity create -g $RG -n $pair.Id -l westeurope -o none
+  $principal = az identity show -g $RG -n $pair.Id --query principalId -o tsv
+  # Push images; Reader because az acr login looks the registry up in Azure Resource Manager.
+  foreach ($role in 'AcrPush', 'Reader') {
+    az role assignment create --assignee-object-id $principal --assignee-principal-type ServicePrincipal `
+      --role $role --scope $ACR_ID -o none
+  }
+  az role assignment create --assignee-object-id $principal --assignee-principal-type ServicePrincipal `
+    --role 'LazyDad Deployer' --scope $RG_ID -o none
+  # ${PREFIX} in braces: "$PREFIX:environment" would read as a scoped variable.
+  az identity federated-credential create -g $RG --identity-name $pair.Id -n "github-$($pair.Env)-immutable" `
+    --issuer https://token.actions.githubusercontent.com `
+    --subject "${PREFIX}:environment:$($pair.Env)" --audiences api://AzureADTokenExchange -o none
+}
 ```
 
 </details>
 
-**3. Its database user**, in `lazydad-db-staging` only, as the server's Entra admin (like section 9). It runs
-the staging migrations once the environment has no `SQL_CONNECTION_STRING` secret (step 5). Skip this if
-section 9 already created it.
+Each deploy identity also gets `Contributor` on its own app, once the apps exist (section 7), and a database user
+for the migrations (section 8).
+
+## 7. The Container Apps
+
+**1. A first image.** A Container App can't be created without one, and GitHub can't deploy yet (section 9). ACR
+Tasks builds it inside the registry from your clone (no Docker needed; it uploads the source, minus
+`.dockerignore`'s entries). It reports version `dev`, and the first Deploy Master run replaces it.
 
 ```bash
-az identity show -g $RG -n lazydad-github-staging --query principalId -o tsv   # <staging-cd-oid>
+az acr build -r lazydadacr -t lazydad:bootstrap .
 ```
 
 *PowerShell 7: the same command.*
 
+**2. The apps.** Both are pinned to the image's digest (section 2), pull as `lazydad-acr-pull`, and get a
+system-assigned identity for everything else. The settings hold no secrets: the database connection string names
+the identity to sign in with (`Authentication=Active Directory Managed Identity`, the app's own system-assigned
+identity when there's no `User Id`), and the AI endpoint is an address. Deploys keep these settings: Deploy
+Environment only swaps the image.
+
+```bash
+IMAGE="lazydadacr.azurecr.io/lazydad@$(az acr repository show -n lazydadacr --image lazydad:bootstrap --query digest -o tsv)"
+PULL_ID=$(az identity show -g $RG -n lazydad-acr-pull --query id -o tsv)
+SQL="Server=tcp:lazydad-sql-swedencentral.database.windows.net,1433;Authentication=Active Directory Managed Identity;Encrypt=True"
+OPENAI=https://lazydad-openai-resource.cognitiveservices.azure.com/
+# The pull identity's AcrPull (section 6) must have applied; if the create fails to pull, wait a minute and retry.
+
+az containerapp create -g $RG -n lazydad-app --environment lazydad-cae --image "$IMAGE" \
+  --system-assigned --user-assigned "$PULL_ID" --registry-server lazydadacr.azurecr.io --registry-identity "$PULL_ID" \
+  --ingress external --target-port 8080 --min-replicas 1 --max-replicas 1 --cpu 0.5 --memory 1Gi \
+  --env-vars "ConnectionStrings__DefaultConnection=$SQL;Database=lazydad-db" LlmProviders__AzureOpenAI__Endpoint=$OPENAI -o none
+
+az containerapp create -g $RG -n lazydad-app-staging --environment lazydad-cae --image "$IMAGE" \
+  --system-assigned --user-assigned "$PULL_ID" --registry-server lazydadacr.azurecr.io --registry-identity "$PULL_ID" \
+  --ingress external --target-port 8080 --min-replicas 0 --max-replicas 1 --cpu 0.5 --memory 1Gi \
+  --env-vars "ConnectionStrings__DefaultConnection=$SQL;Database=lazydad-db-staging" LlmProviders__AzureOpenAI__Endpoint=$OPENAI -o none
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$IMAGE = "lazydadacr.azurecr.io/lazydad@$(az acr repository show -n lazydadacr --image lazydad:bootstrap --query digest -o tsv)"
+$PULL_ID = az identity show -g $RG -n lazydad-acr-pull --query id -o tsv
+$SQL = 'Server=tcp:lazydad-sql-swedencentral.database.windows.net,1433;Authentication=Active Directory Managed Identity;Encrypt=True'
+$OPENAI = 'https://lazydad-openai-resource.cognitiveservices.azure.com/'
+# The pull identity's AcrPull (section 6) must have applied; if the create fails to pull, wait a minute and retry.
+
+az containerapp create -g $RG -n lazydad-app --environment lazydad-cae --image $IMAGE `
+  --system-assigned --user-assigned $PULL_ID --registry-server lazydadacr.azurecr.io --registry-identity $PULL_ID `
+  --ingress external --target-port 8080 --min-replicas 1 --max-replicas 1 --cpu 0.5 --memory 1Gi `
+  --env-vars "ConnectionStrings__DefaultConnection=$SQL;Database=lazydad-db" "LlmProviders__AzureOpenAI__Endpoint=$OPENAI" -o none
+
+az containerapp create -g $RG -n lazydad-app-staging --environment lazydad-cae --image $IMAGE `
+  --system-assigned --user-assigned $PULL_ID --registry-server lazydadacr.azurecr.io --registry-identity $PULL_ID `
+  --ingress external --target-port 8080 --min-replicas 0 --max-replicas 1 --cpu 0.5 --memory 1Gi `
+  --env-vars "ConnectionStrings__DefaultConnection=$SQL;Database=lazydad-db-staging" "LlmProviders__AzureOpenAI__Endpoint=$OPENAI" -o none
+```
+
+</details>
+
+- **Prod runs exactly one replica** (min = max = 1). **Staging scales to zero** when idle, and every cold start runs
+  a real joke tick (LLM tokens).
+- The first revisions' startup ticks fail, and that's expected: the databases have no users or schema yet. Deploy
+  Master's first run (section 9) is the real test.
+
+**3. Their roles.** Each app's own identity can call the models; each deploy identity can change its own app only.
+(Their Key Vault roles come with the Grafana tokens, section 11.)
+
+```bash
+OPENAI_ID=$(az cognitiveservices account show -g $RG -n lazydad-openai-resource --query id -o tsv)
+for pair in lazydad-app:lazydad-github-cd lazydad-app-staging:lazydad-github-staging; do
+  app=${pair%%:*}; deployer=${pair#*:}
+  az role assignment create --assignee-object-id "$(az containerapp show -g $RG -n $app --query identity.principalId -o tsv)" \
+    --assignee-principal-type ServicePrincipal --role "Foundry User" --scope "$OPENAI_ID" -o none
+  az role assignment create --assignee-object-id "$(az identity show -g $RG -n $deployer --query principalId -o tsv)" \
+    --assignee-principal-type ServicePrincipal --role Contributor \
+    --scope "$(az containerapp show -g $RG -n $app --query id -o tsv)" -o none
+done
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$OPENAI_ID = az cognitiveservices account show -g $RG -n lazydad-openai-resource --query id -o tsv
+foreach ($pair in @{ App = 'lazydad-app'; Deployer = 'lazydad-github-cd' }, @{ App = 'lazydad-app-staging'; Deployer = 'lazydad-github-staging' }) {
+  az role assignment create --assignee-object-id (az containerapp show -g $RG -n $pair.App --query identity.principalId -o tsv) `
+    --assignee-principal-type ServicePrincipal --role 'Foundry User' --scope $OPENAI_ID -o none
+  az role assignment create --assignee-object-id (az identity show -g $RG -n $pair.Deployer --query principalId -o tsv) `
+    --assignee-principal-type ServicePrincipal --role Contributor `
+    --scope (az containerapp show -g $RG -n $pair.App --query id -o tsv) -o none
+}
+```
+
+</details>
+
+**4. Staging answers your IP only.** Staging is public by default, and every cold start costs LLM tokens, so any
+visitor or crawler would too. With at least one `Allow` rule, Container Apps denies everyone else
+(`403 RBAC: access denied`, answered at the ingress without waking the app):
+
+```bash
+az containerapp ingress access-restriction set -g $RG -n lazydad-app-staging \
+  --rule-name home --ip-address "$(curl -s https://api.ipify.org)/32" --action Allow --description "Owner's home IP" -o none
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+az containerapp ingress access-restriction set -g $RG -n lazydad-app-staging `
+  --rule-name home --ip-address "$(Invoke-RestMethod https://api.ipify.org)/32" --action Allow --description "Owner's home IP" -o none
+```
+
+</details>
+
+Deploy Environment lets its runner through for the smoke tests, for any app with Allow rules (staging, and prod once
+it's behind Cloudflare), and removes it afterwards. If your home IP changes, run the command again: it updates the
+`home` rule (and do the same for the SQL server's `AllowLocalDev` rule).
+
+## 8. Database users
+
+Nobody has a password: every user is an Entra identity, created by you as the server's Entra admin. Each app can
+read and write its own database only, and each environment's deploy identity can also change that database's
+schema (the migrations).
+
+| User (an Entra identity) | Database | Roles |
+|---|---|---|
+| `lazydad-app` (the prod app's system-assigned identity) | `lazydad-db` | `db_datareader`, `db_datawriter` |
+| `lazydad-github-cd` (production's migrations) | `lazydad-db` | `db_ddladmin`, `db_datareader`, `db_datawriter` |
+| `lazydad-app-staging` (the staging app's system-assigned identity) | `lazydad-db-staging` | `db_datareader`, `db_datawriter` |
+| `lazydad-github-staging` (staging's migrations) | `lazydad-db-staging` | `db_ddladmin`, `db_datareader`, `db_datawriter` |
+
+Their object IDs:
+
+```bash
+for app in lazydad-app lazydad-app-staging; do
+  echo "$app: $(az containerapp show -g $RG -n $app --query identity.principalId -o tsv)"
+done
+for id in lazydad-github-cd lazydad-github-staging; do
+  echo "$id: $(az identity show -g $RG -n $id --query principalId -o tsv)"
+done
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+foreach ($app in 'lazydad-app', 'lazydad-app-staging') {
+  "${app}: $(az containerapp show -g $RG -n $app --query identity.principalId -o tsv)"
+}
+foreach ($id in 'lazydad-github-cd', 'lazydad-github-staging') {
+  "${id}: $(az identity show -g $RG -n $id --query principalId -o tsv)"
+}
+```
+
+</details>
+
+Then run these in each database: the portal's *Query editor* (signed in with Entra ID), Azure Data Studio, or
+`sqlcmd -G`. `WITH OBJECT_ID` skips the directory lookup by name, but the user name must still **start with the
+identity's display name**, and a system-assigned identity is named after its app: so staging's app user is
+`[lazydad-app-staging]`.
+
 ```sql
+-- In lazydad-db:
+CREATE USER [lazydad-app] FROM EXTERNAL PROVIDER WITH OBJECT_ID = '<lazydad-app id>';
+ALTER ROLE db_datareader ADD MEMBER [lazydad-app];
+ALTER ROLE db_datawriter ADD MEMBER [lazydad-app];
+CREATE USER [lazydad-github-cd] FROM EXTERNAL PROVIDER WITH OBJECT_ID = '<lazydad-github-cd id>';
+ALTER ROLE db_ddladmin ADD MEMBER [lazydad-github-cd];
+ALTER ROLE db_datareader ADD MEMBER [lazydad-github-cd];
+ALTER ROLE db_datawriter ADD MEMBER [lazydad-github-cd];
+
 -- In lazydad-db-staging:
-CREATE USER [lazydad-github-staging] FROM EXTERNAL PROVIDER WITH OBJECT_ID = '<staging-cd-oid>';
+CREATE USER [lazydad-app-staging] FROM EXTERNAL PROVIDER WITH OBJECT_ID = '<lazydad-app-staging id>';
+ALTER ROLE db_datareader ADD MEMBER [lazydad-app-staging];
+ALTER ROLE db_datawriter ADD MEMBER [lazydad-app-staging];
+CREATE USER [lazydad-github-staging] FROM EXTERNAL PROVIDER WITH OBJECT_ID = '<lazydad-github-staging id>';
 ALTER ROLE db_ddladmin ADD MEMBER [lazydad-github-staging];
 ALTER ROLE db_datareader ADD MEMBER [lazydad-github-staging];
 ALTER ROLE db_datawriter ADD MEMBER [lazydad-github-staging];
 ```
 
-**4. Point each GitHub environment at its identity.** Set both environment variables before removing the
-repository-wide one (step 6), so no run is ever left without a client id:
-
-```bash
-gh variable set AZURE_CLIENT_ID --env staging    --body "$(az identity show -g $RG -n lazydad-github-staging --query clientId -o tsv)"
-gh variable set AZURE_CLIENT_ID --env production --body "$(az identity show -g $RG -n lazydad-github-cd --query clientId -o tsv)"
-```
-
-<details><summary>PowerShell 7</summary>
-
-```powershell
-gh variable set AZURE_CLIENT_ID --env staging    --body (az identity show -g $RG -n lazydad-github-staging --query clientId -o tsv)
-gh variable set AZURE_CLIENT_ID --env production --body (az identity show -g $RG -n lazydad-github-cd --query clientId -o tsv)
-```
-
-</details>
-
-Test it: *Actions → Deploy Branch to Staging → Run workflow* on `master`, with *run-migrations* ticked. The
-build (image push), the migrations (still with the password while that secret exists), the rollout and the
-smoke tests all run as the new identity. The next Deploy Master run checks production's side.
-
-**5. Take the passwords and shared credentials away from staging.** Staging has to run on its managed identity first: section 8 step 2
-(Azure OpenAI) and section 9 step 2 (SQL) for `lazydad-app-staging`. Then remove what branch code could read
-that works outside staging:
-
-```bash
-gh secret delete SQL_CONNECTION_STRING --env staging   # migrations switch to Entra ID as lazydad-github-staging
-az containerapp secret remove -n lazydad-app-staging -g $RG --secret-names sql-conn openai-key
-```
-
-*PowerShell 7: the same commands.*
-
-Run Deploy Branch to Staging with *run-migrations* again: the migration step logs "Migrating
-lazydad-db-staging with Entra ID". (`sqladmin` itself keeps working for prod until section 9's lock-down.)
-
-**Staging's own Grafana token.** Section 10 gave both apps the same `OtlpHeaders` secret, so code running on
-staging can read production's Grafana write token from its environment. Give staging a token of its own: in
-Grafana Cloud, create a second one (for example an access policy `lazydad-staging` that can write metrics, logs
-and traces), then:
-
-```bash
-INSTANCE_ID=<instance id from the connection details>
-read -rs TOKEN   # the staging token; not echoed, not in the shell history
-AUTH=$(printf '%s:%s' "$INSTANCE_ID" "$TOKEN" | base64 -w0); unset TOKEN
-az keyvault secret set --vault-name lazydad-kv -n OtlpHeadersStaging --value "Authorization=Basic%20$AUTH" -o none
-unset AUTH
-KV_ID=$(az keyvault show -n lazydad-kv --query id -o tsv)
-STG_APP_PID=$(az containerapp show -n lazydad-app-staging -g $RG --query identity.principalId -o tsv)   # the app's own identity
-az role assignment create --assignee-object-id $STG_APP_PID --assignee-principal-type ServicePrincipal \
-  --role "Key Vault Secrets User" --scope "$KV_ID/secrets/OtlpHeadersStaging" -o none
-# Wait a few minutes for the role, then switch staging to its token (read when a replica starts):
-az containerapp secret set -n lazydad-app-staging -g $RG \
-  --secrets "otlp-headers=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/OtlpHeadersStaging,identityref:system"
-az containerapp revision restart -n lazydad-app-staging -g $RG \
-  --revision "$(az containerapp show -n lazydad-app-staging -g $RG --query properties.latestReadyRevisionName -o tsv)"
-# Once staging's telemetry arrives again: take away its access to production's token.
-az role assignment delete --assignee $STG_APP_PID --role "Key Vault Secrets User" --scope "$KV_ID/secrets/OtlpHeaders"
-```
-
-<details><summary>PowerShell 7</summary>
-
-```powershell
-$INSTANCE_ID = '<instance id from the connection details>'
-$TOKEN = Read-Host 'Grafana staging token' -MaskInput   # not echoed; Read-Host input isn't saved in the history
-$AUTH = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("${INSTANCE_ID}:$TOKEN")); Remove-Variable TOKEN
-az keyvault secret set --vault-name lazydad-kv -n OtlpHeadersStaging --value "Authorization=Basic%20$AUTH" -o none
-Remove-Variable AUTH
-$KV_ID = az keyvault show -n lazydad-kv --query id -o tsv
-$STG_APP_PID = az containerapp show -n lazydad-app-staging -g $RG --query identity.principalId -o tsv   # the app's own identity
-az role assignment create --assignee-object-id $STG_APP_PID --assignee-principal-type ServicePrincipal `
-  --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/OtlpHeadersStaging" -o none
-# Wait a few minutes for the role, then switch staging to its token (read when a replica starts):
-az containerapp secret set -n lazydad-app-staging -g $RG `
-  --secrets 'otlp-headers=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/OtlpHeadersStaging,identityref:system'
-az containerapp revision restart -n lazydad-app-staging -g $RG `
-  --revision (az containerapp show -n lazydad-app-staging -g $RG --query properties.latestReadyRevisionName -o tsv)
-# Once staging's telemetry arrives again: take away its access to production's token.
-az role assignment delete --assignee $STG_APP_PID --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/OtlpHeaders"
-```
-
-</details>
-
-Staging has had production's token until now, so rotate it too: a new token in Grafana, stored in `OtlpHeaders`
-and picked up with a restart (section 10, "A new token later"), then revoke the old one. Both tokens still
-write to the same Grafana stack, and a write token can't be limited to certain labels: staging's could still
-send data labelled as production. But it's no longer production's token, and you can revoke it on its own.
-
-**6. Remove the old way in.** `lazydad-github-cd` no longer needs anything in staging:
-
-```bash
-az identity federated-credential delete -g $RG --identity-name lazydad-github-cd -n github-staging-immutable --yes
-az role assignment delete --assignee "$(az identity show -g $RG -n lazydad-github-cd --query principalId -o tsv)" \
-  --role Contributor --scope "$(az containerapp show -n lazydad-app-staging -g $RG --query id -o tsv)"
-gh variable delete AZURE_CLIENT_ID   # the repository-wide one; each environment has its own now
-```
-
-<details><summary>PowerShell 7</summary>
-
-```powershell
-az identity federated-credential delete -g $RG --identity-name lazydad-github-cd -n github-staging-immutable --yes
-az role assignment delete --assignee (az identity show -g $RG -n lazydad-github-cd --query principalId -o tsv) `
-  --role Contributor --scope (az containerapp show -n lazydad-app-staging -g $RG --query id -o tsv)
-gh variable delete AZURE_CLIENT_ID   # the repository-wide one; each environment has its own now
-```
-
-</details>
+Check, in each database:
 
 ```sql
--- In lazydad-db-staging, if section 9 created it there:
-DROP USER IF EXISTS [lazydad-github-cd];
+SELECT p.name, r.name AS role
+FROM sys.database_principals p
+JOIN sys.database_role_members m ON m.member_principal_id = p.principal_id
+JOIN sys.database_principals r ON r.principal_id = m.role_principal_id
+WHERE p.type = 'E' ORDER BY p.name, r.name;
 ```
 
-**7. Least privilege for production's identity too (optional, same idea).** It still has `Contributor` on the
-Container Apps environment and `SQL Server Contributor`, which reach further than a deploy needs. Swap them for
-the custom role, then check with a Deploy Master run:
+The migrations sign in the same way: Deploy Environment runs them after `azure/login` as the environment's deploy
+identity, with `Authentication=Active Directory Default`, which finds that sign-in through the Azure CLI.
+
+## 9. GitHub: environments, variables, and the first deploy
+
+Jobs sign in to Azure only through an environment (the federated subjects are `environment:staging` and
+`environment:production`), so a workflow that doesn't use one can't get an Azure token. Both environments accept
+`master`; `staging` also accepts `*/*` branches, for Deploy Branch to Staging (in GitHub's patterns `*` doesn't
+cross `/`, so `*/*` matches `feature/x`). `production` stays master-only. The federated credential matches the
+environment, not the branch.
+
+Which identity a job signs in as is `vars.AZURE_CLIENT_ID`, set per environment. Nothing here is a secret: the
+client, tenant and subscription IDs only identify things, and only a token from this repository's environment can
+use them. The repository has **no secrets** at all.
 
 ```bash
-CD_PID=$(az identity show -g $RG -n lazydad-github-cd --query principalId -o tsv)
-az role assignment create --assignee-object-id $CD_PID --assignee-principal-type ServicePrincipal --role "LazyDad Deployer" --scope "$RG_ID"
-az role assignment delete --assignee $CD_PID --role Contributor --scope "$(az containerapp env show -n lazydad-cae -g $RG --query id -o tsv)"
-az role assignment delete --assignee $CD_PID --role "SQL Server Contributor" --scope "$(az sql server show -g $RG -n lazydad-sql-swedencentral --query id -o tsv)"
-```
-
-<details><summary>PowerShell 7</summary>
-
-```powershell
-$CD_PID = az identity show -g $RG -n lazydad-github-cd --query principalId -o tsv
-az role assignment create --assignee-object-id $CD_PID --assignee-principal-type ServicePrincipal --role 'LazyDad Deployer' --scope $RG_ID
-az role assignment delete --assignee $CD_PID --role Contributor --scope (az containerapp env show -n lazydad-cae -g $RG --query id -o tsv)
-az role assignment delete --assignee $CD_PID --role 'SQL Server Contributor' --scope (az sql server show -g $RG -n lazydad-sql-swedencentral --query id -o tsv)
-```
-
-</details>
-
-Check what each identity can do, at any time:
-
-```bash
-for id in lazydad-github-staging lazydad-github-cd; do
-  echo "== $id"
-  az role assignment list --assignee "$(az identity show -g $RG -n $id --query principalId -o tsv)" --all \
-    --query "[].{role:roleDefinitionName, scope:scope}" -o table
+for env in staging production; do
+  echo '{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' |
+    gh api -X PUT repos/$REPO/environments/$env --input - > /dev/null
+  gh api -X POST repos/$REPO/environments/$env/deployment-branch-policies -f name=master -f type=branch > /dev/null
 done
+gh api -X POST repos/$REPO/environments/staging/deployment-branch-policies -f name='*/*' -f type=branch > /dev/null
+
+gh variable set AZURE_CLIENT_ID -R $REPO --env production --body "$(az identity show -g $RG -n lazydad-github-cd --query clientId -o tsv)"
+gh variable set AZURE_CLIENT_ID -R $REPO --env staging    --body "$(az identity show -g $RG -n lazydad-github-staging --query clientId -o tsv)"
+gh variable set AZURE_TENANT_ID       -R $REPO --body "$(az account show --query tenantId -o tsv)"
+gh variable set AZURE_SUBSCRIPTION_ID -R $REPO --body "$(az account show --query id -o tsv)"
+# Roll Back Production never picks an image older than this commit (#30's merge: the first image without API keys).
+gh variable set ROLLBACK_MIN_COMMIT -R $REPO --body 27d5dc5838996ce2101f4b19287a962fc710ad74
 ```
 
 <details><summary>PowerShell 7</summary>
 
 ```powershell
-foreach ($id in 'lazydad-github-staging', 'lazydad-github-cd') {
-  "== $id"
-  az role assignment list --assignee (az identity show -g $RG -n $id --query principalId -o tsv) --all `
-    --query '[].{role:roleDefinitionName, scope:scope}' -o table
+foreach ($envName in 'staging', 'production') {
+  '{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' |
+    gh api -X PUT "repos/$REPO/environments/$envName" --input - | Out-Null
+  gh api -X POST "repos/$REPO/environments/$envName/deployment-branch-policies" -f name=master -f type=branch | Out-Null
 }
+gh api -X POST "repos/$REPO/environments/staging/deployment-branch-policies" -f 'name=*/*' -f type=branch | Out-Null
+
+gh variable set AZURE_CLIENT_ID -R $REPO --env production --body (az identity show -g $RG -n lazydad-github-cd --query clientId -o tsv)
+gh variable set AZURE_CLIENT_ID -R $REPO --env staging    --body (az identity show -g $RG -n lazydad-github-staging --query clientId -o tsv)
+gh variable set AZURE_TENANT_ID       -R $REPO --body (az account show --query tenantId -o tsv)
+gh variable set AZURE_SUBSCRIPTION_ID -R $REPO --body (az account show --query id -o tsv)
+# Roll Back Production never picks an image older than this commit (#30's merge: the first image without API keys).
+gh variable set ROLLBACK_MIN_COMMIT -R $REPO --body 27d5dc5838996ce2101f4b19287a962fc710ad74
 ```
 
 </details>
 
-What a previewed branch can still do afterwards: anything to staging (its app, its database, LLM calls, which
-cost tokens), push images that production never runs, and open a SQL firewall rule (useless without a login).
-It can't change what production runs, or make production run anything else.
+In the portal: *Settings → Environments → staging / production* shows each environment's branches and variables;
+*Settings → Secrets and variables → Actions → Variables* the repository's.
 
-**One gap remains: availability.** Both identities can write to the whole registry (`AcrPush`), so a branch could
-also move production's protection tags (`deployed-production`, `previous-production`) off the image production
-runs. The weekly purge would then delete that manifest, and production's next restart or scale-out would fail to
-pull it (the running replica keeps running; a Deploy Master run fixes it). An ACR lock doesn't help: `AcrPush`
-can lift locks too. The fix is repository-scoped permissions (the registry's "RBAC Registry + ABAC Repository
-Permissions" mode): previews write only to a `lazydad-preview` repository, and production's identity copies
-the image it deploys into a production-only `lazydad` repository with `az acr import` (same digest). That's a
-registry migration of its own, planned separately.
+**The first deploy.** Deploy Master builds the image (as staging's identity), migrates and rolls out staging, runs
+its smoke tests, then does the same for production. A green run means every sign-in in this runbook works:
+registry push and pull, the migrations as each deploy identity, and each app's database and model calls (the smoke
+tests wait for the new revision's startup tick to save a joke from every model).
 
-## 12. `lazydad.fyi` behind Cloudflare: DDoS and bot protection
+```bash
+gh workflow run deploy-master.yml -R $REPO --ref master
+sleep 5   # until the run is listed
+gh run watch -R $REPO "$(gh run list -R $REPO --workflow deploy-master.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+curl -s "https://$(az containerapp show -g $RG -n lazydad-app --query properties.configuration.ingress.fqdn -o tsv)/status"
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+gh workflow run deploy-master.yml -R $REPO --ref master
+Start-Sleep 5   # until the run is listed
+gh run watch -R $REPO (gh run list -R $REPO --workflow deploy-master.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+Invoke-RestMethod "https://$(az containerapp show -g $RG -n lazydad-app --query properties.configuration.ingress.fqdn -o tsv)/status"
+```
+
+</details>
+
+`/status` shows the version, the revision and the startup tick: a joke from every model, leaderboard not `failed`.
+If the run fails at the Azure sign-in, compare the environment's `AZURE_CLIENT_ID` with the identity's client ID and
+its federated credential's subject (section 6); at the migrations, check the deploy identity's database user
+(section 8).
+
+## 10. `lazydad.fyi` behind Cloudflare: DDoS and bot protection
 
 Production gets a domain, `lazydad.fyi` (bought through Cloudflare Registrar, so its DNS is already on Cloudflare),
 served through Cloudflare's proxy on the **Free** plan:
@@ -1038,11 +751,10 @@ served through Cloudflare's proxy on the **Free** plan:
 - **The origin only answers Cloudflare:** otherwise anyone could skip all of it through the app's
   `*.azurecontainerapps.io` address.
 
-Staging stays as it is, on its Azure address and open to your IP only. What changes in the repo (merged before
-step 2): the app takes the visitor's address from Cloudflare's `CF-Connecting-IP` header, but only for requests
-from Cloudflare's ranges (`CloudflareClientAddressMiddleware`, ranges in `appsettings.json`). Otherwise the vote rate
-limit would count every visitor behind the same Cloudflare edge server as one. Deploy Environment allows its
-runner through any app with IP restrictions, so deploys keep working after step 6.
+Staging stays on its Azure address, open to your IP only. The app takes the visitor's address from Cloudflare's
+`CF-Connecting-IP` header, but only for requests from Cloudflare's ranges (`CloudflareClientAddressMiddleware`, ranges
+in `appsettings.json`). Otherwise the vote rate limit would count every visitor behind the same Cloudflare edge
+server as one.
 
 **1. Check the zone** (nothing to change, normally). A *zone* is Cloudflare's name for a domain in your account: its
 DNS records and all its settings. Open `lazydad.fyi` in the dashboard; its **Overview** should say plan **Free** and
@@ -1050,10 +762,7 @@ status **Active**. Active means the domain's nameservers are Cloudflare's, so th
 are the ones the internet sees. Cloudflare Registrar sets up both when you buy a domain through it; a domain bought
 elsewhere would need its nameservers changed at that registrar first, and then a wait until the zone is Active.
 
-**2. Deploy the Cloudflare-aware app first.** It's on master once this section's PR is merged. Deploy Master
-rolls it out, and until step 5 nothing changes: no request comes from Cloudflare yet.
-
-**3. A certificate between Cloudflare and Azure.** Container Apps' free managed certificate can't be issued or
+**2. A certificate between Cloudflare and Azure.** Container Apps' free managed certificate can't be issued or
 renewed behind Cloudflare's proxy, so the origin uses a free **Cloudflare Origin CA** certificate, valid for 15
 years. Browsers don't trust it, but Cloudflare does, and only Cloudflare connects to the origin. In the dashboard:
 *SSL/TLS → Origin Server → Create Certificate*, key type RSA (2048), hostnames `lazydad.fyi` and `*.lazydad.fyi`,
@@ -1063,7 +772,7 @@ once. Then turn them into a PFX (no password: it only exists for a minute) and u
 ```bash
 openssl pkcs12 -export -in origin.pem -inkey origin.key -out origin.pfx -passout pass:
 az containerapp env certificate upload -g $RG -n lazydad-cae --certificate-name lazydad-fyi-origin --certificate-file origin.pfx
-rm origin.key origin.pfx   # the key lives in the environment now; a new one is a new certificate (step 3 again)
+rm origin.key origin.pfx   # the key lives in the environment now; a new one is a new certificate (step 2 again)
 ```
 
 <details><summary>PowerShell 7</summary>
@@ -1072,12 +781,12 @@ rm origin.key origin.pfx   # the key lives in the environment now; a new one is 
 $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::CreateFromPemFile("$PWD/origin.pem", "$PWD/origin.key")
 [IO.File]::WriteAllBytes("$PWD/origin.pfx", $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx))
 az containerapp env certificate upload -g $RG -n lazydad-cae --certificate-name lazydad-fyi-origin --certificate-file origin.pfx
-Remove-Item origin.key, origin.pfx   # the key lives in the environment now; a new one is a new certificate (step 3 again)
+Remove-Item origin.key, origin.pfx   # the key lives in the environment now; a new one is a new certificate (step 2 again)
 ```
 
 </details>
 
-**4. Point the domain at the prod app, not proxied yet.** Azure checks that you own the domain (a TXT record) and
+**3. Point the domain at the prod app, not proxied yet.** Azure checks that you own the domain (a TXT record) and
 where it points (for an apex domain, an A record to the environment's IP) before it accepts the hostname. So first
 add these in *DNS → Records*, both **DNS only** (grey cloud):
 
@@ -1097,15 +806,15 @@ curl -sk https://lazydad.fyi/healthz   # -k: straight to Azure, whose Origin CA 
 
 *PowerShell 7: the same commands, with `curl.exe` instead of `curl`, which PowerShell aliases in some setups.*
 
-**5. Turn on the proxy and the protections.**
+**4. Turn on the proxy and the protections.**
 
 - *SSL/TLS → Overview*: encryption mode **Full (strict)** (Cloudflare to Azure is encrypted and the certificate
   checked). *SSL/TLS → Edge Certificates*: **Always Use HTTPS** on, **Minimum TLS Version** 1.2.
 - *DNS → Records*: switch the `A` record to **Proxied** (orange cloud). Leave the `TXT` record as it is.
   `curl -s https://lazydad.fyi/healthz` now works without `-k`: browsers get Cloudflare's certificate.
 - *Security → Bots*: **Block AI bots** (on all pages), **AI Labyrinth** on, **Bot Fight Mode** on. On the Free plan
-  no rule can make an exception to Bot Fight Mode, so check the uptime check still passes after step 6; turn Bot
-  Fight Mode off if it gets challenged.
+  no rule can make an exception to Bot Fight Mode, so check that Grafana's uptime check (section 11) passes; turn
+  Bot Fight Mode off if it gets challenged.
 - *Security → WAF → Rate limiting rules* (the Free plan has one, with a fixed 10-second period and block, and only
   the path and verified-bot fields): name "Votes", expression `(http.request.uri.path contains "/vote")` (only POST
   is served there), counted per IP, 20 requests per 10 seconds, action **Block**, duration 10 seconds. Cloudflare
@@ -1143,7 +852,7 @@ curl -sk https://lazydad.fyi/healthz   # -k: straight to Azure, whose Origin CA 
 - Optional, `www`: a `CNAME` `www` → `lazydad.fyi` (proxied), and *Rules → Redirect Rules*, template
   "Redirect from WWW to root".
 
-**6. Make Cloudflare the only way in.** Otherwise anyone could skip Cloudflare through the app's own
+**5. Make Cloudflare the only way in.** Otherwise anyone could skip Cloudflare through the app's own
 `*.azurecontainerapps.io` address. The switch is a variable on the `production` GitHub environment,
 `CLOUDFLARE_ONLY_INGRESS`: while it's `true`, every deploy (Deploy Environment) makes the prod app's ingress admit
 only Cloudflare's IPv4 ranges, one `cloudflare-*` rule per range (Container Apps' ingress is IPv4; the app's own list
@@ -1153,36 +862,259 @@ through for the smoke tests, which call the Azure address. The rules are written
 of Cloudflare gets through. Staging never has the variable, so its ingress (your IP only) is left alone.
 
 ```bash
-gh variable set CLOUDFLARE_ONLY_INGRESS --env production --body true
-gh workflow run deploy-master.yml --ref master   # or let the next merge deploy it
+gh variable set CLOUDFLARE_ONLY_INGRESS -R $REPO --env production --body true
+gh workflow run deploy-master.yml -R $REPO --ref master   # or let the next merge deploy it
 # Once Deploy Master is green (its production job logs "Locking lazydad-app to Cloudflare"):
-curl -s -o /dev/null -w '%{http_code}\n' https://lazydad-app.wittyfield-6bfb5662.westeurope.azurecontainerapps.io/healthz   # 403
-curl -s -o /dev/null -w '%{http_code}\n' https://lazydad.fyi/healthz                                                        # 200
+curl -s -o /dev/null -w '%{http_code}\n' "https://$(az containerapp show -g $RG -n lazydad-app --query properties.configuration.ingress.fqdn -o tsv)/healthz"   # 403
+curl -s -o /dev/null -w '%{http_code}\n' https://lazydad.fyi/healthz                                                                                         # 200
 ```
 
 <details><summary>PowerShell 7</summary>
 
 ```powershell
-gh variable set CLOUDFLARE_ONLY_INGRESS --env production --body true
-gh workflow run deploy-master.yml --ref master   # or let the next merge deploy it
+gh variable set CLOUDFLARE_ONLY_INGRESS -R $REPO --env production --body true
+gh workflow run deploy-master.yml -R $REPO --ref master   # or let the next merge deploy it
 # Once Deploy Master is green (its production job logs "Locking lazydad-app to Cloudflare"):
-(Invoke-WebRequest https://lazydad-app.wittyfield-6bfb5662.westeurope.azurecontainerapps.io/healthz -SkipHttpErrorCheck).StatusCode   # 403
-(Invoke-WebRequest https://lazydad.fyi/healthz -SkipHttpErrorCheck).StatusCode                                                        # 200
+(Invoke-WebRequest "https://$(az containerapp show -g $RG -n lazydad-app --query properties.configuration.ingress.fqdn -o tsv)/healthz" -SkipHttpErrorCheck).StatusCode   # 403
+(Invoke-WebRequest https://lazydad.fyi/healthz -SkipHttpErrorCheck).StatusCode                                                                                          # 200
 ```
 
 </details>
 
-Grafana's uptime check (section 10, step 3) goes through `https://lazydad.fyi/healthz`, so it keeps passing. To undo
-step 6: `gh variable delete CLOUDFLARE_ONLY_INGRESS --env production`, and deploy again; the deploy removes the
-`cloudflare-*` rules, and with no Allow rules left the app's own address is open again.
+To undo: `gh variable delete CLOUDFLARE_ONLY_INGRESS -R mykolad/lazydad --env production`, and deploy again; the deploy
+removes the `cloudflare-*` rules, and with no Allow rules left the app's own address is open again. Section 12 has
+how the ranges stay current.
 
-**Keeping the ranges current.** Cloudflare changes its ranges rarely, and announces it in advance. Two things keep
-up with it without you having to notice:
+## 11. Monitoring and logs: Grafana Cloud
 
-- **Every deploy syncs the ingress rules.** While the switch is on, Deploy Environment reads Cloudflare's list from
-  its API (`tools/cloudflare-ranges.sh sync`), and adds new ranges and removes ones Cloudflare no longer lists, in
-  one update of the whole list. If the API can't be read, it leaves the rules alone with a warning; it never removes
-  more than 3 ranges at once (more means something is off: it adds, warns, and leaves removals to you).
+The app sends traces, metrics and logs over OpenTelemetry (OTLP) straight to a Grafana Cloud stack in the EU
+(free tier; no collector or agent to run). Only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set: local runs and tests
+send nothing. What goes out, and what doesn't:
+
+- **Traces:** one per request (`/healthz` excluded, uptime checks would flood them) and one per scheduler tick
+  (`joke tick`), with its lease, LLM calls (model, duration, tokens) and SQL commands under it.
+- **Metrics:** requests (rate, errors, latency per route), rate-limited votes, LLM duration and tokens per model
+  (`gen_ai_client_*`), SQL, .NET runtime, and the scheduler's own counters: `lazydad_scheduler_ticks_total`
+  (outcome `succeeded`/`failed`/`skipped`), `lazydad_jokes_total` (per model, `saved`/`empty`/`failed`),
+  `lazydad_leaderboard_updates_total`.
+- **Logs:** everything the app logs through `ILogger`, linked to its trace. That includes model output the app logs
+  on purpose: each saved joke's text, and the judge's raw answer when it's invalid (to debug it). It's only about
+  the (public) jokes; the LLM spans themselves don't record prompts or responses.
+- **Never:** visitor IPs, user agents or any other visitor data (`PersonalDataFilter` strips them before export).
+  Nothing the app logs is about visitors; keep it that way.
+
+Each app reports as its own service (`service.name` = the Container App's name, so `job="lazydad-app"` in PromQL).
+
+**1. A stack and two tokens.** Sign up at grafana.com (free), with the stack in an **EU** region (this one is
+`eu-north`). Then *Connections → OpenTelemetry (OTLP) → View connection details* shows the endpoint and the
+instance ID. Create **two tokens** there (or as access policies under *Administration → Cloud access policies*),
+each allowed to write metrics, logs and traces: one for prod, one for staging. Staging runs branch previews, so it
+must never be able to read prod's token; a separate one can be revoked on its own. (Both still write to the same
+stack, and a write token can't be limited to certain labels: staging's could send data labelled as production.)
+
+Keep the tokens out of the repo and the chat. Each goes into Key Vault in `OTEL_EXPORTER_OTLP_HEADERS`'s format:
+basic auth `<instance id>:<token>`, the space URL-encoded (per the OTLP spec). The helper checks a token with Grafana
+first (the app doesn't log export failures), and stores it only if Grafana accepts it:
+
+```bash
+INSTANCE_ID=<instance id from the connection details>
+store_token() {   # $1: the Key Vault secret. Reads the token without echoing it or keeping it in the history.
+  local token auth code
+  read -rsp "Grafana token for $1: " token; echo
+  auth=$(printf '%s:%s' "$INSTANCE_ID" "$token" | base64 -w0)
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Basic $auth" -H 'Content-Type: application/json' \
+    -d '{"resourceLogs":[]}' https://otlp-gateway-prod-eu-north-0.grafana.net/otlp/v1/logs)
+  case $code in
+    200|204) az keyvault secret set --vault-name lazydad-kv -n "$1" --value "Authorization=Basic%20$auth" -o none && echo "Stored $1." ;;
+    *) echo "Grafana answered $code (401: wrong token or instance ID); $1 not stored."; return 1 ;;
+  esac
+}
+store_token OtlpHeaders          # prod's token
+store_token OtlpHeadersStaging   # staging's token
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$INSTANCE_ID = '<instance id from the connection details>'
+function Set-GrafanaToken([string] $Secret) {   # Read-Host input isn't echoed or kept in the history
+  $token = Read-Host "Grafana token for $Secret" -MaskInput
+  # "${INSTANCE_ID}:" in braces: "$INSTANCE_ID:" would read as a scoped variable.
+  $auth = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("${INSTANCE_ID}:$token"))
+  $code = (Invoke-WebRequest -Method Post -Uri https://otlp-gateway-prod-eu-north-0.grafana.net/otlp/v1/logs `
+    -Headers @{ Authorization = "Basic $auth" } -ContentType application/json `
+    -Body '{"resourceLogs":[]}' -SkipHttpErrorCheck).StatusCode
+  if ($code -notin 200, 204) { "Grafana answered $code (401: wrong token or instance ID); $Secret not stored."; return }
+  az keyvault secret set --vault-name lazydad-kv -n $Secret --value "Authorization=Basic%20$auth" -o none
+  "Stored $Secret."
+}
+Set-GrafanaToken OtlpHeaders          # prod's token
+Set-GrafanaToken OtlpHeadersStaging   # staging's token
+```
+
+</details>
+
+**2. Each app reads its own token.** A Container Apps secret can be a *Key Vault reference*, read with the app's
+own identity when a replica starts, so the value never sits in the app's configuration. Each app gets
+`Key Vault Secrets User` on its own secret only:
+
+```bash
+KV_ID=$(az keyvault show -n lazydad-kv --query id -o tsv)
+for app_secret in lazydad-app:OtlpHeaders lazydad-app-staging:OtlpHeadersStaging; do
+  app=${app_secret%%:*}; secret=${app_secret#*:}
+  az role assignment create --assignee-object-id "$(az containerapp show -g $RG -n $app --query identity.principalId -o tsv)" \
+    --assignee-principal-type ServicePrincipal --role "Key Vault Secrets User" --scope "$KV_ID/secrets/$secret" -o none
+done
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$KV_ID = az keyvault show -n lazydad-kv --query id -o tsv
+foreach ($pair in @{ App = 'lazydad-app'; Secret = 'OtlpHeaders' }, @{ App = 'lazydad-app-staging'; Secret = 'OtlpHeadersStaging' }) {
+  az role assignment create --assignee-object-id (az containerapp show -g $RG -n $pair.App --query identity.principalId -o tsv) `
+    --assignee-principal-type ServicePrincipal --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/$($pair.Secret)" -o none
+}
+```
+
+</details>
+
+**3. Turn telemetry on**, staging first. Wait a few minutes after the role assignments: a reference the identity
+can't read yet fails the new revision (the old one keeps serving). Each setting change makes a new revision.
+
+```bash
+APP=lazydad-app-staging; SECRET=OtlpHeadersStaging; ENV=staging     # then: lazydad-app / OtlpHeaders / production
+az containerapp secret set -g $RG -n $APP \
+  --secrets "otlp-headers=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/$SECRET,identityref:system" -o none
+az containerapp update -g $RG -n $APP -o none --set-env-vars \
+  OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-eu-north-0.grafana.net/otlp \
+  OTEL_EXPORTER_OTLP_HEADERS=secretref:otlp-headers \
+  OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=$ENV
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$APP = 'lazydad-app-staging'; $SECRET = 'OtlpHeadersStaging'; $ENV_NAME = 'staging'     # then: lazydad-app / OtlpHeaders / production
+az containerapp secret set -g $RG -n $APP `
+  --secrets "otlp-headers=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/$SECRET,identityref:system" -o none
+az containerapp update -g $RG -n $APP -o none --set-env-vars `
+  OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-eu-north-0.grafana.net/otlp `
+  OTEL_EXPORTER_OTLP_HEADERS=secretref:otlp-headers `
+  "OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=$ENV_NAME"
+```
+
+</details>
+
+Check in Grafana's *Explore*: logs `{service_name="lazydad-app-staging"}`, a `joke tick` trace from the new
+revision's startup tick, and the metric `lazydad_jokes_total`. If nothing arrives although the token check passed,
+compare the app's settings with the commands above (`az containerapp show -n $APP -g $RG --query
+properties.template.containers[0].env`). To switch telemetry off again:
+`az containerapp update -n $APP -g $RG --remove-env-vars OTEL_EXPORTER_OTLP_ENDPOINT -o none`.
+
+**4. Uptime check and alerts (prod only).** Staging's ingress admits your IP only, and it scales to zero, so it
+would look down and idle all the time.
+
+- *Testing & synthetics → Synthetics → Add check → HTTP*: `https://lazydad.fyi/healthz`, every 5 minutes from 2–3
+  probes (well inside the free tier's executions), with its built-in alert when the check fails.
+- *Alerting → Contact points*: your email. Then *Alert rules* (Prometheus data source), evaluated every 5 minutes:
+
+  | Alert | Query | Condition |
+  |---|---|---|
+  | A scheduler tick failed | `sum(increase(lazydad_scheduler_ticks_total{job="lazydad-app", outcome="failed"}[15m]))` | > 0 |
+  | No joke saved for 5 hours (ticks run every 4) | `sum(increase(lazydad_jokes_total{job="lazydad-app", outcome="saved"}[5h]))` | < 1; *no data* also alerts |
+  | A model failed or returned nothing | `sum by (model) (increase(lazydad_jokes_total{job="lazydad-app", outcome=~"failed\|empty"}[4h]))` | > 0 |
+  | Server errors | `sum(increase(http_server_request_duration_seconds_count{job="lazydad-app", http_response_status_code=~"5.."}[15m]))` | > 2 |
+
+  Metric names are Grafana's translation of the OpenTelemetry names; if one doesn't match, pick it in the query
+  builder's metric browser.
+
+The console logs keep going to Log Analytics (section 1) as the fallback, with no visitor data either.
+
+## 12. Operations
+
+### What each identity can do
+
+At any time, and after any change to roles (a role assignment with an empty `--scope`, from a variable a new
+terminal didn't have, fails, so check):
+
+```bash
+for id in lazydad-acr-pull lazydad-github-staging lazydad-github-cd; do
+  echo "== $id"
+  az role assignment list --assignee "$(az identity show -g $RG -n $id --query principalId -o tsv)" --all \
+    --query "[].{role:roleDefinitionName, scope:scope}" -o table
+done
+for app in lazydad-app lazydad-app-staging; do
+  echo "== $app (system-assigned)"
+  az role assignment list --assignee "$(az containerapp show -g $RG -n $app --query identity.principalId -o tsv)" --all \
+    --query "[].{role:roleDefinitionName, scope:scope}" -o table
+done
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+foreach ($id in 'lazydad-acr-pull', 'lazydad-github-staging', 'lazydad-github-cd') {
+  "== $id"
+  az role assignment list --assignee (az identity show -g $RG -n $id --query principalId -o tsv) --all `
+    --query '[].{role:roleDefinitionName, scope:scope}' -o table
+}
+foreach ($app in 'lazydad-app', 'lazydad-app-staging') {
+  "== $app (system-assigned)"
+  az role assignment list --assignee (az containerapp show -g $RG -n $app --query identity.principalId -o tsv) --all `
+    --query '[].{role:roleDefinitionName, scope:scope}' -o table
+}
+```
+
+</details>
+
+What a previewed branch can do, running as `lazydad-github-staging`: anything to staging (its app, its database, LLM
+calls, which cost tokens), push images that production never runs, and open a SQL firewall rule (useless without a
+database user). It can't change what production runs, or make production run anything else.
+
+**One gap remains: availability.** Both deploy identities can write to the whole registry (`AcrPush`), so a branch
+could also move production's protection tags (`deployed-production`, `previous-production`) off the image
+production runs. The weekly purge would then delete that manifest, and production's next restart or scale-out would
+fail to pull it (the running replica keeps running; a Deploy Master run fixes it). An ACR lock doesn't help:
+`AcrPush` can lift locks too. The fix is repository-scoped permissions (the registry's "RBAC Registry + ABAC
+Repository Permissions" mode): previews write only to a `lazydad-preview` repository, and production's identity
+copies the image it deploys into a production-only `lazydad` repository with `az acr import` (same digest). That's
+a registry migration of its own, planned separately.
+
+### A new Grafana token
+
+When one expires or leaks, per app: create a new token in Grafana, store it with section 11's helper (same
+`INSTANCE_ID`), then restart the app's active revision, since the value is read when a replica starts. Revoke the old
+token in Grafana.
+
+```bash
+APP=lazydad-app; SECRET=OtlpHeaders     # or: lazydad-app-staging / OtlpHeadersStaging
+store_token $SECRET
+az containerapp revision restart -n $APP -g $RG \
+  --revision "$(az containerapp show -n $APP -g $RG --query properties.latestReadyRevisionName -o tsv)"
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$APP = 'lazydad-app'; $SECRET = 'OtlpHeaders'     # or: lazydad-app-staging / OtlpHeadersStaging
+Set-GrafanaToken $SECRET
+az containerapp revision restart -n $APP -g $RG `
+  --revision (az containerapp show -n $APP -g $RG --query properties.latestReadyRevisionName -o tsv)
+```
+
+</details>
+
+### Keeping Cloudflare's ranges current
+
+Cloudflare changes its ranges rarely, and announces it in advance. Two things keep up with it without you having to
+notice:
+
+- **Every deploy syncs the ingress rules.** While `CLOUDFLARE_ONLY_INGRESS` is on, Deploy Environment reads
+  Cloudflare's list from its API (`tools/cloudflare-ranges.sh sync`), and adds new ranges and removes ones Cloudflare
+  no longer lists, in one update of the whole list. If the API can't be read, it leaves the rules alone with a
+  warning; it never removes more than 3 ranges at once (more means something is off: it adds, warns, and leaves
+  removals to you).
 - **A weekly check watches the app's own list.** *Check Cloudflare Ranges* (Mondays, or *Run workflow*) compares
   `Cloudflare:IpRanges` in `appsettings.json` with Cloudflare's list. If they differ, it fails and opens an issue,
   "Cloudflare's IP ranges changed", listing what to add and remove. The fix is a PR updating that list, and its
@@ -1198,3 +1130,35 @@ bash tools/cloudflare-ranges.sh sync lazydad-app $RG "manual-$(date +%Y%m%d%H%M)
 *PowerShell 7: run the same through Git Bash, for example `bash tools/cloudflare-ranges.sh check src/LazyDad.Api/appsettings.json`.*
 
 Compare both lists with <https://www.cloudflare.com/ips/> now and then.
+
+### Registry purge
+
+Preview what it would delete, check runs, or run it now:
+
+```bash
+az acr run --registry lazydadacr --cmd "acr purge --filter 'lazydad:^[0-9a-f]{7}.*$' --ago 30d --keep 10 --untagged --dry-run" /dev/null
+az acr task list-runs --registry lazydadacr --name purge-old-images -o table
+az acr task run --registry lazydadacr --name purge-old-images
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+az acr run --registry lazydadacr --cmd 'acr purge --filter ''lazydad:^[0-9a-f]{7}.*$'' --ago 30d --keep 10 --untagged --dry-run' /dev/null
+az acr task list-runs --registry lazydadacr --name purge-old-images -o table
+az acr task run --registry lazydadacr --name purge-old-images
+```
+
+</details>
+
+### Manual rollback
+
+Deploy Master and Roll Back Production (both through Deploy Environment) protect the images they deploy from the
+purge (section 2). For a rollback outside the pipelines (e.g. to an image Roll Back Production refuses: one that
+production's revisions never ran, one built before images carried their version, or one older than
+`ROLLBACK_MIN_COMMIT`), do the same yourself: deploy by digest (`az acr repository show -n lazydadacr --image
+lazydad:<tag> --query digest -o tsv`, then `--image lazydadacr.azurecr.io/lazydad@<digest>`), and move the
+`deployed-*` tag to it or lock the image (`az acr repository update -n lazydadacr --image lazydad:<tag>
+--delete-enabled false`). An image built before #17 reports version `dev` unless you also pass `--set-env-vars
+App__Version=<tag>`; the next pipeline deploy removes that setting again. An image from before #30 (older than
+`ROLLBACK_MIN_COMMIT`) only knows API keys, so its model calls fail now that key authentication is off.
