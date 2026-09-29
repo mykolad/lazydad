@@ -125,13 +125,13 @@
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "min": 0, "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1, "stacking": { "mode": "normal" } } }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{aspnetcore_rate_limiting_result}}",
-        "expr": "round(sum by (aspnetcore_rate_limiting_result) ((aspnetcore_rate_limiting_requests_total{job=\"$job\"} - aspnetcore_rate_limiting_requests_total{job=\"$job\"} offset $__interval or aspnetcore_rate_limiting_requests_total{job=\"$job\"})))" }]
+        "expr": "round(sum by (aspnetcore_rate_limiting_result) (sum_over_time(((aspnetcore_rate_limiting_requests_total{job=\"$job\"} - aspnetcore_rate_limiting_requests_total{job=\"$job\"} offset 1m) >= 0 or aspnetcore_rate_limiting_requests_total{job=\"$job\"})[$__interval:1m])))" }]
     },
 
     { "type": "row", "title": "Jokes (per hour)", "id": 20, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 } },
     {
       "type": "timeseries", "title": "Scheduler ticks, by outcome", "id": 21, "gridPos": { "h": 8, "w": 8, "x": 0, "y": 23 }, "interval": "1h",
-      "description": "succeeded, failed, or skipped (another replica had the turn). A tick runs every 4 hours, and once at every replica start. Each bar is the counters' change over its hour (value now minus value an hour before): increase() would miss a tick whose step falls between the last sample of one hour and the first of the next.",
+      "description": "succeeded, failed, or skipped (another replica had the turn). A tick runs every 4 hours, and once at every replica start. Each bar adds up the counters' change minute by minute (after a restart, the count since it): increase() over the hour would miss a tick whose step falls between the last sample of one hour and the first of the next.",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1, "stacking": { "mode": "normal" } } },
         "overrides": [
@@ -141,7 +141,7 @@
         ] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{outcome}}",
-        "expr": "round(sum by (outcome) ((lazydad_scheduler_ticks_total{job=\"$job\"} - lazydad_scheduler_ticks_total{job=\"$job\"} offset $__interval or lazydad_scheduler_ticks_total{job=\"$job\"})))" }]
+        "expr": "round(sum by (outcome) (sum_over_time(((lazydad_scheduler_ticks_total{job=\"$job\"} - lazydad_scheduler_ticks_total{job=\"$job\"} offset 1m) >= 0 or lazydad_scheduler_ticks_total{job=\"$job\"})[$__interval:1m])))" }]
     },
     {
       "type": "timeseries", "title": "Jokes, by model and outcome", "id": 22, "gridPos": { "h": 8, "w": 8, "x": 8, "y": 23 }, "interval": "1h",
@@ -150,7 +150,7 @@
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1, "stacking": { "mode": "normal" } } }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{model}} {{outcome}}",
-        "expr": "round(sum by (model, outcome) ((lazydad_jokes_total{job=\"$job\"} - lazydad_jokes_total{job=\"$job\"} offset $__interval or lazydad_jokes_total{job=\"$job\"})))" }]
+        "expr": "round(sum by (model, outcome) (sum_over_time(((lazydad_jokes_total{job=\"$job\"} - lazydad_jokes_total{job=\"$job\"} offset 1m) >= 0 or lazydad_jokes_total{job=\"$job\"})[$__interval:1m])))" }]
     },
     {
       "type": "timeseries", "title": "Leaderboard updates, by outcome", "id": 23, "gridPos": { "h": 8, "w": 8, "x": 16, "y": 23 }, "interval": "1h",
@@ -160,7 +160,7 @@
         "overrides": [{ "matcher": { "id": "byName", "options": "failed" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{outcome}}",
-        "expr": "round(sum by (outcome) ((lazydad_leaderboard_updates_total{job=\"$job\"} - lazydad_leaderboard_updates_total{job=\"$job\"} offset $__interval or lazydad_leaderboard_updates_total{job=\"$job\"})))" }]
+        "expr": "round(sum by (outcome) (sum_over_time(((lazydad_leaderboard_updates_total{job=\"$job\"} - lazydad_leaderboard_updates_total{job=\"$job\"} offset 1m) >= 0 or lazydad_leaderboard_updates_total{job=\"$job\"})[$__interval:1m])))" }]
     },
 
     { "type": "row", "title": "LLM calls (per hour)", "id": 30, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 } },
@@ -172,9 +172,9 @@
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [
         { "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "p95 {{gen_ai_request_model}}",
-          "expr": "histogram_quantile(0.95, sum by (le, gen_ai_request_model) ((gen_ai_client_operation_duration_seconds_bucket{job=\"$job\"} - gen_ai_client_operation_duration_seconds_bucket{job=\"$job\"} offset $__interval or gen_ai_client_operation_duration_seconds_bucket{job=\"$job\"})))" },
+          "expr": "histogram_quantile(0.95, sum by (le, gen_ai_request_model) (sum_over_time(((gen_ai_client_operation_duration_seconds_bucket{job=\"$job\"} - gen_ai_client_operation_duration_seconds_bucket{job=\"$job\"} offset 1m) >= 0 or gen_ai_client_operation_duration_seconds_bucket{job=\"$job\"})[$__interval:1m])))" },
         { "refId": "B", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "p50 {{gen_ai_request_model}}",
-          "expr": "histogram_quantile(0.5, sum by (le, gen_ai_request_model) ((gen_ai_client_operation_duration_seconds_bucket{job=\"$job\"} - gen_ai_client_operation_duration_seconds_bucket{job=\"$job\"} offset $__interval or gen_ai_client_operation_duration_seconds_bucket{job=\"$job\"})))" }
+          "expr": "histogram_quantile(0.5, sum by (le, gen_ai_request_model) (sum_over_time(((gen_ai_client_operation_duration_seconds_bucket{job=\"$job\"} - gen_ai_client_operation_duration_seconds_bucket{job=\"$job\"} offset 1m) >= 0 or gen_ai_client_operation_duration_seconds_bucket{job=\"$job\"})[$__interval:1m])))" }
       ]
     },
     {
@@ -184,7 +184,7 @@
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1, "stacking": { "mode": "normal" } } }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{gen_ai_request_model}} {{gen_ai_token_type}}",
-        "expr": "round(sum by (gen_ai_request_model, gen_ai_token_type) ((gen_ai_client_token_usage_sum{job=\"$job\"} - gen_ai_client_token_usage_sum{job=\"$job\"} offset $__interval or gen_ai_client_token_usage_sum{job=\"$job\"})))" }]
+        "expr": "round(sum by (gen_ai_request_model, gen_ai_token_type) (sum_over_time(((gen_ai_client_token_usage_sum{job=\"$job\"} - gen_ai_client_token_usage_sum{job=\"$job\"} offset 1m) >= 0 or gen_ai_client_token_usage_sum{job=\"$job\"})[$__interval:1m])))" }]
     },
 
     { "type": "row", "title": "Resources", "id": 40, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 } },
