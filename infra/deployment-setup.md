@@ -1,9 +1,12 @@
 # Deployment setup (Azure + GitHub), from an empty subscription
 
-Everything behind Deploy Master, created in order with the `az` and `gh` CLIs, and without a single password, key or
-connection-string secret: the apps and the pipelines sign in with managed identities (Entra ID). The only secrets
-are the Grafana Cloud write tokens, kept in Key Vault. Keep this in sync with reality until it's replaced by Bicep
-(IaC is on the plan).
+Everything behind Deploy Master, created in order with the `az` and `gh` CLIs. The apps and the pipelines sign in
+with managed identities (Entra ID): no database password, no API key, no connection-string secret, no GitHub secret.
+The only credentials you keep are the Grafana Cloud write tokens, in Key Vault. Two more keys pass through this
+runbook, and only Azure keeps them: the Log Analytics workspace key, which the Container Apps environment stores to
+send its logs (section 1), and the Cloudflare Origin CA private key, which you upload to the environment and then
+delete locally (section 10). Keep this in sync with reality until it's replaced by Bicep (IaC is on the
+plan).
 
 | Section | Creates |
 |---|---|
@@ -53,7 +56,8 @@ owner) and a clone of the repository: run everything from its root.
 Each command block is bash (Git Bash on Windows). Under it, a collapsed **PowerShell 7** version does the same, or a
 note says the bash commands run unchanged. Both use the same variable names, except `$PID` and `$ENV`, which
 PowerShell reserves (process id, and too close to the `$env:` drive): those are `$APP_PID` and `$ENV_NAME` there.
-Every block reads the IDs it needs itself, so a new terminal only needs the block below first.
+Every block reads the IDs it needs itself, so a new terminal only needs the block below first. (One exception,
+said where it applies: a new Grafana token needs section 11's helper.)
 
 > In Git Bash, `export MSYS_NO_PATHCONV=1` first. Otherwise the `/subscriptions/...` scopes get
 > rewritten as file paths and role assignments fail with `MissingSubscription`.
@@ -1083,9 +1087,11 @@ a registry migration of its own, planned separately.
 
 ### A new Grafana token
 
-When one expires or leaks, per app: create a new token in Grafana, store it with section 11's helper (same
-`INSTANCE_ID`), then restart the app's active revision, since the value is read when a replica starts. Revoke the old
-token in Grafana.
+When one expires or leaks, per app: create a new token in Grafana, store it with section 11's helper, then restart
+the app's active revision, since the value is read when a replica starts. Revoke the old token in Grafana. The helper
+exists only in the terminal that defined it: in a new one, **run section 11's step 1 block first**, the lines up to
+and including the helper (`INSTANCE_ID` and `store_token`, or `$INSTANCE_ID` and `Set-GrafanaToken`), without the
+two calls at its end.
 
 ```bash
 APP=lazydad-app; SECRET=OtlpHeaders     # or: lazydad-app-staging / OtlpHeadersStaging

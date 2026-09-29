@@ -172,8 +172,8 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
   secret, so branch previews (which run on staging) can't read prod's token. Console logs also stay in the environment's Log Analytics workspace (30 days,
   daily cap) as the fallback.
 - **Setup runbook:** `infra/deployment-setup.md` (bash, with a PowerShell 7 version of each block) creates everything behind Deploy Master from an
-  empty subscription, in order and without passwords or keys (managed identities and OIDC throughout; the only
-  secrets are the Grafana tokens in Key Vault), plus the operations (token rotation, Cloudflare's ranges, manual
+  empty subscription, in order, with managed identities and OIDC throughout (no database password, API
+  key, connection-string secret or GitHub secret; the only credentials kept are the Grafana tokens in Key Vault), plus the operations (token rotation, Cloudflare's ranges, manual
   rollback). That includes the weekly registry purge task (`purge-old-images`: keeps the last 30 days, 10 older
   images, and what each environment runs: revisions are pinned to the image digest, and the manifest
   stays tagged `deployed-<env>` / `deploying-<env>`, applied in two phases around each rollout; `previous-<env>`
