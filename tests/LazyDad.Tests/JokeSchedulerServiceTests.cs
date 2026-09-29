@@ -1,5 +1,9 @@
+using System.ClientModel;
+using System.ClientModel.Primitives;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+using System.Net;
+using System.Text;
 using LazyDad.Api.Configuration;
 using LazyDad.Api.Services;
 using LazyDad.Api.Telemetry;
@@ -141,6 +145,44 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         Assert.Equal(["Ukrainian/fast/saved", "Ukrainian/slow/failed"], Measured(jokes, "language", "model", "outcome"));
         Assert.Equal(["Ukrainian/succeeded"], Measured(ticks, "language", "outcome"));
         Assert.Equal(["Ukrainian/unchanged"], Measured(leaderboard, "language", "outcome"));
+        // A timeout has no error response to show.
+        Assert.Contains(schedulerLogger.Entries, e => e.Level == LogLevel.Error
+            && e.Message.Contains("Failed to generate joke for 'Ukrainian' (slow). Provider response: none"));
+    }
+
+    [Fact]
+    public async Task Tick_WhenTheProviderRejectsTheRequest_LogsItsErrorBody()
+    {
+        const string body = """{"error":{"code":"invalid_request","message":"The request is not valid."}}""";
+        var error = await ProviderErrorAsync(HttpStatusCode.BadRequest, body);
+        SetupModel("fast", () => Task.FromException<ChatResponse>(error));
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await TickCompletedAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        // The exception's message is only "Service request failed. Status: 400": the log adds the reason.
+        Assert.DoesNotContain("invalid_request", error.Message);
+        Assert.Contains(schedulerLogger.Entries, e => e.Level == LogLevel.Error
+            && e.Message.Contains($"Failed to generate joke for 'Ukrainian' (fast). Provider response: {body}"));
+    }
+
+    /// <summary>The exception the OpenAI SDK throws for an error response, built from a real HTTP pipeline response.</summary>
+    private static async Task<ClientResultException> ProviderErrorAsync(HttpStatusCode status, string body)
+    {
+        var transport = new HttpClientPipelineTransport(new HttpClient(new StubHandler(status, body)));
+        var message = transport.CreateMessage();
+        message.Request.Method = "POST";
+        message.Request.Uri = new Uri("https://example.test/openai/deployments/fast/chat/completions");
+        await transport.ProcessAsync(message);
+        return await ClientResultException.CreateAsync(message.Response!);
+    }
+
+    private sealed class StubHandler(HttpStatusCode status, string body) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") });
     }
 
     [Fact]

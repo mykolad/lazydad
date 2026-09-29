@@ -155,7 +155,7 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
     **Ingress allows listed IPs only** (the owner's `home` rule; Deploy Master adds its runner temporarily),
     so stray visitors can't wake it and spend LLM tokens.
   - Both pull from ACR with the `lazydad-acr-pull` managed identity; the ACR admin user is disabled.
-- Port exposed by the container: **8080** (`ASPNETCORE_URLS=http://+:8080`)
+- Port exposed by the container: **8080**, the .NET base image's default (`ASPNETCORE_HTTP_PORTS=8080`); don't set `ASPNETCORE_URLS` too, or the app warns at every start
 - **Version metadata is baked into the image.** Build Image (`build-image.yml`) passes build args, and the Dockerfile turns
   them into `App__Version` (short SHA), `App__Revision` (full SHA), `App__CommitDate`, `App__SourceUrl`
   (`AppInfoOptions`) and the standard OCI labels. The page shows **CalVer + SHA** under the Top 3,
