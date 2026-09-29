@@ -41,6 +41,8 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     private ServiceProvider? provider;
     // Leaving TopJokeService out of DI makes the whole tick throw, not just one step of it.
     private bool omitTopJokeService;
+    // The leaderboard is off unless a test turns it on (then the judge is the "judge" model).
+    private TopJokesOptions topJokesOptions = new() { Enabled = false };
 
     public JokeSchedulerServiceTests()
     {
@@ -86,7 +88,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton(options);
-        services.AddSingleton(Options.Create(new TopJokesOptions { Enabled = false }));
+        services.AddSingleton(Options.Create(topJokesOptions));
         services.AddSingleton(jokeRepositoryMock.Object);
         services.AddSingleton(topJokeRepositoryMock.Object);
         services.AddSingleton(lockRepositoryMock.Object);
@@ -168,6 +170,55 @@ public sealed class JokeSchedulerServiceTests : IDisposable
             && e.Message.Contains($"Failed to generate joke for 'Ukrainian' (fast). Provider response: {body}"));
     }
 
+    [Fact]
+    public async Task Tick_WhenTheProviderRejectsTheJudge_LogsItsErrorBody_AndTheLeaderboardFails()
+    {
+        const string body = """{"error":{"code":"invalid_request","message":"The judge request is not valid."}}""";
+        var error = await ProviderErrorAsync(HttpStatusCode.BadRequest, body);
+        SetupModel("fast", () => Reply("Жарт"));
+        SetupModel("judge", () => Task.FromException<ChatResponse>(error));
+        topJokesOptions = new TopJokesOptions
+        {
+            Enabled = true,
+            Judge = new LlmModelOptions { Provider = "AzureOpenAI", Model = "judge" },
+        };
+        // An empty leaderboard is seeded from the recent jokes: one is enough for the judge to be asked.
+        topJokeRepositoryMock
+            .Setup(r => r.GetByLanguageAsync("Ukrainian", It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        jokeRepositoryMock
+            .Setup(r => r.GetRecentByLanguageAsync("Ukrainian", It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new Joke { Id = 7, Language = "Ukrainian", Model = "fast", Text = "Старий жарт" }]);
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+        using var leaderboard = Collect("lazydad.leaderboard.updates");
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await TickCompletedAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Equal("failed", Assert.Single(status.LastTicks).Leaderboard);
+        Assert.Equal(["failed"], Measured(leaderboard, "outcome"));
+        Assert.Contains(schedulerLogger.Entries, e => e.Level == LogLevel.Error
+            && e.Message.Contains($"Failed to update the top jokes for 'Ukrainian'. Provider response: {body}"));
+    }
+
+    [Fact]
+    public async Task Tick_WhenTheErrorBodyCannotBeRead_SaysItIsUnreadable()
+    {
+        // The SDK builds its exceptions with the body read into memory, so this is only a guard: a response whose body
+        // can't be read again must not turn the failure log itself into an exception.
+        var error = new ClientResultException("Service request failed.", new UnreadableResponse());
+        SetupModel("fast", () => Task.FromException<ChatResponse>(error));
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await TickCompletedAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Contains(schedulerLogger.Entries, e => e.Level == LogLevel.Error
+            && e.Message.Contains("Failed to generate joke for 'Ukrainian' (fast). Provider response: unreadable"));
+    }
+
     /// <summary>The exception the OpenAI SDK throws for an error response, built from a real HTTP pipeline response.</summary>
     private static async Task<ClientResultException> ProviderErrorAsync(HttpStatusCode status, string body)
     {
@@ -183,6 +234,19 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             => Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") });
+    }
+
+    /// <summary>A 400 whose body was never read into memory, so reading <see cref="Content"/> throws, as it does in the SDK.</summary>
+    private sealed class UnreadableResponse : PipelineResponse
+    {
+        public override int Status => 400;
+        public override string ReasonPhrase => "Bad Request";
+        public override Stream? ContentStream { get; set; }
+        public override BinaryData Content => throw new InvalidOperationException("The response content was not buffered.");
+        protected override PipelineResponseHeaders HeadersCore => throw new NotSupportedException();
+        public override BinaryData BufferContent(CancellationToken cancellationToken) => throw new NotSupportedException();
+        public override ValueTask<BinaryData> BufferContentAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+        public override void Dispose() { }
     }
 
     [Fact]

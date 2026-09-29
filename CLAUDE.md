@@ -80,7 +80,9 @@ tests/LazyDad.SmokeTests — smoke tests against a deployed app (run by Deploy M
   `/status`. **No visitor data:** `PersonalDataFilter` strips IPs and user agents from spans before export (a test
   checks the exported bytes), and the LLM spans don't record prompts or responses. All `ILogger` logs are exported,
   including the model output they contain on purpose (saved jokes, an invalid judge answer): never log anything about
-  visitors. Keep metric tags bounded (no joke ids).
+  visitors. Keep metric tags bounded (no joke ids). EF Core's per-command log (`Executed DbCommand` with the SQL) is off
+  outside Development (`Microsoft.EntityFrameworkCore.Database.Command` at `Warning`: failed commands still log); SQL
+  shows up in the traces and the dashboard's SQL panel instead. A failed LLM call logs the provider's error body.
 - `LlmClientFactory` keeps **one chat client per model** for the app's lifetime (wrapped with `UseOpenTelemetry()`);
   callers may still dispose theirs (a no-op). Creating one per call would restart the LLM metrics every tick.
 
