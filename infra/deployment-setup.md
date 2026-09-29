@@ -1286,7 +1286,12 @@ does, staging first, minutes later), so apply them while the app is still stoppe
 The reactivated revision then starts on the current schema; no deploy is needed. Keep the old database until you're
 sure, then delete it: its own point-in-time backups go with it, its long-term ones stay for their retention.
 
+The block stops at the first command that fails, so the app is only reactivated after every step before it worked. If
+it stops, the app stays stopped: read the error, fix the cause, and run the remaining commands by hand.
+
 ```bash
+(
+set -e   # in a subshell, so it ends with the block
 REV=$(az containerapp show -n lazydad-app -g $RG --query properties.latestReadyRevisionName -o tsv)
 az containerapp revision deactivate -n lazydad-app -g $RG --revision $REV -o none
 az lock delete -n lazydad-db-no-delete -g $RG --namespace Microsoft.Sql \
@@ -1299,16 +1304,22 @@ az lock create -n lazydad-db-no-delete -t CanNotDelete -g $RG --namespace Micros
   --parent servers/$S --resource-type databases --resource lazydad-db \
   --notes "The jokes and votes. Remove it only to restore (runbook section 12) or to retire the app." -o none
 # The restored database gets master's migrations (none, if the backup is recent enough), while nothing uses it.
-# Each step runs only if the one before it succeeded: if anything fails, the app stays stopped.
-git switch master && git pull && dotnet tool restore &&
-  dotnet ef database update --project src/LazyDad.Data --startup-project src/LazyDad.Api \
-    --connection "Server=tcp:$S.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60" &&
-  az containerapp revision activate -n lazydad-app -g $RG --revision $REV -o none
+git switch master
+git pull
+dotnet tool restore
+dotnet ef database update --project src/LazyDad.Data --startup-project src/LazyDad.Api \
+  --connection "Server=tcp:$S.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60"
+az containerapp revision activate -n lazydad-app -g $RG --revision $REV -o none
+)
 ```
 
 <details><summary>PowerShell 7</summary>
 
 ```powershell
+& {
+# In a script block, so the stop-on-error settings end with it. The second one makes a failing az, git or dotnet
+# command stop the block too (PowerShell 7.3 and later).
+$ErrorActionPreference = 'Stop'; $PSNativeCommandUseErrorActionPreference = $true
 $REV = az containerapp show -n lazydad-app -g $RG --query properties.latestReadyRevisionName -o tsv
 az containerapp revision deactivate -n lazydad-app -g $RG --revision $REV -o none
 az lock delete -n lazydad-db-no-delete -g $RG --namespace Microsoft.Sql `
@@ -1321,11 +1332,13 @@ az lock create -n lazydad-db-no-delete -t CanNotDelete -g $RG --namespace Micros
   --parent "servers/$S" --resource-type databases --resource lazydad-db `
   --notes 'The jokes and votes. Remove it only to restore (runbook section 12) or to retire the app.' -o none
 # The restored database gets master's migrations (none, if the backup is recent enough), while nothing uses it.
-# Each step runs only if the one before it succeeded (PowerShell 7's &&): if anything fails, the app stays stopped.
-git switch master && git pull && dotnet tool restore &&
-  dotnet ef database update --project src/LazyDad.Data --startup-project src/LazyDad.Api `
-    --connection "Server=tcp:$S.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60" &&
-  az containerapp revision activate -n lazydad-app -g $RG --revision $REV -o none
+git switch master
+git pull
+dotnet tool restore
+dotnet ef database update --project src/LazyDad.Data --startup-project src/LazyDad.Api `
+  --connection "Server=tcp:$S.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60"
+az containerapp revision activate -n lazydad-app -g $RG --revision $REV -o none
+}
 ```
 
 </details>
