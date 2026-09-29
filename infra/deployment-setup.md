@@ -30,7 +30,7 @@ What it all looks like at the end:
 | Resource group | `lazydad-rg` | West Europe | |
 | Log Analytics workspace | `workspace-lazydadrgseCk` | West Europe | 30 days, 0.1 GB/day cap |
 | Container Apps environment | `lazydad-cae` | West Europe | Consumption |
-| Container registry | `lazydadacr` | West Europe | Basic, admin user off |
+| Container registry | `lazydadacr` | West Europe | Basic, admin user off, repository permissions; `lazydad-preview` (builds, staging) and `lazydad` (production) |
 | Key Vault | `lazydad-kv` | West Europe | RBAC, soft delete 90 days, no purge protection |
 | SQL server | `lazydad-sql-swedencentral` | Sweden Central | Entra-only authentication, TLS 1.2 |
 | Database | `lazydad-db` | | Basic (5 DTU, 2 GB); geo-redundant backups, long-term 7 weeks / 12 months; delete lock |
@@ -43,10 +43,10 @@ What it all looks like at the end:
 |---|---|---|---|
 | `lazydad-app` | system-assigned | the prod app | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeaders`; read/write in `lazydad-db` |
 | `lazydad-app-staging` | system-assigned | the staging app | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeadersStaging`; read/write in `lazydad-db-staging` |
-| `lazydad-acr-pull` | user-assigned | both apps, to pull images | `AcrPull` on the registry |
-| `lazydad-github-cd` | user-assigned | GitHub's `production` environment | `AcrPush` + `Reader` on the registry; `Contributor` on `lazydad-app`; `LazyDad Deployer`; migrations in `lazydad-db` |
-| `lazydad-github-staging` | user-assigned | GitHub's `staging` environment (branch previews too) | `AcrPush` + `Reader` on the registry; `Contributor` on `lazydad-app-staging`; `LazyDad Deployer`; migrations in `lazydad-db-staging` |
-| you | your account | local runs, this runbook | `Owner`; the SQL server's Entra admin; `Foundry User`; `Key Vault Secrets Officer` |
+| `lazydad-acr-pull` | user-assigned | both apps, to pull images | `Container Registry Repository Reader` (all repositories) |
+| `lazydad-github-cd` | user-assigned | GitHub's `production` environment | `Container Registry Repository Writer` on `lazydad`, `Reader` on `lazydad-preview`, `Reader` on the registry; `Contributor` on `lazydad-app`; `LazyDad Deployer`; migrations in `lazydad-db` |
+| `lazydad-github-staging` | user-assigned | GitHub's `staging` environment (branch previews too) | `Container Registry Repository Writer` on `lazydad-preview` only, `Reader` on the registry; `Contributor` on `lazydad-app-staging`; `LazyDad Deployer`; migrations in `lazydad-db-staging` |
+| you | your account | local runs, this runbook | `Owner`; the SQL server's Entra admin; `Foundry User`; `Key Vault Secrets Officer`; `Container Registry Repository Contributor` + `Catalog Lister` |
 
 ## Before you start
 
@@ -143,32 +143,73 @@ The environment gets the Consumption workload profile (pay per use, scale to zer
 
 ## 2. Container registry and its weekly purge
 
-Basic tier, with the admin user (a username and password) off: everything pulls and pushes with Entra ID.
+Basic tier, with the admin user (a username and password) off: everything pulls and pushes with Entra ID. Two
+repositories keep branch previews away from production:
+
+| Repository | Holds | Written by |
+|---|---|---|
+| `lazydad-preview` | every build (Deploy Master's and branch previews'); staging runs from it | `lazydad-github-staging` |
+| `lazydad` | only what production deploys, copied from `lazydad-preview` with the same digest; production runs from it | `lazydad-github-cd` |
+
+The registry uses **repository permissions** (the "RBAC Registry + ABAC Repository Permissions" mode): its roles can
+be limited to one repository (section 6 assigns them). In this mode the older registry-wide roles (`AcrPull`,
+`AcrPush`) don't work, and `Owner` or `Contributor` manage the registry but can't read or push images. So you get a
+data role too, to browse the images in the portal and to build the first one (section 7).
 
 ```bash
-az acr create -g $RG -n lazydadacr -l westeurope --sku Basic --admin-enabled false -o none
+az acr create -g $RG -n lazydadacr -l westeurope --sku Basic --admin-enabled false --role-assignment-mode rbac-abac -o none
+ACR_ID=$(az acr show -n lazydadacr --query id -o tsv)
+ME=$(az ad signed-in-user show --query id -o tsv)
+for role in "Container Registry Repository Contributor" "Container Registry Repository Catalog Lister"; do
+  az role assignment create --assignee "$ME" --role "$role" --scope "$ACR_ID" -o none   # all repositories
+done
 ```
 
-*PowerShell 7: the same command.*
+<details><summary>PowerShell 7</summary>
 
-Every deploy pushes a new `lazydad:<short-sha>` image. An **ACR Task** (it runs inside the registry, on a cron
-schedule in UTC, and costs fractions of a cent per run) deletes old ones every Sunday at 03:00 UTC:
+```powershell
+az acr create -g $RG -n lazydadacr -l westeurope --sku Basic --admin-enabled false --role-assignment-mode rbac-abac -o none
+$ACR_ID = az acr show -n lazydadacr --query id -o tsv
+$ME = az ad signed-in-user show --query id -o tsv
+foreach ($role in 'Container Registry Repository Contributor', 'Container Registry Repository Catalog Lister') {
+  az role assignment create --assignee $ME --role $role --scope $ACR_ID -o none   # all repositories
+}
+```
+
+</details>
+
+Every build pushes a new `lazydad-preview:<short-sha>` image, and every production deploy copies one into
+`lazydad`. An **ACR Task** (it runs inside the registry, on a cron schedule in UTC, and costs fractions of a cent per
+run) deletes old ones from both every Sunday at 03:00 UTC. In this registry mode a task can't touch images unless it
+has an identity with a role, so it gets a system-assigned one that may delete in both repositories:
 
 ```bash
 az acr task create --registry lazydadacr --name purge-old-images --schedule "0 3 * * 0" \
-  --cmd "acr purge --filter 'lazydad:^[0-9a-f]{7}.*$' --ago 30d --keep 10 --untagged" --context /dev/null
+  --cmd "acr purge --filter 'lazydad:^[0-9a-f]{7}.*$' --filter 'lazydad-preview:^[0-9a-f]{7}.*$' --ago 30d --keep 10 --untagged" \
+  --context /dev/null --source-acr-auth-id "[system]" -o none
+TASK_PID=$(az acr task show --registry lazydadacr --name purge-old-images --query identity.principalId -o tsv)
+for role in "Container Registry Repository Contributor" "Container Registry Repository Catalog Lister"; do
+  az role assignment create --assignee-object-id "$TASK_PID" --assignee-principal-type ServicePrincipal \
+    --role "$role" --scope "$(az acr show -n lazydadacr --query id -o tsv)" -o none
+done
 ```
 
 <details><summary>PowerShell 7</summary>
 
 ```powershell
 az acr task create --registry lazydadacr --name purge-old-images --schedule '0 3 * * 0' `
-  --cmd 'acr purge --filter ''lazydad:^[0-9a-f]{7}.*$'' --ago 30d --keep 10 --untagged' --context /dev/null
+  --cmd 'acr purge --filter ''lazydad:^[0-9a-f]{7}.*$'' --filter ''lazydad-preview:^[0-9a-f]{7}.*$'' --ago 30d --keep 10 --untagged' `
+  --context /dev/null --source-acr-auth-id '[system]' -o none
+$TASK_PID = az acr task show --registry lazydadacr --name purge-old-images --query identity.principalId -o tsv
+foreach ($role in 'Container Registry Repository Contributor', 'Container Registry Repository Catalog Lister') {
+  az role assignment create --assignee-object-id $TASK_PID --assignee-principal-type ServicePrincipal `
+    --role $role --scope (az acr show -n lazydadacr --query id -o tsv) -o none
+}
 ```
 
 </details>
 
-What it keeps:
+What it keeps, in each repository:
 - **every image from the last 30 days** (`--ago 30d`)
 - **plus the 10 newest older images.** `--keep` counts only the tags that would otherwise be
   deleted, not all tags.
@@ -177,12 +218,12 @@ What it keeps:
   manifest deletions than you'd expect.
 - **whatever an environment runs**, even if failed deploys pushed many newer images and no deploy
   succeeded for over 30 days. That takes two things together:
-  1. **Revisions are pinned to the image digest** (`lazydad@sha256:…`), not the commit tag. Container Apps
-     resolves the configured image again on every replica start, so a revision pointing at a tag
-     would fail to restart or scale once purge deleted that tag.
+  1. **Revisions are pinned to the image digest** (`lazydad@sha256:…` in production, `lazydad-preview@sha256:…` in
+     staging), not the commit tag. Container Apps resolves the configured image again on every replica start, so a
+     revision pointing at a tag would fail to restart or scale once purge deleted that tag.
   2. **The running manifest always keeps a non-commit tag.** The filter only matches commit-style
      tags (`^[0-9a-f]{7}`), and Deploy Environment tags in two phases, so the job can stop at any point:
-     - **before the rollout**, it re-tags the image of the revision **serving traffic** as `deployed-<env>`
+     - **before the rollout**, it re-tags the image of the revision **serving traffic** as `deployed-<env>` in its own repository
        (not the app's desired image, which after a failed rollout names the failed one; repairing any
        earlier interrupted run), and also as `previous-<env>` (so a manual rollback can return to it; the automatic
        rollback gets its digest from the deploy job itself).
@@ -389,13 +430,15 @@ staging's identity has. That's why it has nothing in production:
 
 | GitHub environment | Signs in as | Can change |
 |---|---|---|
-| `staging` (`*/*` branches and `master`) | `lazydad-github-staging` | `lazydad-app-staging`; push images; SQL firewall rules; the staging DB schema |
-| `production` (`master` only) | `lazydad-github-cd` | `lazydad-app`; push images; SQL firewall rules; the prod DB schema |
+| `staging` (`*/*` branches and `master`) | `lazydad-github-staging` | `lazydad-app-staging`; images in `lazydad-preview`; SQL firewall rules; the staging DB schema |
+| `production` (`master` only) | `lazydad-github-cd` | `lazydad-app`; images in `lazydad` (and it reads `lazydad-preview`, to copy from it); SQL firewall rules; the prod DB schema |
 
-Both push to the same registry, so staging could re-point tags like `previous-production` or `<sha>`. So nothing
-that decides what production runs trusts a tag: Deploy Master deploys the digest its own build produced, its
-automatic rollback returns to the digest the production job read from production's revisions (a job output), and the
-Roll Back workflow only accepts an image whose digest production's own revisions ran.
+Staging can't write production's repository at all (section 2), so a branch can't move production's tags
+(`deployed-production`, `previous-production`) off the image it runs, which would let the weekly purge delete it.
+And nothing that decides what production runs trusts a tag anyway: Deploy Master deploys the digest its own build
+produced (checked again after the copy into `lazydad`), its automatic rollback returns to the digest the production
+job read from production's revisions (a job output), and the Roll Back workflow only accepts an image whose digest
+production's own revisions ran.
 
 **1. A custom role for what a deploy needs outside its app.** The built-in roles reach too far: `Contributor` on the
 Container Apps environment could delete it (and the prod app with it), and `SQL Server Contributor` could delete
@@ -455,30 +498,56 @@ re-created repository can't inherit the trust. Name-based subjects (`repo:mykola
 this repo's tokens. A role assignment right after an identity is created can fail with "principal not found": run
 it again a minute later.
 
+The registry roles are limited to one repository by a **condition** on the role assignment. It lets the role's
+actions through only for requests to that repository; without one, the role covers every repository:
+
+| Identity | Registry roles |
+|---|---|
+| `lazydad-acr-pull` | `Container Registry Repository Reader`, all repositories (it only pulls) |
+| `lazydad-github-staging` | `Container Registry Repository Writer` on `lazydad-preview` |
+| `lazydad-github-cd` | `Container Registry Repository Writer` on `lazydad`; `Container Registry Repository Reader` on `lazydad-preview` |
+
+Both deploy identities also get `Reader` on the registry: `az acr login` looks the registry up in Azure Resource
+Manager (in this registry mode, `Reader` grants nothing on the images).
+
 ```bash
 RG_ID=$(az group show -n $RG --query id -o tsv)
 ACR_ID=$(az acr show -n lazydadacr --query id -o tsv)
 PREFIX="repo:mykolad@$(gh api users/mykolad --jq .id)/lazydad@$(gh api repos/$REPO --jq .id)"
+READ="content/read metadata/read"; WRITE="$READ content/write metadata/write"
+# A registry role for one repository: $1 the identity's principal id, $2 the role, $3 the repository, $4 its actions.
+repo_role() {
+  local not="" action
+  for action in $4; do
+    not+="${not:+ AND }!(ActionMatches{'Microsoft.ContainerRegistry/registries/repositories/$action'})"
+  done
+  az role assignment create --assignee-object-id "$1" --assignee-principal-type ServicePrincipal --role "$2" \
+    --scope "$ACR_ID" --condition-version 2.0 -o none \
+    --condition "(($not) OR (@Request[Microsoft.ContainerRegistry/registries/repositories:name] StringEqualsIgnoreCase '$3'))"
+}
 
 az identity create -g $RG -n lazydad-acr-pull -l westeurope -o none
 az role assignment create --assignee-object-id "$(az identity show -g $RG -n lazydad-acr-pull --query principalId -o tsv)" \
-  --assignee-principal-type ServicePrincipal --role AcrPull --scope "$ACR_ID" -o none
+  --assignee-principal-type ServicePrincipal --role "Container Registry Repository Reader" --scope "$ACR_ID" -o none
 
 for pair in lazydad-github-cd:production lazydad-github-staging:staging; do
   id=${pair%%:*}; env=${pair#*:}
   az identity create -g $RG -n $id -l westeurope -o none
   principal=$(az identity show -g $RG -n $id --query principalId -o tsv)
-  # Push images; Reader because az acr login looks the registry up in Azure Resource Manager.
-  for role in AcrPush Reader; do
-    az role assignment create --assignee-object-id $principal --assignee-principal-type ServicePrincipal \
-      --role $role --scope "$ACR_ID" -o none
-  done
+  az role assignment create --assignee-object-id $principal --assignee-principal-type ServicePrincipal \
+    --role Reader --scope "$ACR_ID" -o none
   az role assignment create --assignee-object-id $principal --assignee-principal-type ServicePrincipal \
     --role "LazyDad Deployer" --scope "$RG_ID" -o none
   az identity federated-credential create -g $RG --identity-name $id -n github-$env-immutable \
     --issuer https://token.actions.githubusercontent.com \
     --subject "$PREFIX:environment:$env" --audiences api://AzureADTokenExchange -o none
 done
+
+STAGING=$(az identity show -g $RG -n lazydad-github-staging --query principalId -o tsv)
+CD=$(az identity show -g $RG -n lazydad-github-cd --query principalId -o tsv)
+repo_role "$STAGING" "Container Registry Repository Writer" lazydad-preview "$WRITE"
+repo_role "$CD" "Container Registry Repository Writer" lazydad "$WRITE"
+repo_role "$CD" "Container Registry Repository Reader" lazydad-preview "$READ"
 ```
 
 <details><summary>PowerShell 7</summary>
@@ -487,19 +556,24 @@ done
 $RG_ID = az group show -n $RG --query id -o tsv
 $ACR_ID = az acr show -n lazydadacr --query id -o tsv
 $PREFIX = "repo:mykolad@$(gh api users/mykolad --jq .id)/lazydad@$(gh api repos/$REPO --jq .id)"
+$READ = @('content/read', 'metadata/read'); $WRITE = $READ + @('content/write', 'metadata/write')
+# A registry role for one repository.
+function Add-RepositoryRole([string]$Principal, [string]$Role, [string]$Repository, [string[]]$Actions) {
+  $not = ($Actions | ForEach-Object { "!(ActionMatches{'Microsoft.ContainerRegistry/registries/repositories/$_'})" }) -join ' AND '
+  az role assignment create --assignee-object-id $Principal --assignee-principal-type ServicePrincipal --role $Role `
+    --scope $ACR_ID --condition-version 2.0 -o none `
+    --condition "(($not) OR (@Request[Microsoft.ContainerRegistry/registries/repositories:name] StringEqualsIgnoreCase '$Repository'))"
+}
 
 az identity create -g $RG -n lazydad-acr-pull -l westeurope -o none
 az role assignment create --assignee-object-id (az identity show -g $RG -n lazydad-acr-pull --query principalId -o tsv) `
-  --assignee-principal-type ServicePrincipal --role AcrPull --scope $ACR_ID -o none
+  --assignee-principal-type ServicePrincipal --role 'Container Registry Repository Reader' --scope $ACR_ID -o none
 
 foreach ($pair in @{ Id = 'lazydad-github-cd'; Env = 'production' }, @{ Id = 'lazydad-github-staging'; Env = 'staging' }) {
   az identity create -g $RG -n $pair.Id -l westeurope -o none
   $principal = az identity show -g $RG -n $pair.Id --query principalId -o tsv
-  # Push images; Reader because az acr login looks the registry up in Azure Resource Manager.
-  foreach ($role in 'AcrPush', 'Reader') {
-    az role assignment create --assignee-object-id $principal --assignee-principal-type ServicePrincipal `
-      --role $role --scope $ACR_ID -o none
-  }
+  az role assignment create --assignee-object-id $principal --assignee-principal-type ServicePrincipal `
+    --role Reader --scope $ACR_ID -o none
   az role assignment create --assignee-object-id $principal --assignee-principal-type ServicePrincipal `
     --role 'LazyDad Deployer' --scope $RG_ID -o none
   # ${PREFIX} in braces: "$PREFIX:environment" would read as a scoped variable.
@@ -507,6 +581,12 @@ foreach ($pair in @{ Id = 'lazydad-github-cd'; Env = 'production' }, @{ Id = 'la
     --issuer https://token.actions.githubusercontent.com `
     --subject "${PREFIX}:environment:$($pair.Env)" --audiences api://AzureADTokenExchange -o none
 }
+
+$STAGING = az identity show -g $RG -n lazydad-github-staging --query principalId -o tsv
+$CD = az identity show -g $RG -n lazydad-github-cd --query principalId -o tsv
+Add-RepositoryRole $STAGING 'Container Registry Repository Writer' lazydad-preview $WRITE
+Add-RepositoryRole $CD 'Container Registry Repository Writer' lazydad $WRITE
+Add-RepositoryRole $CD 'Container Registry Repository Reader' lazydad-preview $READ
 ```
 
 </details>
@@ -518,13 +598,21 @@ for the migrations (section 8).
 
 **1. A first image.** A Container App can't be created without one, and GitHub can't deploy yet (section 9). ACR
 Tasks builds it inside the registry from your clone (no Docker needed; it uploads the source, minus
-`.dockerignore`'s entries). It reports version `dev`, and the first Deploy Master run replaces it.
+`.dockerignore`'s entries), as you: in this registry mode a build can only push where its caller may (section 2). It
+goes into both repositories with the same digest, since each app runs from its own. It reports version `dev`, and
+the first Deploy Master run replaces it.
 
 ```bash
-az acr build -r lazydadacr -t lazydad:bootstrap .
+az acr build -r lazydadacr --source-acr-auth-id "[caller]" -t lazydad-preview:bootstrap -t lazydad:bootstrap .
 ```
 
-*PowerShell 7: the same command.*
+<details><summary>PowerShell 7</summary>
+
+```powershell
+az acr build -r lazydadacr --source-acr-auth-id '[caller]' -t lazydad-preview:bootstrap -t lazydad:bootstrap .
+```
+
+</details>
 
 **2. The apps.** Both are pinned to the image's digest (section 2), pull as `lazydad-acr-pull`, and get a
 system-assigned identity for everything else. The settings hold no secrets: the database connection string names
@@ -533,18 +621,18 @@ identity when there's no `User Id`), and the AI endpoint is an address. Deploys 
 Environment only swaps the image.
 
 ```bash
-IMAGE="lazydadacr.azurecr.io/lazydad@$(az acr repository show -n lazydadacr --image lazydad:bootstrap --query digest -o tsv)"
+DIGEST=$(az acr repository show -n lazydadacr --image lazydad:bootstrap --query digest -o tsv)
 PULL_ID=$(az identity show -g $RG -n lazydad-acr-pull --query id -o tsv)
 SQL="Server=tcp:lazydad-sql-swedencentral.database.windows.net,1433;Authentication=Active Directory Managed Identity;Encrypt=True"
 OPENAI=https://lazydad-openai-resource.cognitiveservices.azure.com/
-# The pull identity's AcrPull (section 6) must have applied; if the create fails to pull, wait a minute and retry.
+# The pull identity's role (section 6) must have applied; if the create fails to pull, wait a minute and retry.
 
-az containerapp create -g $RG -n lazydad-app --environment lazydad-cae --image "$IMAGE" \
+az containerapp create -g $RG -n lazydad-app --environment lazydad-cae --image "lazydadacr.azurecr.io/lazydad@$DIGEST" \
   --system-assigned --user-assigned "$PULL_ID" --registry-server lazydadacr.azurecr.io --registry-identity "$PULL_ID" \
   --ingress external --target-port 8080 --min-replicas 1 --max-replicas 1 --cpu 0.5 --memory 1Gi \
   --env-vars "ConnectionStrings__DefaultConnection=$SQL;Database=lazydad-db" LlmProviders__AzureOpenAI__Endpoint=$OPENAI -o none
 
-az containerapp create -g $RG -n lazydad-app-staging --environment lazydad-cae --image "$IMAGE" \
+az containerapp create -g $RG -n lazydad-app-staging --environment lazydad-cae --image "lazydadacr.azurecr.io/lazydad-preview@$DIGEST" \
   --system-assigned --user-assigned "$PULL_ID" --registry-server lazydadacr.azurecr.io --registry-identity "$PULL_ID" \
   --ingress external --target-port 8080 --min-replicas 0 --max-replicas 1 --cpu 0.5 --memory 1Gi \
   --env-vars "ConnectionStrings__DefaultConnection=$SQL;Database=lazydad-db-staging" LlmProviders__AzureOpenAI__Endpoint=$OPENAI -o none
@@ -553,18 +641,18 @@ az containerapp create -g $RG -n lazydad-app-staging --environment lazydad-cae -
 <details><summary>PowerShell 7</summary>
 
 ```powershell
-$IMAGE = "lazydadacr.azurecr.io/lazydad@$(az acr repository show -n lazydadacr --image lazydad:bootstrap --query digest -o tsv)"
+$DIGEST = az acr repository show -n lazydadacr --image lazydad:bootstrap --query digest -o tsv
 $PULL_ID = az identity show -g $RG -n lazydad-acr-pull --query id -o tsv
 $SQL = 'Server=tcp:lazydad-sql-swedencentral.database.windows.net,1433;Authentication=Active Directory Managed Identity;Encrypt=True'
 $OPENAI = 'https://lazydad-openai-resource.cognitiveservices.azure.com/'
-# The pull identity's AcrPull (section 6) must have applied; if the create fails to pull, wait a minute and retry.
+# The pull identity's role (section 6) must have applied; if the create fails to pull, wait a minute and retry.
 
-az containerapp create -g $RG -n lazydad-app --environment lazydad-cae --image $IMAGE `
+az containerapp create -g $RG -n lazydad-app --environment lazydad-cae --image "lazydadacr.azurecr.io/lazydad@$DIGEST" `
   --system-assigned --user-assigned $PULL_ID --registry-server lazydadacr.azurecr.io --registry-identity $PULL_ID `
   --ingress external --target-port 8080 --min-replicas 1 --max-replicas 1 --cpu 0.5 --memory 1Gi `
   --env-vars "ConnectionStrings__DefaultConnection=$SQL;Database=lazydad-db" "LlmProviders__AzureOpenAI__Endpoint=$OPENAI" -o none
 
-az containerapp create -g $RG -n lazydad-app-staging --environment lazydad-cae --image $IMAGE `
+az containerapp create -g $RG -n lazydad-app-staging --environment lazydad-cae --image "lazydadacr.azurecr.io/lazydad-preview@$DIGEST" `
   --system-assigned --user-assigned $PULL_ID --registry-server lazydadacr.azurecr.io --registry-identity $PULL_ID `
   --ingress external --target-port 8080 --min-replicas 0 --max-replicas 1 --cpu 0.5 --memory 1Gi `
   --env-vars "ConnectionStrings__DefaultConnection=$SQL;Database=lazydad-db-staging" "LlmProviders__AzureOpenAI__Endpoint=$OPENAI" -o none
@@ -1123,17 +1211,9 @@ foreach ($app in 'lazydad-app', 'lazydad-app-staging') {
 </details>
 
 What a previewed branch can do, running as `lazydad-github-staging`: anything to staging (its app, its database, LLM
-calls, which cost tokens), push images that production never runs, and open a SQL firewall rule (useless without a
-database user). It can't change what production runs, or make production run anything else.
-
-**One gap remains: availability.** Both deploy identities can write to the whole registry (`AcrPush`), so a branch
-could also move production's protection tags (`deployed-production`, `previous-production`) off the image
-production runs. The weekly purge would then delete that manifest, and production's next restart or scale-out would
-fail to pull it (the running replica keeps running; a Deploy Master run fixes it). An ACR lock doesn't help:
-`AcrPush` can lift locks too. The fix is repository-scoped permissions (the registry's "RBAC Registry + ABAC
-Repository Permissions" mode): previews write only to a `lazydad-preview` repository, and production's identity
-copies the image it deploys into a production-only `lazydad` repository with `az acr import` (same digest). That's
-a registry migration of its own, planned separately.
+calls, which cost tokens), push images to `lazydad-preview`, which production never runs, and open a SQL firewall rule
+(useless without a database user). It can't change what production runs, make production run anything else, or
+touch production's repository: not its images, and not the tags that keep them from the weekly purge.
 
 ### A new Grafana token
 
@@ -1192,7 +1272,8 @@ Compare both lists with <https://www.cloudflare.com/ips/> now and then.
 Preview what it would delete, check runs, or run it now:
 
 ```bash
-az acr run --registry lazydadacr --cmd "acr purge --filter 'lazydad:^[0-9a-f]{7}.*$' --ago 30d --keep 10 --untagged --dry-run" /dev/null
+az acr run --registry lazydadacr --source-acr-auth-id "[caller]" \
+  --cmd "acr purge --filter 'lazydad:^[0-9a-f]{7}.*$' --filter 'lazydad-preview:^[0-9a-f]{7}.*$' --ago 30d --keep 10 --untagged --dry-run" /dev/null
 az acr task list-runs --registry lazydadacr --name purge-old-images -o table
 az acr task run --registry lazydadacr --name purge-old-images
 ```
@@ -1200,7 +1281,8 @@ az acr task run --registry lazydadacr --name purge-old-images
 <details><summary>PowerShell 7</summary>
 
 ```powershell
-az acr run --registry lazydadacr --cmd 'acr purge --filter ''lazydad:^[0-9a-f]{7}.*$'' --ago 30d --keep 10 --untagged --dry-run' /dev/null
+az acr run --registry lazydadacr --source-acr-auth-id '[caller]' `
+  --cmd 'acr purge --filter ''lazydad:^[0-9a-f]{7}.*$'' --filter ''lazydad-preview:^[0-9a-f]{7}.*$'' --ago 30d --keep 10 --untagged --dry-run' /dev/null
 az acr task list-runs --registry lazydadacr --name purge-old-images -o table
 az acr task run --registry lazydadacr --name purge-old-images
 ```
@@ -1215,7 +1297,9 @@ production's revisions never ran, one built before images carried their version,
 `ROLLBACK_MIN_COMMIT`), do the same yourself: deploy by digest (`az acr repository show -n lazydadacr --image
 lazydad:<tag> --query digest -o tsv`, then `--image lazydadacr.azurecr.io/lazydad@<digest>`), and move the
 `deployed-*` tag to it or lock the image (`az acr repository update -n lazydadacr --image lazydad:<tag>
---delete-enabled false`). An image built before #17 reports version `dev` unless you also pass `--set-env-vars
+--delete-enabled false`). Production pulls only from `lazydad`: an image that never ran there is only in
+`lazydad-preview`, so copy it first, as Deploy Environment does (`docker pull`, `docker tag` into `lazydad`,
+`docker push`; your registry role allows it, section 2) and check that the digest stayed the same. An image built before #17 reports version `dev` unless you also pass `--set-env-vars
 App__Version=<tag>`; the next pipeline deploy removes that setting again. An image from before #30 (older than
 `ROLLBACK_MIN_COMMIT`) only knows API keys, so its model calls fail now that key authentication is off.
 

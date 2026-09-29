@@ -78,7 +78,8 @@ jobs:
         run: |
           version=$(printf '%s' "$VERSION" | tr -d '[:space:]' | tr 'A-F' 'a-f')
 
-          # Revisions reference a digest, or (before digest pinning) a commit tag. Empty if it's gone.
+          # Revisions reference a digest, or (before digest pinning) a commit tag. Empty if it's gone. Everything
+          # production ran is in its own repository, lazydad: its deploys copy each image there (Deploy Environment).
           digest_of() {
             case "$1" in
               *@sha256:*) echo "${1#*@}" ;;
