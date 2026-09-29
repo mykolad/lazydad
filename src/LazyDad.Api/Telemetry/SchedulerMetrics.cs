@@ -14,9 +14,17 @@ public sealed class SchedulerMetrics
     private readonly Counter<long> leaderboardUpdates;
     private readonly MeterProvider? meterProvider;
 
-    /// <param name="meterFactory">Creates the app's meter.</param>
-    /// <param name="meterProvider">OpenTelemetry's, when telemetry is on (<see cref="TelemetryExtensions.AddTelemetry"/>); otherwise none.</param>
-    public SchedulerMetrics(IMeterFactory meterFactory, MeterProvider? meterProvider = null)
+    /// <summary>Without telemetry (local runs, tests): <see cref="ExportNowAsync"/> has nothing to export to.</summary>
+    public SchedulerMetrics(IMeterFactory meterFactory)
+        : this(meterFactory, null)
+    {
+    }
+
+    /// <summary>
+    /// With OpenTelemetry's meter provider, which exists only when telemetry is on
+    /// (<see cref="TelemetryExtensions.AddTelemetry"/>). Dependency injection picks this constructor then.
+    /// </summary>
+    public SchedulerMetrics(IMeterFactory meterFactory, MeterProvider? meterProvider)
     {
         this.meterProvider = meterProvider;
         var meter = meterFactory.Create(LazyDadTelemetry.Name);
