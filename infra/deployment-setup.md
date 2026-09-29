@@ -1362,11 +1362,12 @@ connection-string update at the end makes the new revision, which brings the app
 4. **Point the prod app at it.** A new connection string makes a new revision, which starts on the new server; check
    `https://lazydad.fyi/status` before relying on it.
 5. **Point production's deploys at it**, in a PR: Deploy Environment's `SQL_SERVER` (in
-   `.github/workflows/deploy-environment.yml`) is one value for both environments, so choose the server per
-   environment in its migration step, next to the database name (production: the new server; staging: the old
-   one). Changing `SQL_SERVER` itself would send staging's migrations to the new server, where its database isn't,
-   and Deploy Master would fail at staging. Until the PR is merged, production's migration step can't reach its
-   database.
+   `.github/workflows/deploy-environment.yml`) is one value for both environments, and three steps use it: opening
+   the runner's firewall rule, the migration's connection, and closing the rule. So choose the server per
+   environment once, before the firewall step (production: the new server; staging: the old one), and use that for
+   all three. Changing `SQL_SERVER` itself would send staging's migrations to the new server, where its database
+   isn't, and Deploy Master would fail at staging. Until the PR is merged, production's migration step can't reach
+   its database.
 
 ```bash
 (
