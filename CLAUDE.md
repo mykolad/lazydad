@@ -128,6 +128,9 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
 - **SQL server:** `lazydad-sql-swedencentral` (swedencentral).
   - Prod: `lazydad-db`, **Basic** DTU tier (5 DTU, 2 GB), always on. Serverless was dropped:
     every 4-hour tick woke it for the 60-minute auto-pause minimum, which cost about $74/month.
+    Backups: point-in-time for 7 days, long-term weekly for 7 weeks and monthly for 12 months, geo-redundant storage,
+    and a `CanNotDelete` lock on the database (runbook section 4; restoring: section 12). The app and the migrations
+    use the name `lazydad-db`, so a restore swaps names rather than repointing anything.
   - Staging: `lazydad-db-staging`, serverless on the **free offer** (100k vCore-s/month). It
     pauses when idle; if the free amount runs out it stays paused until next month, and staging
     deploys fail until then.
