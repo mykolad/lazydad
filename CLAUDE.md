@@ -74,7 +74,7 @@ tests/LazyDad.SmokeTests — smoke tests against a deployed app (run by Deploy M
   So a replica start (deploy, restart, scale-out) still means one extra batch, but not a new rhythm: its lease
   lasts until the first regular due time after it, which it or any replica then runs.
 - **Telemetry** (`src/LazyDad.Api/Telemetry`): OpenTelemetry traces, metrics and logs over OTLP to Grafana Cloud
-  (EU), on only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (the Container Apps settings; runbook section 10). The standard
+  (EU), on only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (the Container Apps settings; runbook section 11). The standard
   `OTEL_*` variables apply, with `http/protobuf` as the default protocol. A trace per request (not `/healthz`) and per
   scheduler tick (`joke tick`); `SchedulerMetrics` counts ticks, jokes and leaderboard updates by outcome, next to
   `/status`. **No visitor data:** `PersonalDataFilter` strips IPs and user agents from spans before export (a test
@@ -127,16 +127,16 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
     deploys fail until then.
   - The app raises the SQL connect timeout to 60 s (`SqlConnectionStrings.WithResumeTimeout`), so a login waits
     for a paused database to resume instead of timing out after the default 15 s.
-  - **Entra-only authentication** (no SQL logins, `sqladmin` included; runbook section 9, done 2026-09-28). Database
+  - **Entra-only authentication** (no SQL logins at all; runbook sections 4 and 8). Database
     users: `lazydad-app` (read/write) and `lazydad-github-cd` (ddladmin, read/write) in `lazydad-db`;
     `lazydad-app-staging` and `lazydad-github-staging` likewise in `lazydad-db-staging`. The apps connect as their
-    system-assigned identities (`sql-conn-entra`: `Authentication=Active Directory Managed Identity`), migrations as
+    system-assigned identities (`Authentication=Active Directory Managed Identity`), migrations as
     the environment's deploy identity, you as the server's Entra admin.
 - **Migrations** run in Deploy Master as an EF migration bundle, against staging and then prod (see below).
   The app never migrates on startup.
 - **Azure OpenAI** (`lazydad-openai-resource`, AI Services, eastus2): each `LlmModels[].Model` in config is the deployment name. Non-OpenAI models
   deployed there (e.g. `Kimi-K2.5`, a thinking model: 10–60 s and ~3–4k output tokens per joke) are called through the same Azure OpenAI chat API.
-  **Key authentication is off** (`disableLocalAuth`; runbook section 8, done 2026-09-28): both apps call it as their
+  **Key authentication is off** (`disableLocalAuth`; runbook section 5): both apps call it as their
   system-assigned identities with the "Foundry User" role, so `LlmProviders:AzureOpenAI:ApiKey` is empty everywhere.
   `ROLLBACK_MIN_COMMIT` (a repository variable, #30's merge commit) keeps Roll Back from choosing older images, which
   only knew the key.
@@ -145,7 +145,7 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
     Scaling out (issue #6) is safe for joke generation (the scheduler lease); the vote rate limit is per replica.
     Public address: **`lazydad.fyi`**, through Cloudflare's proxy (Free plan: DDoS protection, bot settings, a rate-limit
     rule on votes), with a Cloudflare Origin CA certificate on the environment and the app's ingress limited to
-    Cloudflare's IPv4 ranges (runbook section 12). The ranges also live in `appsettings.json` (`Cloudflare:IpRanges`).
+    Cloudflare's IPv4 ranges (runbook section 10). The ranges also live in `appsettings.json` (`Cloudflare:IpRanges`).
     The switch is the `production` environment's `CLOUDFLARE_ONLY_INGRESS` variable: while it's `true`, every deploy
     creates the `cloudflare-*` ingress rules if missing and keeps them in sync with Cloudflare's API
     (`tools/cloudflare-ranges.sh`: one PATCH of the whole rule list, at most 3 removals at once; skipped if the API
@@ -168,11 +168,13 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
 - **Monitoring:** a Grafana Cloud stack (free tier, `eu-north`) gets both apps' telemetry, one service per app
   (`job="lazydad-app"`, `"lazydad-app-staging"`), with the uptime check and email alerts on prod. The OTLP credentials are
   Key Vault secrets that the apps reference with their system-assigned identities: `OtlpHeaders` for prod, and
-  `OtlpHeadersStaging`, a separate Grafana token, for staging (runbook section 11), which can read only that one
-  secret, since branch previews run there. Console logs also stay in the environment's Log Analytics workspace (30 days,
+  `OtlpHeadersStaging`, a separate Grafana token, for staging (runbook section 11). Each app can read only its own
+  secret, so branch previews (which run on staging) can't read prod's token. Console logs also stay in the environment's Log Analytics workspace (30 days,
   daily cap) as the fallback.
-- **Setup runbook:** `infra/deployment-setup.md` (bash, with a PowerShell 7 version of each block) has the one-time Azure/GitHub setup behind Deploy Master,
-  including the weekly registry purge task (`purge-old-images`: keeps the last 30 days, 10 older
+- **Setup runbook:** `infra/deployment-setup.md` (bash, with a PowerShell 7 version of each block) creates everything behind Deploy Master from an
+  empty subscription, in order, with managed identities and OIDC throughout (no database password, API
+  key, connection-string secret or GitHub secret; the only credentials kept are the Grafana tokens in Key Vault), plus the operations (token rotation, Cloudflare's ranges, manual
+  rollback). That includes the weekly registry purge task (`purge-old-images`: keeps the last 30 days, 10 older
   images, and what each environment runs: revisions are pinned to the image digest, and the manifest
   stays tagged `deployed-<env>` / `deploying-<env>`, applied in two phases around each rollout; `previous-<env>`
   keeps what served before the latest rollout from the purge, for a manual rollback).
@@ -236,7 +238,7 @@ Its second job, **`clean-database-migrations`**, runs against a throwaway SQL Se
 Promotion is automatic: production runs only if staging's smoke tests pass. Azure login is
 OIDC through a managed identity per environment, each trusted via GitHub's immutable subject for its environment
 only (`repo:mykolad@<id>/lazydad@<id>:environment:<env>`), with `AZURE_CLIENT_ID` set per environment:
-`lazydad-github-cd` deploys production, `lazydad-github-staging` staging and the builds (runbook section 11). The
+`lazydad-github-cd` deploys production, `lazydad-github-staging` staging and the builds (runbook section 6). The
 staging identity can't change production, since branch previews run as it. No secrets live in GitHub: migrations
 log in to the database with Entra ID as the environment's deploy identity (the deploy workflow falls back to a
 `SQL_CONNECTION_STRING` environment secret only if one exists, and none does). Production only accepts deployments
@@ -263,7 +265,7 @@ open **Actions → Deploy Branch to Staging → Run workflow** and pick the bran
 Build Image and Deploy Environment steps, smoke tests included, against **staging only**.
 - **Production can't be reached from it:** the `production` environment accepts `master` only.
   `staging` also accepts `*/*` branches (`feature/…`, `fix/…`). The branch's own code (workflows, build) runs
-  with staging's identity, which has no rights on production (runbook section 11), and Roll Back only trusts
+  with staging's identity, which has no rights on production (runbook section 6), and Roll Back only trusts
   images production's own revisions ran, since staging can push images too.
 - **Migrations are off by default** (the *run-migrations* checkbox). Staging keeps any migration it
   applies, so only tick it for a branch whose migrations you'll merge unchanged.

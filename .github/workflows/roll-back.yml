@@ -182,7 +182,7 @@ jobs:
             exit 1
           fi
           if ! printf '%s\n' "${ran[@]}" | grep -qxF "$digest"; then
-            echo "::error::$digest never ran in production (it's not in the app's revision history), so it isn't trusted as a rollback target. Roll back by hand if you're sure (infra/deployment-setup.md, section 7)."
+            echo "::error::$digest never ran in production (it's not in the app's revision history), so it isn't trusted as a rollback target. Roll back by hand if you're sure (infra/deployment-setup.md, section 12: Manual rollback)."
             exit 1
           fi
 
@@ -193,7 +193,7 @@ jobs:
           docker pull -q "$image" > /dev/null
           ref=$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")
           if ! [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::$image has no commit label: it was built before images carried their version (#17), and deploying it would report version 'dev'. Roll back by hand instead (infra/deployment-setup.md, section 7)."
+            echo "::error::$image has no commit label: it was built before images carried their version (#17), and deploying it would report version 'dev'. Roll back by hand instead (infra/deployment-setup.md, section 12: Manual rollback)."
             exit 1
           fi
           if [ -n "$version" ] && [[ "$ref" != "$version"* ]]; then

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016  # jq programs are single-quoted on purpose: their $variables are jq's, not the shell's.
 # Cloudflare's published IP ranges (https://www.cloudflare.com/ips/), behind the prod app's ingress rules and the
-# app's own list (Cloudflare:IpRanges in appsettings.json). See infra/deployment-setup.md, section 12.
+# app's own list (Cloudflare:IpRanges in appsettings.json). See infra/deployment-setup.md, section 10.
 #
 #   cloudflare-ranges.sh fetch [4|6]
 #       Prints Cloudflare's current ranges (IPv4, IPv6, or both), one per line, checked for a sane format.
