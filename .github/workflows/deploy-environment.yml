@@ -174,7 +174,7 @@ jobs:
           fi
           # What served before this rollout, as read from the environment's own revisions: the automatic
           # rollback's target (a job output, which nothing outside this job can change; tags can be moved by
-          # anyone who can push to the registry). Revisions are pinned by digest, so the image names it.
+          # anyone who can write the environment's repository). Revisions are pinned by digest, so the image names it.
           case "$serving" in
             *@sha256:*) echo "previous-digest=${serving#*@}" >> "$GITHUB_OUTPUT" ;;
             *) echo "::warning::The serving revision isn't pinned to a digest ($serving); an automatic rollback won't have a target." ;;
