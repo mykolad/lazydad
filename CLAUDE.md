@@ -80,7 +80,9 @@ tests/LazyDad.SmokeTests — smoke tests against a deployed app (run by Deploy M
   `/status`. **No visitor data:** `PersonalDataFilter` strips IPs and user agents from spans before export (a test
   checks the exported bytes), and the LLM spans don't record prompts or responses. All `ILogger` logs are exported,
   including the model output they contain on purpose (saved jokes, an invalid judge answer): never log anything about
-  visitors. Keep metric tags bounded (no joke ids).
+  visitors. Keep metric tags bounded (no joke ids). EF Core's per-command log (`Executed DbCommand` with the SQL) is off
+  outside Development (`Microsoft.EntityFrameworkCore.Database.Command` at `Warning`: failed commands still log); SQL
+  shows up in the traces and the dashboard's SQL panel instead. A failed LLM call logs the provider's error body.
 - `LlmClientFactory` keeps **one chat client per model** for the app's lifetime (wrapped with `UseOpenTelemetry()`);
   callers may still dispose theirs (a no-op). Creating one per call would restart the LLM metrics every tick.
 
@@ -155,7 +157,7 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
     **Ingress allows listed IPs only** (the owner's `home` rule; Deploy Master adds its runner temporarily),
     so stray visitors can't wake it and spend LLM tokens.
   - Both pull from ACR with the `lazydad-acr-pull` managed identity; the ACR admin user is disabled.
-- Port exposed by the container: **8080** (`ASPNETCORE_URLS=http://+:8080`)
+- Port exposed by the container: **8080**, the .NET base image's default (`ASPNETCORE_HTTP_PORTS=8080`); don't set `ASPNETCORE_URLS` too, or the app warns at every start
 - **Version metadata is baked into the image.** Build Image (`build-image.yml`) passes build args, and the Dockerfile turns
   them into `App__Version` (short SHA), `App__Revision` (full SHA), `App__CommitDate`, `App__SourceUrl`
   (`AppInfoOptions`) and the standard OCI labels. The page shows **CalVer + SHA** under the Top 3,

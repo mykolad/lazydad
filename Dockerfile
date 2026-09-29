@@ -12,7 +12,8 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app
 COPY --from=build /app/publish .
 
-ENV ASPNETCORE_URLS=http://+:8080
+# The base image already listens on 8080 (ASPNETCORE_HTTP_PORTS=8080). Setting ASPNETCORE_URLS as well only made the
+# app warn at every start that one overrides the other.
 EXPOSE 8080
 
 # Version metadata baked into the image (Deploy Master passes the commit), so the image describes

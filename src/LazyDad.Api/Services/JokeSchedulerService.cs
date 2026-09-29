@@ -1,3 +1,4 @@
+using System.ClientModel;
 using System.Diagnostics;
 using LazyDad.Api.Configuration;
 using LazyDad.Api.Telemetry;
@@ -224,7 +225,8 @@ public class JokeSchedulerService : BackgroundService
         catch (Exception ex)
         {
             leaderboard = "failed";
-            logger.LogError(ex, "Failed to update the top jokes for '{Language}'.", language.Language);
+            logger.LogError(ex, "Failed to update the top jokes for '{Language}'. Provider response: {ProviderResponse}",
+                language.Language, ProviderResponse(ex));
         }
 
         return (saved, leaderboard);
@@ -267,8 +269,32 @@ public class JokeSchedulerService : BackgroundService
         catch (Exception ex)
         {
             metrics.RecordJoke(language.Language, model.Model, "failed");
-            logger.LogError(ex, "Failed to generate joke for '{Language}' ({Model}).", language.Language, model.Model);
+            logger.LogError(ex, "Failed to generate joke for '{Language}' ({Model}). Provider response: {ProviderResponse}",
+                language.Language, model.Model, ProviderResponse(ex));
             return null;
         }
     }
+
+    /// <summary>
+    /// The body of a provider's error response, e.g. Azure's error code and message: the exception's own message
+    /// ("Service request failed. Status: 400") leaves it out. It's about the request, whose content is jokes and
+    /// prompts, never visitor data. "none" when the failure wasn't an error response (a timeout, a network error).
+    /// </summary>
+    private static string ProviderResponse(Exception exception)
+    {
+        if (exception is not ClientResultException clientError || clientError.GetRawResponse() is not { } response)
+            return "none";
+        try
+        {
+            var body = response.Content.ToString();
+            return body.Length <= MaxLoggedResponseLength ? body : $"{body[..MaxLoggedResponseLength]}…";
+        }
+        catch (InvalidOperationException)
+        {
+            // The body wasn't buffered (a streamed response), so it can't be read again.
+            return "unreadable";
+        }
+    }
+
+    private const int MaxLoggedResponseLength = 2000;
 }
