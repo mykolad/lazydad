@@ -51,6 +51,8 @@ public class JokeSchedulerService : BackgroundService
             status.RecordNextTick(language.Language, DateTime.UtcNow);
             metrics.Initialize(language.Language, language.LlmModels.Select(m => m.Model));
         }
+        // Grafana must receive those zeros before a tick can add to them (see ExportNowAsync).
+        await metrics.ExportNowAsync();
 
         // Run one independent loop per language concurrently.
         // WhenAll propagates exceptions but each loop catches its own,

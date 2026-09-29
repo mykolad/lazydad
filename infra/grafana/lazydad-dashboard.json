@@ -27,12 +27,12 @@
     { "type": "row", "title": "Overview (the whole time range)", "id": 1, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 } },
     {
       "type": "stat", "title": "Requests", "id": 2, "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
-      "description": "Requests the app answered (not /healthz).",
+      "description": "Requests the app answered, not counting /healthz (the uptime checks).",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "blue" } }, "overrides": [] },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "none", "textMode": "value" },
       "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "instant": true,
-        "expr": "round(sum(increase(http_server_request_duration_seconds_count{job=\"$job\"}[$__range])))" }]
+        "expr": "round(sum(increase(http_server_request_duration_seconds_count{job=\"$job\", http_route!=\"/healthz\"}[$__range])))" }]
     },
     {
       "type": "stat", "title": "Server errors (5xx)", "id": 3, "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
@@ -42,7 +42,7 @@
         "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 0.001 }, { "color": "red", "value": 0.01 }] } }, "overrides": [] },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "none", "textMode": "value" },
       "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "instant": true,
-        "expr": "(sum(increase(http_server_request_duration_seconds_count{job=\"$job\", http_response_status_code=~\"5..\"}[$__range])) or vector(0)) / sum(increase(http_server_request_duration_seconds_count{job=\"$job\"}[$__range]))" }]
+        "expr": "(sum(increase(http_server_request_duration_seconds_count{job=\"$job\", http_route!=\"/healthz\", http_response_status_code=~\"5..\"}[$__range])) or vector(0)) / sum(increase(http_server_request_duration_seconds_count{job=\"$job\", http_route!=\"/healthz\"}[$__range]))" }]
     },
     {
       "type": "stat", "title": "Latency p95", "id": 4, "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
@@ -52,7 +52,7 @@
         "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 0.5 }, { "color": "red", "value": 2 }] } }, "overrides": [] },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "none", "textMode": "value" },
       "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "instant": true,
-        "expr": "histogram_quantile(0.95, sum by (le) (increase(http_server_request_duration_seconds_bucket{job=\"$job\"}[$__range])))" }]
+        "expr": "histogram_quantile(0.95, sum by (le) (increase(http_server_request_duration_seconds_bucket{job=\"$job\", http_route!=\"/healthz\"}[$__range])))" }]
     },
     {
       "type": "stat", "title": "Jokes saved", "id": 5, "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
@@ -87,12 +87,12 @@
     { "type": "row", "title": "Requests", "id": 10, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 } },
     {
       "type": "timeseries", "title": "Requests per second, by route", "id": 11, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
-      "description": "An empty route is a request that matched no endpoint (mostly 404s from scanners).",
+      "description": "Not counting /healthz (the uptime checks). An empty route is a request that matched no endpoint (mostly 404s from scanners).",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "stacking": { "mode": "normal" } } }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{http_route}}",
-        "expr": "sum by (http_route) (rate(http_server_request_duration_seconds_count{job=\"$job\"}[$__rate_interval]))" }]
+        "expr": "sum by (http_route) (rate(http_server_request_duration_seconds_count{job=\"$job\", http_route!=\"/healthz\"}[$__rate_interval]))" }]
     },
     {
       "type": "timeseries", "title": "Responses per second, by status code", "id": 12, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
@@ -101,7 +101,7 @@
       "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "stacking": { "mode": "normal" } } }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{http_response_status_code}}",
-        "expr": "sum by (http_response_status_code) (rate(http_server_request_duration_seconds_count{job=\"$job\"}[$__rate_interval]))" }]
+        "expr": "sum by (http_response_status_code) (rate(http_server_request_duration_seconds_count{job=\"$job\", http_route!=\"/healthz\"}[$__rate_interval]))" }]
     },
     {
       "type": "timeseries", "title": "Latency p50 and p95, by route", "id": 13, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
@@ -110,14 +110,14 @@
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [
         { "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "p95 {{http_route}}",
-          "expr": "histogram_quantile(0.95, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{job=\"$job\"}[$__rate_interval])))" },
+          "expr": "histogram_quantile(0.95, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{job=\"$job\", http_route!=\"/healthz\"}[$__rate_interval])))" },
         { "refId": "B", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "p50 {{http_route}}",
-          "expr": "histogram_quantile(0.5, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{job=\"$job\"}[$__rate_interval])))" }
+          "expr": "histogram_quantile(0.5, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{job=\"$job\", http_route!=\"/healthz\"}[$__rate_interval])))" }
       ]
     },
     {
       "type": "timeseries", "title": "Vote rate limiter decisions", "id": 14, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
-      "description": "acquired = allowed; anything else = rejected with 429.",
+      "description": "acquired = allowed; endpoint_limiter or global_limiter = rejected with 429; request_canceled = the client gave up while waiting.",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "stacking": { "mode": "normal" } } }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },

@@ -1,4 +1,5 @@
 using System.Diagnostics.Metrics;
+using OpenTelemetry.Metrics;
 
 namespace LazyDad.Api.Telemetry;
 
@@ -11,9 +12,13 @@ public sealed class SchedulerMetrics
     private readonly Counter<long> ticks;
     private readonly Counter<long> jokes;
     private readonly Counter<long> leaderboardUpdates;
+    private readonly MeterProvider? meterProvider;
 
-    public SchedulerMetrics(IMeterFactory meterFactory)
+    /// <param name="meterFactory">Creates the app's meter.</param>
+    /// <param name="meterProvider">OpenTelemetry's, when telemetry is on (<see cref="TelemetryExtensions.AddTelemetry"/>); otherwise none.</param>
+    public SchedulerMetrics(IMeterFactory meterFactory, MeterProvider? meterProvider = null)
     {
+        this.meterProvider = meterProvider;
         var meter = meterFactory.Create(LazyDadTelemetry.Name);
         ticks = meter.CreateCounter<long>("lazydad.scheduler.ticks", "{tick}",
             "Scheduler ticks by outcome: succeeded, failed, or skipped (another replica generated this period).");
@@ -39,6 +44,14 @@ public sealed class SchedulerMetrics
             foreach (var outcome in (string[])["saved", "empty", "failed"])
                 jokes.Add(0, new("language", language), new("model", model), new("outcome", outcome));
     }
+
+    /// <summary>
+    /// Exports the zeros from <see cref="Initialize"/> right away, when telemetry is on. The exporter sends the summed-up
+    /// values about once a minute, so a tick that finished before that would turn the pending 0 into 1, and Grafana
+    /// would still receive 1 as the series' first sample. If this export fails, the zeros go out with the next one.
+    /// </summary>
+    public Task ExportNowAsync()
+        => meterProvider is null ? Task.CompletedTask : Task.Run(() => meterProvider.ForceFlush(timeoutMilliseconds: 5000));
 
     public void RecordTick(string language, string outcome)
         => ticks.Add(1, new("language", language), new("outcome", outcome));
