@@ -1346,5 +1346,64 @@ az containerapp revision activate -n lazydad-app -g $RG --revision $REV -o none
 Then check `https://lazydad.fyi/status`: the reactivated revision's startup tick saves jokes into the restored
 database.
 
-Restoring after a region outage is the same, except the copy lands on a server in another region (created as in
-section 4), so the app's connection string and Deploy Environment's `SQL_SERVER` need that server's name.
+**After a region outage** (Sweden Central down, the server unreachable), the swap above doesn't apply: there's no
+`lazydad-db` to rename, only its geo-redundant backups (at most about an hour old). The copy goes straight to a new
+server in another region, under the final name, and the app and the deploys point at that server:
+
+1. **A server in another region**, as in section 4 (Entra-only, you as the admin, the two firewall rules), e.g.
+   `lazydad-sql-northeurope` in North Europe. The deploy identities' `LazyDad Deployer` role covers it already (it's
+   on the resource group).
+2. **Geo-restore `lazydad-db` onto it**, then give it section 4's retention policy and lock (with `-s $NEW`). The
+   database users come with it, so the apps and the migrations can sign in as before.
+3. **Apply master's migrations** to it, as in 3b (the `dotnet ef database update` line, with `$NEW` as the server).
+4. **Point the prod app at it.** A new connection string makes a new revision, which starts on the new server; check
+   `https://lazydad.fyi/status` before relying on it.
+5. **Point the deploys at it:** Deploy Environment's `SQL_SERVER` (in `.github/workflows/deploy-environment.yml`)
+   names the server, so change it in a PR. Until then, a deploy's migration step can't reach the database.
+
+```bash
+(
+set -e   # stops at the first failure, like 3b
+NEW=lazydad-sql-northeurope
+ID=$(az sql db geo-backup list -g $RG -s $S --query "[?name=='lazydad-db'].id | [0]" -o tsv)
+az sql db geo-backup restore --geo-backup-id "$ID" --dest-database lazydad-db --dest-server $NEW -g $RG \
+  --service-objective Basic --backup-storage-redundancy Geo -o none
+az sql db ltr-policy set -g $RG -s $NEW -n lazydad-db --weekly-retention P7W --monthly-retention P12M -o none
+az lock create -n lazydad-db-no-delete -t CanNotDelete -g $RG --namespace Microsoft.Sql \
+  --parent servers/$NEW --resource-type databases --resource lazydad-db \
+  --notes "The jokes and votes. Remove it only to restore (runbook section 12) or to retire the app." -o none
+dotnet tool restore
+dotnet ef database update --project src/LazyDad.Data --startup-project src/LazyDad.Api \
+  --connection "Server=tcp:$NEW.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60"
+az containerapp update -n lazydad-app -g $RG -o none --set-env-vars \
+  "ConnectionStrings__DefaultConnection=Server=tcp:$NEW.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Managed Identity;Encrypt=True"
+)
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+& {
+$ErrorActionPreference = 'Stop'; $PSNativeCommandUseErrorActionPreference = $true   # stops at the first failure, like 3b
+$NEW = 'lazydad-sql-northeurope'
+$ID = az sql db geo-backup list -g $RG -s $S --query "[?name=='lazydad-db'].id | [0]" -o tsv
+az sql db geo-backup restore --geo-backup-id $ID --dest-database lazydad-db --dest-server $NEW -g $RG `
+  --service-objective Basic --backup-storage-redundancy Geo -o none
+az sql db ltr-policy set -g $RG -s $NEW -n lazydad-db --weekly-retention P7W --monthly-retention P12M -o none
+az lock create -n lazydad-db-no-delete -t CanNotDelete -g $RG --namespace Microsoft.Sql `
+  --parent "servers/$NEW" --resource-type databases --resource lazydad-db `
+  --notes 'The jokes and votes. Remove it only to restore (runbook section 12) or to retire the app.' -o none
+dotnet tool restore
+dotnet ef database update --project src/LazyDad.Data --startup-project src/LazyDad.Api `
+  --connection "Server=tcp:$NEW.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60"
+az containerapp update -n lazydad-app -g $RG -o none --set-env-vars `
+  "ConnectionStrings__DefaultConnection=Server=tcp:$NEW.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Managed Identity;Encrypt=True"
+}
+```
+
+</details>
+
+Run it from an up-to-date checkout of `master` (for the migrations). Like 3b, the block stops at the first failure, so
+the app is only pointed at the new server once everything before it worked. Staging's database stays on the old server; staging can wait until Sweden Central is
+back. A second region that's always ready is the
+resilience plan's next phase.
