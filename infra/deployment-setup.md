@@ -1036,8 +1036,9 @@ would look down and idle all the time.
 **5. The dashboard.** `infra/grafana/lazydad-dashboard.json` shows one app at a time (the *App* selector at the
 top): requests, errors and latency; ticks, jokes and leaderboard updates by outcome; LLM call duration and tokens per
 model; CPU and memory against the container's limits; SQL and outbound calls; and the logs. In Grafana:
-*Dashboards → New → Import*, upload the file, *Import*. It picks the stack's default Prometheus and Loki data sources
-(the *Metrics* and *Logs* selectors at the top change them). Editing it in Grafana is fine; to keep a change, export
+*Dashboards → New → Import*, upload the file, *Import*. The *Metrics* and *Logs* selectors at the top offer only the
+stack's `…-prom` and `…-logs` data sources (Grafana Cloud's names), so it picks those; other Loki data sources, such as
+`…-alert-state-history`, hold Grafana's own records, not the app's logs. Editing it in Grafana is fine; to keep a change, export
 it (*Share → Export*, with "Export for sharing externally" off) and replace the file in a PR.
 
 CPU and memory come from the app process's own metrics. The container's metrics would need Grafana's Azure Monitor data

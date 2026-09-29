@@ -11,8 +11,8 @@
   "refresh": "5m",
   "templating": {
     "list": [
-      { "name": "prom", "label": "Metrics", "type": "datasource", "query": "prometheus", "regex": "", "hide": 0 },
-      { "name": "loki", "label": "Logs", "type": "datasource", "query": "loki", "regex": "", "hide": 0 },
+      { "name": "prom", "label": "Metrics", "type": "datasource", "query": "prometheus", "regex": "/-prom$/", "hide": 0 },
+      { "name": "loki", "label": "Logs", "type": "datasource", "query": "loki", "regex": "/-logs$/", "hide": 0 },
       {
         "name": "job", "label": "App", "type": "query",
         "datasource": { "type": "prometheus", "uid": "${prom}" },
@@ -87,12 +87,12 @@
     { "type": "row", "title": "Requests", "id": 10, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 } },
     {
       "type": "timeseries", "title": "Requests per second, by route", "id": 11, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
-      "description": "Not counting /healthz (the uptime checks). An empty route is a request that matched no endpoint (mostly 404s from scanners).",
+      "description": "Not counting /healthz (the uptime checks). (no route) is a request that matched no endpoint (mostly 404s from scanners).",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "stacking": { "mode": "normal" } } }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{http_route}}",
-        "expr": "sum by (http_route) (rate(http_server_request_duration_seconds_count{job=\"$job\", http_route!=\"/healthz\"}[$__rate_interval]))" }]
+        "expr": "label_replace(sum by (http_route) (rate(http_server_request_duration_seconds_count{job=\"$job\", http_route!=\"/healthz\"}[$__rate_interval])), \"http_route\", \"(no route)\", \"http_route\", \"\")" }]
     },
     {
       "type": "timeseries", "title": "Responses per second, by status code", "id": 12, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
@@ -104,25 +104,28 @@
         "expr": "sum by (http_response_status_code) (rate(http_server_request_duration_seconds_count{job=\"$job\", http_route!=\"/healthz\"}[$__rate_interval]))" }]
     },
     {
-      "type": "timeseries", "title": "Latency p50 and p95, by route", "id": 13, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "type": "timeseries", "title": "Latency p50, p95 and p99 (all routes)", "id": 13, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 }, "interval": "15m",
+      "description": "Per 15 minutes with requests, not counting /healthz. Gaps are times without traffic.",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
-      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 0, "spanNulls": true } }, "overrides": [] },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 0, "spanNulls": false, "showPoints": "always", "pointSize": 4 } }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "p95 {{http_route}}",
-          "expr": "histogram_quantile(0.95, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{job=\"$job\", http_route!=\"/healthz\"}[$__rate_interval])))" },
-        { "refId": "B", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "p50 {{http_route}}",
-          "expr": "histogram_quantile(0.5, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{job=\"$job\", http_route!=\"/healthz\"}[$__rate_interval])))" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "p99",
+          "expr": "histogram_quantile(0.99, sum by (le) (increase(http_server_request_duration_seconds_bucket{job=\"$job\", http_route!=\"/healthz\"}[$__interval])))" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "p95",
+          "expr": "histogram_quantile(0.95, sum by (le) (increase(http_server_request_duration_seconds_bucket{job=\"$job\", http_route!=\"/healthz\"}[$__interval])))" },
+        { "refId": "C", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "p50",
+          "expr": "histogram_quantile(0.5, sum by (le) (increase(http_server_request_duration_seconds_bucket{job=\"$job\", http_route!=\"/healthz\"}[$__interval])))" }
       ]
     },
     {
-      "type": "timeseries", "title": "Vote rate limiter decisions", "id": 14, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "type": "timeseries", "title": "Vote rate limiter decisions (per hour)", "id": 14, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 }, "interval": "1h",
       "description": "acquired = allowed; endpoint_limiter or global_limiter = rejected with 429; request_canceled = the client gave up while waiting.",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
-      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "min": 0, "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1, "stacking": { "mode": "normal" } } }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{aspnetcore_rate_limiting_result}}",
-        "expr": "sum by (aspnetcore_rate_limiting_result) (rate(aspnetcore_rate_limiting_requests_total{job=\"$job\"}[$__rate_interval]))" }]
+        "expr": "round(sum by (aspnetcore_rate_limiting_result) (increase(aspnetcore_rate_limiting_requests_total{job=\"$job\"}[$__interval])))" }]
     },
 
     { "type": "row", "title": "Jokes (per hour)", "id": 20, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 } },
@@ -213,7 +216,7 @@
     },
     {
       "type": "timeseries", "title": "Exceptions and garbage collections", "id": 43, "gridPos": { "h": 8, "w": 8, "x": 16, "y": 41 },
-      "description": "Exceptions thrown per minute by type (handled ones too), and garbage collections per minute.",
+      "description": "Exceptions thrown per minute by type, handled ones included: CredentialUnavailableException is DefaultAzureCredential trying its sign-in options in turn, and the socket, IO and canceled ones are mostly connections closing. A new type, or many more of one, is worth a look. Plus garbage collections per minute.",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 1, "min": 0, "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 0 } }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
@@ -228,8 +231,9 @@
     { "type": "row", "title": "Database and outbound calls", "id": 50, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 49 } },
     {
       "type": "timeseries", "title": "SQL commands: per minute and p95 duration", "id": 51, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 50 },
+      "description": "Gaps in the duration are times without SQL commands (the scheduler and visitors cause them).",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
-      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 0, "spanNulls": true } },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 0, "spanNulls": false, "showPoints": "auto" } },
         "overrides": [{ "matcher": { "id": "byName", "options": "p95 duration" }, "properties": [{ "id": "unit", "value": "s" }, { "id": "custom.axisPlacement", "value": "right" }] }] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [
@@ -241,7 +245,7 @@
     },
     {
       "type": "timeseries", "title": "Outbound HTTP calls per minute, by host", "id": 52, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 50 },
-      "description": "The app's calls out: the AI endpoint, Entra ID sign-ins, Key Vault, Grafana.",
+      "description": "The app's calls out: the AI endpoint, Grafana (telemetry), and localhost, which is Container Apps' managed identity endpoint (the app's sign-in tokens).",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 1, "min": 0, "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "stacking": { "mode": "normal" } } }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
