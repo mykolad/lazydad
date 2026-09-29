@@ -1280,10 +1280,11 @@ az sql db delete -g $RG -s $S -n lazydad-db-restored --yes
 **3b. For real: swap it in.** Close the Query editor first. A database with open connections can't be renamed, so
 the prod app stops for the swap: deactivating its only revision stops its replicas, and `lazydad.fyi` answers with
 errors for those few minutes. The lock and the long-term retention belong to the database, not its name, so they move
-to the new `lazydad-db` by hand. Then Deploy Master applies any migrations the backup predates (a restart wouldn't:
-migrations only run in the pipeline) and rolls out a fresh revision. It needs exactly one revision serving traffic,
-hence the reactivation before it. Keep the old database until you're sure, then delete it: its own point-in-time
-backups go with it, its long-term ones stay for their retention.
+to the new `lazydad-db` by hand. A backup can predate migrations, and the app never migrates by itself (the pipeline
+does, staging first, minutes later), so apply them while the app is still stopped: from an up-to-date checkout of
+`master`, with the pinned EF Core tool, as the server's Entra admin (your `az login`, from an IP the firewall allows).
+The reactivated revision then starts on the current schema; no deploy is needed. Keep the old database until you're
+sure, then delete it: its own point-in-time backups go with it, its long-term ones stay for their retention.
 
 ```bash
 REV=$(az containerapp show -n lazydad-app -g $RG --query properties.latestReadyRevisionName -o tsv)
@@ -1297,8 +1298,12 @@ az sql db ltr-policy set -g $RG -s $S -n lazydad-db --weekly-retention P7W --mon
 az lock create -n lazydad-db-no-delete -t CanNotDelete -g $RG --namespace Microsoft.Sql \
   --parent servers/$S --resource-type databases --resource lazydad-db \
   --notes "The jokes and votes. Remove it only to restore (runbook section 12) or to retire the app." -o none
+# The restored database gets master's migrations (none, if the backup is recent enough), while nothing uses it.
+git switch master && git pull
+dotnet tool restore
+dotnet ef database update --project src/LazyDad.Data --startup-project src/LazyDad.Api \
+  --connection "Server=tcp:$S.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60"
 az containerapp revision activate -n lazydad-app -g $RG --revision $REV -o none
-gh workflow run deploy-master.yml -R $REPO --ref master   # migrations, then a new revision
 ```
 
 <details><summary>PowerShell 7</summary>
@@ -1315,14 +1320,18 @@ az sql db ltr-policy set -g $RG -s $S -n lazydad-db --weekly-retention P7W --mon
 az lock create -n lazydad-db-no-delete -t CanNotDelete -g $RG --namespace Microsoft.Sql `
   --parent "servers/$S" --resource-type databases --resource lazydad-db `
   --notes 'The jokes and votes. Remove it only to restore (runbook section 12) or to retire the app.' -o none
+# The restored database gets master's migrations (none, if the backup is recent enough), while nothing uses it.
+git switch master; git pull
+dotnet tool restore
+dotnet ef database update --project src/LazyDad.Data --startup-project src/LazyDad.Api `
+  --connection "Server=tcp:$S.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60"
 az containerapp revision activate -n lazydad-app -g $RG --revision $REV -o none
-gh workflow run deploy-master.yml -R $REPO --ref master   # migrations, then a new revision
 ```
 
 </details>
 
-Once Deploy Master is green, check `https://lazydad.fyi/status`: the new revision's startup tick saves jokes into the
-restored database.
+Then check `https://lazydad.fyi/status`: the reactivated revision's startup tick saves jokes into the restored
+database.
 
 Restoring after a region outage is the same, except the copy lands on a server in another region (created as in
 section 4), so the app's connection string and Deploy Environment's `SQL_SERVER` need that server's name.
