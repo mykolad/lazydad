@@ -140,33 +140,42 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
   - The app raises the SQL connect timeout to 60 s (`SqlConnectionStrings.WithResumeTimeout`), so a login waits
     for a paused database to resume instead of timing out after the default 15 s.
   - **Entra-only authentication** (no SQL logins at all; runbook sections 4 and 8). Database
-    users: `lazydad-app` (read/write) and `lazydad-github-cd` (ddladmin, read/write) in `lazydad-db`;
-    `lazydad-app-staging` and `lazydad-github-staging` likewise in `lazydad-db-staging`. The apps connect as their
-    system-assigned identities (`Authentication=Active Directory Managed Identity`), migrations as
-    the environment's deploy identity, you as the server's Entra admin.
+    users: `lazydad-production` (read/write) and `lazydad-github-cd` (ddladmin, read/write) in `lazydad-db`;
+    `lazydad-app-staging` and `lazydad-github-staging` likewise in `lazydad-db-staging`. Both prod apps connect as one
+    user-assigned identity, `lazydad-production` (`Authentication=Active Directory Managed Identity;User Id=<its client
+    id>`, and `AZURE_CLIENT_ID` for `DefaultAzureCredential`); staging as its system-assigned identity; migrations as
+    the environment's deploy identity; you as the server's Entra admin.
 - **Migrations** run in Deploy Master as an EF migration bundle, against staging and then prod (see below).
   The app never migrates on startup.
 - **Azure OpenAI** (`lazydad-openai-resource`, AI Services, eastus2): each `LlmModels[].Model` in config is the deployment name. Non-OpenAI models
   deployed there (e.g. `Kimi-K2.5`, a thinking model: 10–60 s and ~3–4k output tokens per joke) are called through the same Azure OpenAI chat API.
-  **Key authentication is off** (`disableLocalAuth`; runbook section 5): both apps call it as their
-  system-assigned identities with the "Foundry User" role, so `LlmProviders:AzureOpenAI:ApiKey` is empty everywhere.
+  **Key authentication is off** (`disableLocalAuth`; runbook section 5): the apps call it as their
+  managed identities (`lazydad-production`, staging's own) with the "Foundry User" role, so
+  `LlmProviders:AzureOpenAI:ApiKey` is empty everywhere.
   `ROLLBACK_MIN_COMMIT` (a repository variable, #30's merge commit) keeps Roll Back from choosing older images, which
   only knew the key.
-- **Container Apps** (environment `lazydad-cae`, Consumption, 0.5 vCPU / 1 GiB):
-  - `lazydad-app` (prod): **exactly one replica** (min = max = 1), no health probes yet.
-    Scaling out (issue #6) is safe for joke generation (the scheduler lease); the vote rate limit is per replica.
+- **Container Apps** (Consumption, 0.5 vCPU / 1 GiB each), production in **two regions**:
+  - `lazydad-app` (prod, environment `lazydad-cae`, West Europe) and `lazydad-app-swedencentral` (prod, environment
+    `lazydad-cae-swedencentral`, Sweden Central, next to the database): **exactly one replica each** (min = max = 1), no
+    health probes yet. Same image, same settings, same database; the scheduler lease makes one of them run each batch
+    (each app's startup tick still runs). The vote rate limit is per replica.
     Public address: **`lazydad.fyi`**, through Cloudflare's proxy (Free plan: DDoS protection, bot settings, a rate-limit
-    rule on votes), with a Cloudflare Origin CA certificate on the environment and the app's ingress limited to
-    Cloudflare's IPv4 ranges (runbook section 10). The ranges also live in `appsettings.json` (`Cloudflare:IpRanges`).
+    rule on votes) to **Azure Traffic Manager** (`lazydad-traffic`, weighted 1:1, HTTPS health checks on each app's
+    `/healthz`), which leaves out an app that stops answering (runbook section 10). The Cloudflare Origin CA certificate
+    is in Key Vault (`lazydad-fyi-origin`), and both environments read it as `lazydad-production`.
+    The apps' ingress admits only Cloudflare's IPv4 ranges and Traffic Manager's probe addresses (the
+    `AzureTrafficManager` service tag, about 210): without those, the health checks would get `403` whether the app runs
+    or not. Cloudflare's ranges also live in `appsettings.json` (`Cloudflare:IpRanges`).
     The switch is the `production` environment's `CLOUDFLARE_ONLY_INGRESS` variable: while it's `true`, every deploy
-    creates the `cloudflare-*` ingress rules if missing and keeps them in sync with Cloudflare's API
-    (`tools/cloudflare-ranges.sh`: one PATCH of the whole rule list, at most 3 removals at once; skipped if the API
-    can't be read); otherwise the deploy removes them. The weekly **Check Cloudflare Ranges** workflow opens an issue when the
-    `appsettings.json` list no longer matches.
-  - `lazydad-app-staging`: 0–1 replicas (scales to zero when idle). Calls the real LLMs.
+    creates the `cloudflare-*` and `trafficmanager-*` ingress rules if missing and keeps them in sync with both lists
+    (`tools/cloudflare-ranges.sh`: one PATCH of the whole rule list, at most 3 Cloudflare / 50 Traffic Manager removals
+    at once; skipped if either list can't be read; the service tag needs `lazydad-github-cd`'s "LazyDad Service Tag
+    Reader" role); otherwise the deploy removes them. The weekly **Check Cloudflare Ranges** workflow opens an issue
+    when the `appsettings.json` list no longer matches.
+  - `lazydad-app-staging` (environment `lazydad-cae`): 0–1 replicas (scales to zero when idle). Calls the real LLMs.
     **Ingress allows listed IPs only** (the owner's `home` rule; Deploy Master adds its runner temporarily),
     so stray visitors can't wake it and spend LLM tokens.
-  - Both pull from ACR with the `lazydad-acr-pull` managed identity; the ACR admin user is disabled.
+  - All pull from ACR with the `lazydad-acr-pull` managed identity; the ACR admin user is disabled.
   - **Two repositories, repository permissions** (the registry's "RBAC Registry + ABAC Repository Permissions" mode):
     every build lands in `lazydad-preview`, which staging runs from and which is all `lazydad-github-staging` can
     write; production runs only from `lazydad`, which only `lazydad-github-cd` can write. Production's deploy copies
@@ -180,26 +189,30 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
   e.g. `v2026.09.25 e33d99a`, linked to the commit (`vdev (local build)` otherwise).
   Deploys remove any `App__Version` container setting, so the image is the only source.
 - `/healthz` returns `{status, version, revision}`: `version` is the image commit (short SHA),
-  `revision` is the platform's `CONTAINER_APP_REVISION`, unique per rollout. Smoke tests wait for both.
+  `revision` is the platform's `CONTAINER_APP_REVISION`, unique per rollout. Smoke tests wait for both; Traffic
+  Manager's health checks expect its `200`.
 - `/status` returns the version, revision and this process's last scheduler tick per language
   (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details).
-- **Monitoring:** a Grafana Cloud stack (free tier, `eu-north`) gets both apps' telemetry, one service per app
-  (`job="lazydad-app"`, `"lazydad-app-staging"`), with the uptime check and email alerts on prod. The dashboard is
+- **Monitoring:** a Grafana Cloud stack (free tier, `eu-north`) gets all three apps' telemetry, one service per app
+  (`job="lazydad-app"`, `"lazydad-app-swedencentral"`, `"lazydad-app-staging"`), with the uptime check and email alerts
+  on prod (per app, plus `LazyDadAppNotReporting` when an app sends nothing for 10 minutes). The dashboard is
   `infra/grafana/lazydad-dashboard.json` and the alert rules `infra/grafana/lazydad-alert-rules.yaml` (both imported by hand; keep them in sync with metric and label names).
   `SchedulerMetrics.Initialize` starts every scheduler series at 0 when the scheduler starts, and `ExportNowAsync`
   sends those zeros before the first tick (the regular export is once a minute), so `increase()` also counts the first
   tick after a replica start. Request panels leave out `/healthz` (the uptime checks), which only traces filter. The OTLP credentials are
-  Key Vault secrets that the apps reference with their system-assigned identities: `OtlpHeaders` for prod, and
+  Key Vault secrets that the apps reference with their identities: `OtlpHeaders` for prod (read as `lazydad-production`), and
   `OtlpHeadersStaging`, a separate Grafana token, for staging (runbook section 11). Each app can read only its own
   secret, so branch previews (which run on staging) can't read prod's token. Console logs also stay in the environment's Log Analytics workspace (30 days,
   daily cap) as the fallback.
 - **Setup runbook:** `infra/deployment-setup.md` (bash, with a PowerShell 7 version of each block) creates everything behind Deploy Master from an
   empty subscription, in order, with managed identities and OIDC throughout (no database password, API
-  key, connection-string secret or GitHub secret; the only credentials kept are the Grafana tokens in Key Vault), plus the operations (token rotation, Cloudflare's ranges, manual
+  key, connection-string secret or GitHub secret; the only credentials kept are in Key Vault: the Grafana tokens and the origin
+  certificate), plus the operations (token rotation, the ingress ranges, taking a region out, manual
   rollback). That includes the weekly registry purge task (`purge-old-images`, in both repositories, with its own
   identity: keeps the last 30 days, 10 older
-  images, and what each environment runs: revisions are pinned to the image digest, and the manifest
-  stays tagged `deployed-<env>` / `deploying-<env>` in the environment's repository, applied in two phases around each rollout; `previous-<env>`
+  images, and what each app runs: revisions are pinned to the image digest, and the manifest
+  stays tagged `deployed-<env>` / `deploying-<env>` (`<env>-swedencentral` for production's second app) in the environment's
+  repository, applied in two phases around each rollout; `previous-<env>`
   keeps what served before the latest rollout from the purge, for a manual rollback).
 
 ## Building and testing
@@ -243,23 +256,28 @@ Its second job, **`clean-database-migrations`**, runs against a throwaway SQL Se
 1. **build** (the reusable `.github/workflows/build-image.yml`, **Build Image**) builds the image
    `lazydad-preview:<short-sha>`, pushes it to ACR (outputting its digest), and builds the EF migration bundle
    (`dotnet-ef`, pinned in `dotnet-tools.json`).
-2. **staging** then **production**: the same reusable `.github/workflows/deploy-environment.yml` (**Deploy Environment**) in each
-   environment. It opens the SQL firewall for the runner, runs the bundle, closes the firewall,
+2. **staging**, then **production** (`lazydad-app`, which migrates) and then **production-swedencentral**
+   (`lazydad-app-swedencentral`, the same database, so no migrations; only after the first passed): the same reusable
+   `.github/workflows/deploy-environment.yml` (**Deploy Environment**) for each app. It opens the SQL firewall for the
+   runner, runs the bundle, closes the firewall,
    for production copies the image into `lazydad` (same digest, checked), protects the running and the new image with
-   tags in the environment's repository, rolls the app to the image **by digest**
+   tags in the environment's repository (per app: the `instance` input adds `-swedencentral`), rolls the app to the
+   image **by digest**
    (its version metadata is baked in; any old `App__Version` setting is removed), moves
-   `deployed-<environment>` to it,
+   `deployed-<environment>` to it, syncs the ingress rules (production's Cloudflare and Traffic Manager ranges),
    allows the runner through the app's IP
-   restrictions if it has any (staging's `home` rule, production's Cloudflare ranges), and runs `tests/LazyDad.SmokeTests`
+   restrictions if it has any (staging's `home` rule, production's ranges), and runs `tests/LazyDad.SmokeTests`
    against it. If they fail, it restarts the new revision (a fresh startup tick) and runs them once more,
    counting only the restarted process (`/status` reports a per-process id; the retry passes the old one as `SMOKE_NOT_PROCESS`).
-3. **roll-back**, only if production failed **after its new revision took traffic**: the reusable
-   `.github/workflows/roll-back.yml` (**Roll Back**) puts back the image that served before: the digest the production
-   job read from its own revisions before the rollout (a job output, not the movable `previous-<environment>` tag).
-   It does nothing if production never switched to the new revision, or if the same image served before. It doesn't roll back migrations, and
-   the run still ends as failed, so GitHub notifies you.
+3. **roll-back** / **roll-back-swedencentral**, only if a production app failed **after its new revision took
+   traffic**: the reusable `.github/workflows/roll-back.yml` (**Roll Back**), once per app, puts back the image that
+   served before: the digest that app's job read from its own revisions before the rollout (a job output, not the
+   movable `previous-<environment>` tag). Both apps serve `lazydad.fyi`, so they go back together: West Europe also when
+   only Sweden Central failed. Each does nothing if its app never switched to the new revision, or if the same image
+   served before. It doesn't roll back migrations, and the run still ends as failed, so GitHub notifies you.
 
-Promotion is automatic: production runs only if staging's smoke tests pass. Azure login is
+Promotion is automatic: production runs only if staging's smoke tests pass, Sweden Central only if West Europe's
+pass. Azure login is
 OIDC through a managed identity per environment, each trusted via GitHub's immutable subject for its environment
 only (`repo:mykolad@<id>/lazydad@<id>:environment:<env>`), with `AZURE_CLIENT_ID` set per environment:
 `lazydad-github-cd` deploys production, `lazydad-github-staging` staging and the builds (runbook section 6). The
@@ -300,16 +318,17 @@ Build Image and Deploy Environment steps, smoke tests included, against **stagin
 ### Roll Back Production
 
 `.github/workflows/roll-back-production.yml` (**Roll Back Production**) is manual too: **Actions → Roll Back
-Production → Run workflow** on `master`. It puts production back on an earlier master build without rebuilding.
-- **Which version:** the *version* input (the short SHA shown on the page). Left empty, it's the image of the
-  most recent earlier revision that ran a different image, i.e. "undo the last deploy".
-- **What it runs:** the reusable Roll Back workflow (shared with Deploy Master's automatic rollback). Its
+Production → Run workflow** on `master`. It puts both production apps back on an earlier master build without
+rebuilding, side by side.
+- **Which version:** the *version* input (the short SHA shown on the page). Left empty, it's, for each app, the image
+  of its most recent earlier revision that ran a different image, i.e. "undo the last deploy".
+- **What it runs:** the reusable Roll Back workflow (shared with Deploy Master's automatic rollback), once per app. Its
   resolve job finds the image's digest and reads the commit from the image's label.
-  Then production runs the same Deploy Environment steps (protection tags, rollout by digest, that commit's
+  Then the app runs the same Deploy Environment steps (protection tags, rollout by digest, that commit's
   smoke tests), **without migrations**. The database keeps its current schema, so the older code must work
   with it (additive migrations do).
-- **What it refuses:** images the purge has deleted, images built before the version was baked in (#17),
-  commits that aren't on master, and the image production already runs.
+- **What it refuses:** images the purge has deleted, images built before the version was baked in (#17), images no
+  production app's revisions ran, commits that aren't on master, and the image the app already runs.
 - **The next Deploy Master run rolls forward again.** To stay on the old version, revert on master.
 - Its resolve job logs in through the `production` environment, so each rollback shows an extra
   production deployment in GitHub.

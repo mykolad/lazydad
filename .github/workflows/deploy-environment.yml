@@ -1,7 +1,7 @@
 name: Deploy Environment
 
-# Reusable: migrate the environment's DB, roll the app to the image, then smoke-test it.
-# Called by Deploy Master (staging, then production), Deploy Branch to Staging and Roll Back
+# Reusable: migrate the environment's DB, roll one app to the image, then smoke-test it.
+# Called by Deploy Master (staging, then each of production's apps), Deploy Branch to Staging and Roll Back
 # Production, so every environment and every deploy path runs exactly the same steps.
 on:
   workflow_call:
@@ -30,6 +30,14 @@ on:
         description: Apply the EF migration bundle before rolling out (branch deploys to staging opt in)
         required: true
         type: boolean
+      instance:
+        description: >-
+          Which of the environment's apps, for the image tags that keep what it runs from the purge: empty for the
+          environment's first app (deployed-<environment>, ...), a region for another one (deployed-<environment>-<region>),
+          so each app's running image stays tagged.
+        required: false
+        default: ''
+        type: string
       revision-prefix:
         description: >-
           Starts the revision suffix, followed by the run ID and attempt: "r" for deploys, "rb" for
@@ -56,10 +64,13 @@ env:
   # production's deploy identity can write: it copies the digest staging tested (see "Put the image into ...").
   # So a previewed branch, which can write lazydad-preview only, can't touch what production runs or its tags.
   REPOSITORY: ${{ inputs.environment == 'production' && 'lazydad' || 'lazydad-preview' }}
+  # The protection tags' suffix: production's two apps can briefly run different images (one rolled out, the other
+  # not yet), so each has its own deployed-/previous-/deploying- tags.
+  TARGET: ${{ inputs.environment }}${{ inputs.instance != '' && format('-{0}', inputs.instance) || '' }}
 
 jobs:
   deploy:
-    name: deploy (${{ inputs.environment }})
+    name: deploy (${{ inputs.app-name }})
     runs-on: ubuntu-latest
     # Up to about 17 minutes per smoke-test attempt if every wait times out, and there can be two.
     timeout-minutes: 45
@@ -186,10 +197,10 @@ jobs:
             *) echo "::warning::The serving revision isn't pinned to a digest ($serving); an automatic rollback won't have a target." ;;
           esac
           # Fatal on failure (bash -e): never move the candidate tag while the serving image is unprotected.
-          retag "$serving" "$REGISTRY/$REPOSITORY:deployed-${{ inputs.environment }}"
+          retag "$serving" "$REGISTRY/$REPOSITORY:deployed-$TARGET"
           # What served before this rollout, kept from the purge so a manual rollback can still return to it.
-          retag "$serving" "$REGISTRY/$REPOSITORY:previous-${{ inputs.environment }}"
-          retag "$REGISTRY/$REPOSITORY@${{ inputs.digest }}" "$REGISTRY/$REPOSITORY:deploying-${{ inputs.environment }}"
+          retag "$serving" "$REGISTRY/$REPOSITORY:previous-$TARGET"
+          retag "$REGISTRY/$REPOSITORY@${{ inputs.digest }}" "$REGISTRY/$REPOSITORY:deploying-$TARGET"
 
       - name: Roll out ${{ inputs.tag }}
         id: app
@@ -217,20 +228,22 @@ jobs:
           echo "url=https://$fqdn" >> "$GITHUB_OUTPUT"
 
       # Phase 2: the new digest now runs, so it becomes deployed-<env> (it was pulled in phase 1).
-      - name: Tag the image as deployed-${{ inputs.environment }}
+      - name: Tag the image as deployed-${{ env.TARGET }}
         run: |
-          dst="$REGISTRY/$REPOSITORY:deployed-${{ inputs.environment }}"
+          dst="$REGISTRY/$REPOSITORY:deployed-$TARGET"
           docker tag "$REGISTRY/$REPOSITORY@${{ inputs.digest }}" "$dst"
           docker push -q "$dst"
 
-      # Behind Cloudflare (runbook section 10), the app's ingress admits only Cloudflare's IPv4 ranges. The environment's
-      # CLOUDFLARE_ONLY_INGRESS variable is the switch: "true" (production, once lazydad.fyi works through Cloudflare)
-      # makes every deploy create those rules if there are none and keep them current with Cloudflare's published list
-      # (one update of the whole rule list, so it changes at once); anything else removes them (staging never has it).
-      # Not fatal: if Cloudflare's list can't be read, the rules stay as they are, and the weekly Check Cloudflare Ranges
-      # run notices a real change. If the update itself fails, the warning says so and how to look at the rules. A
-      # rollback to a commit from before the script skips this.
-      - name: Sync Cloudflare's ranges on the app's ingress
+      # Behind Cloudflare (runbook section 10), the app's ingress admits only Cloudflare's IPv4 ranges, and the addresses
+      # Traffic Manager's health checks come from (so they reach /healthz and can take a region out when its app is
+      # down). The environment's CLOUDFLARE_ONLY_INGRESS variable is the switch: "true" (production, once lazydad.fyi
+      # works through Cloudflare) makes every deploy create those rules if there are none and keep them current with
+      # both published lists (one update of the whole rule list, so it changes at once); anything else removes them
+      # (staging never has it). Not fatal: if either list can't be read, the rules stay as they are, and the weekly Check
+      # Cloudflare Ranges run notices a real change of Cloudflare's. If the update itself fails, the warning says so and
+      # how to look at the rules. A rollback to a commit from before the script skips this; one from before Traffic
+      # Manager keeps the trafficmanager-* rules as they are.
+      - name: Sync Cloudflare's and Traffic Manager's ranges on the app's ingress
         env:
           MODE: ${{ vars.CLOUDFLARE_ONLY_INGRESS == 'true' && 'on' || 'off' }}
         run: |
@@ -242,11 +255,12 @@ jobs:
           # ("rb" instead of "r") must not reuse, and so overwrite, rules an earlier sync added.
           bash tools/cloudflare-ranges.sh sync "${{ inputs.app-name }}" "$RESOURCE_GROUP" \
             "${{ inputs.revision-prefix }}${{ github.run_id }}-${{ github.run_attempt }}" "$MODE" ||
-            echo "::warning::Couldn't finish syncing Cloudflare's ranges on ${{ inputs.app-name }}'s ingress (CLOUDFLARE_ONLY_INGRESS: $MODE). Its rules may be partly changed; see the log above, and check them with: az containerapp ingress access-restriction list -n ${{ inputs.app-name }} -g $RESOURCE_GROUP -o table"
+            echo "::warning::Couldn't finish syncing Cloudflare's and Traffic Manager's ranges on ${{ inputs.app-name }}'s ingress (CLOUDFLARE_ONLY_INGRESS: $MODE). Its rules may be partly changed; see the log above, and check them with: az containerapp ingress access-restriction list -n ${{ inputs.app-name }} -g $RESOURCE_GROUP -o table"
 
       # With any Allow rule, Container Apps denies every other address: staging lists the owner's IP, and production
-      # behind Cloudflare lists Cloudflare's ranges (runbook section 10). Then allow this runner only for the smoke
-      # tests, which call the app's own address. Ingress rules are app-level config, so this doesn't create a revision.
+      # behind Cloudflare lists Cloudflare's and Traffic Manager's ranges (runbook section 10). Then allow this runner
+      # only for the smoke tests, which call the app's own address. Ingress rules are app-level config, so this doesn't
+      # create a revision.
       - name: Allow this runner through the app's IP restrictions
         id: ingress
         run: |
@@ -307,7 +321,7 @@ jobs:
         if: ${{ always() }}
         run: |
           {
-            echo "### ${{ inputs.environment }}"
+            echo "### ${{ inputs.app-name }} (${{ inputs.environment }})"
             echo "- App: \`${{ inputs.app-name }}\`, image \`${{ env.REPOSITORY }}:${{ inputs.tag }}\` pinned to \`${{ inputs.digest }}\`, revision \`${{ steps.app.outputs.revision }}\`"
             echo "- URL: ${{ steps.app.outputs.url }}"
             echo "- Result: ${{ job.status }}"

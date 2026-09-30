@@ -5,7 +5,7 @@ $PSNativeCommandUseErrorActionPreference = $true
 
 $ACR_NAME   = "lazydadacr"
 $RG         = "lazydad-rg"
-$APP_NAME   = "lazydad-app"
+$APP_NAMES  = "lazydad-app", "lazydad-app-swedencentral"   # production runs in two regions
 $ACR_SERVER = az acr show --name $ACR_NAME --query loginServer -o tsv
 
 az acr login --name $ACR_NAME
@@ -19,8 +19,12 @@ docker build -t "$ACR_SERVER/$TAG" `
     --build-arg SOURCE_URL=https://github.com/mykolad/lazydad `
     .
 docker push "$ACR_SERVER/$TAG"
-az containerapp update --name $APP_NAME --resource-group $RG --image "$ACR_SERVER/$TAG" --remove-env-vars App__Version
+foreach ($APP_NAME in $APP_NAMES) {
+    az containerapp update --name $APP_NAME --resource-group $RG --image "$ACR_SERVER/$TAG" --remove-env-vars App__Version
+}
 
 Write-Host ""
 Write-Host "Deployed $TAG"
-Write-Host "URL: https://$(az containerapp show --name $APP_NAME --resource-group $RG --query properties.configuration.ingress.fqdn -o tsv)"
+foreach ($APP_NAME in $APP_NAMES) {
+    Write-Host "URL: https://$(az containerapp show --name $APP_NAME --resource-group $RG --query properties.configuration.ingress.fqdn -o tsv)"
+}
