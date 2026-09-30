@@ -12,7 +12,10 @@ public class SchedulerStatus
 {
     private readonly ConcurrentDictionary<string, TickStatus> lastTicks = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTime> nextTicks = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentQueue<SavedJoke> savedJokes = new();
+    // The models' saves run in parallel: adding, trimming and reading share one lock, so the list never holds more or
+    // fewer than the latest SavedJokesKept.
+    private readonly Queue<SavedJoke> savedJokes = new();
+    private readonly Lock savedJokesLock = new();
 
     public void Record(TickStatus tick) => lastTicks[tick.Language] = tick;
 
@@ -33,14 +36,23 @@ public class SchedulerStatus
     /// </summary>
     public void RecordSavedJoke(SavedJoke joke)
     {
-        savedJokes.Enqueue(joke);
-        while (savedJokes.Count > SavedJokesKept && savedJokes.TryDequeue(out _))
+        lock (savedJokesLock)
         {
+            savedJokes.Enqueue(joke);
+            while (savedJokes.Count > SavedJokesKept)
+                savedJokes.Dequeue();
         }
     }
 
     /// <summary>The jokes this process saved most recently, newest first (at most <see cref="SavedJokesKept"/>).</summary>
-    public IReadOnlyList<SavedJoke> SavedJokes => savedJokes.Reverse().ToList();
+    public IReadOnlyList<SavedJoke> SavedJokes
+    {
+        get
+        {
+            lock (savedJokesLock)
+                return savedJokes.Reverse().ToList();
+        }
+    }
 
     public const int SavedJokesKept = 20;
 }

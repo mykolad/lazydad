@@ -55,4 +55,22 @@ public class SchedulerStatusTests
 
         Assert.Equal(Enumerable.Range(6, SchedulerStatus.SavedJokesKept).Reverse(), status.SavedJokes.Select(j => j.Id));
     }
+
+    [Fact]
+    public void SavedJokes_KeepExactlyTheLatest_WhenSavedInParallel()
+    {
+        var status = new SchedulerStatus();
+        var reads = new List<int>();
+
+        // Models save in parallel; readers (/status) can ask at any moment.
+        Parallel.For(1, 2001, id =>
+        {
+            status.RecordSavedJoke(new SavedJoke("Ukrainian", id, "fast", DateTime.UtcNow));
+            var count = status.SavedJokes.Count;
+            lock (reads) reads.Add(count);
+        });
+
+        Assert.Equal(SchedulerStatus.SavedJokesKept, status.SavedJokes.Count);
+        Assert.All(reads, count => Assert.InRange(count, 1, SchedulerStatus.SavedJokesKept));
+    }
 }
