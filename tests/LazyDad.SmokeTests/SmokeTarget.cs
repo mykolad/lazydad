@@ -11,8 +11,8 @@ namespace LazyDad.SmokeTests;
 /// <item><c>SMOKE_EXPECTED_VERSION</c>: the commit the new revision must report on /healthz.</item>
 /// <item><c>SMOKE_EXPECTED_REVISION</c>: the Container Apps revision /healthz and /status must report; unique
 /// per rollout, so neither a re-deploy of the same commit nor the draining revision can satisfy the checks.</item>
-/// <item><c>SMOKE_TICKS_AFTER</c>: an ISO 8601 time; /status ticks must have completed after it. The retry sets it just
-/// before restarting the revision, which keeps its name, so the old process's ticks can't satisfy the retried checks.</item>
+/// <item><c>SMOKE_TICKS_AFTER</c>: an ISO 8601 time; jokes on /status must have been saved after it. The retry sets it
+/// just before restarting the revision, which keeps its name, so the old process's jokes can't satisfy the retried checks.</item>
 /// </list>
 /// Missing SMOKE_BASE_URL fails loudly: a smoke run that silently tests nothing is worse than none.
 /// </summary>

@@ -278,7 +278,8 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         Assert.False(tick.Succeeded);
         Assert.Equal("InvalidOperationException", tick.Error);
         Assert.Empty(tick.Jokes);
-        Assert.Empty(saved);
+        // The joke was saved as soon as its model answered, before the leaderboard step failed, and it stays saved.
+        Assert.Equal("fast", Assert.Single(saved).Model);
 
         // Counted as failed, and the tick's trace is marked as an error. The leaderboard never ran.
         Assert.Equal(["Ukrainian/failed"], Measured(ticks, "language", "outcome"));
@@ -309,6 +310,33 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         var next = status.NextTickAt!.Value;
         Assert.Contains(next, new[] { TickSchedule.FirstDueAfterStartup(started, period), TickSchedule.FirstDueAfterStartup(DateTime.UtcNow, period) });
         Assert.Equal(0, next.Ticks % period.Ticks);
+    }
+
+    [Fact]
+    public async Task Tick_SavesEachJokeAsSoonAsItsModelAnswers_WithoutWaitingForTheSlowOne()
+    {
+        var slowReply = new TaskCompletionSource<ChatResponse>();
+        SetupModel("fast", () => Reply("Швидкий жарт"));
+        SetupModel("slow", () => slowReply.Task);
+        var scheduler = CreateScheduler(Ukrainian("fast", "slow"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        var deadline = DateTime.UtcNow + Timeout;
+        while (status.SavedJokes.Count == 0 && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+
+        // The slow model is still working, yet the fast one's joke is saved and listed on /status already.
+        var early = Assert.Single(status.SavedJokes);
+        Assert.Equal(("Ukrainian", "fast"), (early.Language, early.Model));
+        Assert.Equal(early.Id, Assert.Single(saved).Id);
+        Assert.Empty(status.LastTicks);
+
+        slowReply.SetResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "Повільний жарт")]));
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Equal(["fast", "slow"], status.SavedJokes.Select(j => j.Model).Order());
+        Assert.Equal(2, Assert.Single(status.LastTicks).Jokes.Count);
     }
 
     [Fact]

@@ -85,8 +85,8 @@ app.MapControllers();
 var appVersion = app.Services.GetRequiredService<IOptions<AppInfoOptions>>().Value.Version;
 var appRevision = app.Configuration["CONTAINER_APP_REVISION"] ?? "local";
 app.MapGet("/healthz", () => Results.Ok(new { status = "healthy", version = appVersion, revision = appRevision }));
-// What this process's scheduler did on its last tick per language (see SchedulerStatus).
-app.MapGet("/status", (SchedulerStatus status) => Results.Ok(new { version = appVersion, revision = appRevision, ticks = status.LastTicks }));
+// What this process's scheduler did: its last tick per language, and the jokes it saved most recently (see SchedulerStatus).
+app.MapGet("/status", (SchedulerStatus status) => Results.Ok(new { version = appVersion, revision = appRevision, ticks = status.LastTicks, savedJokes = status.SavedJokes }));
 
 // The page shell (wwwroot/index.html) depends only on the build and the configuration (the jokes
 // are fetched by app.js), so write it once, before the server starts listening.

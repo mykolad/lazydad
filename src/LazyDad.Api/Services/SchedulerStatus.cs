@@ -12,6 +12,7 @@ public class SchedulerStatus
 {
     private readonly ConcurrentDictionary<string, TickStatus> lastTicks = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTime> nextTicks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentQueue<SavedJoke> savedJokes = new();
 
     public void Record(TickStatus tick) => lastTicks[tick.Language] = tick;
 
@@ -25,6 +26,23 @@ public class SchedulerStatus
 
     /// <summary>The earliest scheduled tick of any language (the page's countdown), or <c>null</c> before the first is scheduled.</summary>
     public DateTime? NextTickAt => nextTicks.IsEmpty ? null : nextTicks.Values.Min();
+
+    /// <summary>
+    /// Records a joke as soon as this process saved it, during its tick, not at the tick's end. So a revision shows it
+    /// works (a model answered, the database took the joke) without waiting for its slowest model.
+    /// </summary>
+    public void RecordSavedJoke(SavedJoke joke)
+    {
+        savedJokes.Enqueue(joke);
+        while (savedJokes.Count > SavedJokesKept && savedJokes.TryDequeue(out _))
+        {
+        }
+    }
+
+    /// <summary>The jokes this process saved most recently, newest first (at most <see cref="SavedJokesKept"/>).</summary>
+    public IReadOnlyList<SavedJoke> SavedJokes => savedJokes.Reverse().ToList();
+
+    public const int SavedJokesKept = 20;
 }
 
 /// <param name="Leaderboard">
@@ -42,3 +60,6 @@ public sealed record TickStatus(
     string? Error);
 
 public sealed record GeneratedJoke(int Id, string Model);
+
+/// <param name="SavedAt">When this process saved it (UTC).</param>
+public sealed record SavedJoke(string Language, int Id, string Model, DateTime SavedAt);

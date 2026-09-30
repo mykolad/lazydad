@@ -43,4 +43,16 @@ public class SchedulerStatusTests
 
         Assert.Equal(early, status.NextTickAt);
     }
+
+    [Fact]
+    public void SavedJokes_AreNewestFirst_AndOnlyTheLatestAreKept()
+    {
+        var status = new SchedulerStatus();
+        var total = SchedulerStatus.SavedJokesKept + 5;
+
+        for (var id = 1; id <= total; id++)
+            status.RecordSavedJoke(new SavedJoke("Ukrainian", id, "fast", DateTime.UtcNow));
+
+        Assert.Equal(Enumerable.Range(6, SchedulerStatus.SavedJokesKept).Reverse(), status.SavedJokes.Select(j => j.Id));
+    }
 }

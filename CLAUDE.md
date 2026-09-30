@@ -59,8 +59,9 @@ tests/LazyDad.SmokeTests — smoke tests against a deployed app (run by Deploy M
   first regular one is at least half a period away, so a restart just before a due time doesn't add a second batch
   minutes later.
   Within a tick, all of a language's `LlmModels` are called in parallel, each in its
-  own DI scope (a `DbContext` must not be shared across concurrent calls); jokes are
-  then persisted sequentially.
+  own DI scope (a `DbContext` must not be shared across concurrent calls); each joke is
+  saved as soon as its model answers (in its own scope too), so a slow model delays only its own joke. `/status`
+  lists each saved joke right away; the judge runs once every model is done.
 - **Top-N leaderboard** (`TopJokes` config, `TopJokeService`, `TopJokes` table): after
   each tick a reasoning "judge" model (`TopJokes:Judge`, e.g. `gpt-6-sol`) sees the
   current top N plus the new jokes and returns the new ranking as a JSON-schema
@@ -266,9 +267,9 @@ secret (no `secrets: inherit`). Production only accepts deployments
 from `master`.
 
 The smoke tests check that `/healthz` reports the new version and revision, that the page and API are served,
-that the new revision itself saved a joke from every model configured in `appsettings.json` and ran
-the judge (it reports its own last tick on `/status`; DB rows alone could come from the draining
-revision), that those jokes are in `/jokes`, that
+that the new revision itself saved a joke in every enabled language, from any of its configured models (it lists each
+joke on `/status` as soon as it's saved; DB rows alone could come from the draining revision), that those jokes are in
+`/jokes`, that
 the leaderboard is populated with valid ranks, that `app.js`/`app.css`, `/jokes/feed` and `/jokes/summary`
 are served, and that the vote endpoint answers (with a no-op vote, so it never changes the counts).
 To run them against staging locally:
