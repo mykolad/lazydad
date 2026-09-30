@@ -21,7 +21,7 @@ plan).
 | 9 | GitHub environments and variables; the first deploy |
 | 10 | `lazydad.fyi` behind Cloudflare |
 | 11 | Monitoring and logs: Grafana Cloud |
-| 12 | Operations: checks, token rotation, Cloudflare's ranges, registry purge, manual rollback |
+| 12 | Operations: checks, token rotation, Cloudflare's ranges, registry purge, manual rollback, restoring the database |
 
 What it all looks like at the end:
 
@@ -33,7 +33,7 @@ What it all looks like at the end:
 | Container registry | `lazydadacr` | West Europe | Basic, admin user off |
 | Key Vault | `lazydad-kv` | West Europe | RBAC, soft delete 90 days, no purge protection |
 | SQL server | `lazydad-sql-swedencentral` | Sweden Central | Entra-only authentication, TLS 1.2 |
-| Database | `lazydad-db` | | Basic (5 DTU, 2 GB) |
+| Database | `lazydad-db` | | Basic (5 DTU, 2 GB); geo-redundant backups, long-term 7 weeks / 12 months; delete lock |
 | Database | `lazydad-db-staging` | | serverless, free offer |
 | AI Services | `lazydad-openai-resource` | East US 2 | S0, key authentication off |
 | Container App | `lazydad-app` (prod) | West Europe | 1 replica, `lazydad.fyi` |
@@ -243,7 +243,7 @@ az sql server firewall-rule create -g $RG -s lazydad-sql-swedencentral -n AllowL
   --start-ip-address $MY_IP --end-ip-address $MY_IP -o none
 
 az sql db create -g $RG -s lazydad-sql-swedencentral -n lazydad-db \
-  --service-objective Basic --max-size 2GB --backup-storage-redundancy Local -o none
+  --service-objective Basic --max-size 2GB --backup-storage-redundancy Geo -o none
 az sql db create -g $RG -s lazydad-sql-swedencentral -n lazydad-db-staging \
   --edition GeneralPurpose --compute-model Serverless --family Gen5 --capacity 1 --min-capacity 0.5 \
   --auto-pause-delay 60 --use-free-limit --free-limit-exhaustion-behavior AutoPause --backup-storage-redundancy Local -o none
@@ -266,7 +266,7 @@ az sql server firewall-rule create -g $RG -s lazydad-sql-swedencentral -n AllowL
   --start-ip-address $MY_IP --end-ip-address $MY_IP -o none
 
 az sql db create -g $RG -s lazydad-sql-swedencentral -n lazydad-db `
-  --service-objective Basic --max-size 2GB --backup-storage-redundancy Local -o none
+  --service-objective Basic --max-size 2GB --backup-storage-redundancy Geo -o none
 az sql db create -g $RG -s lazydad-sql-swedencentral -n lazydad-db-staging `
   --edition GeneralPurpose --compute-model Serverless --family Gen5 --capacity 1 --min-capacity 0.5 `
   --auto-pause-delay 60 --use-free-limit --free-limit-exhaustion-behavior AutoPause --backup-storage-redundancy Local -o none
@@ -279,6 +279,45 @@ az sql db create -g $RG -s lazydad-sql-swedencentral -n lazydad-db-staging `
 - **Staging is serverless on the free offer** (100k vCore-seconds a month, one database per subscription). It pauses
   when idle; if the free amount runs out it stays paused until next month, and staging deploys fail until then.
 - Deploys add a firewall rule for their runner while migrating, and remove it afterwards.
+
+**Prod's backups.** Azure SQL backs up every database by itself; these settings decide how long the backups are kept,
+where, and what protects them. Staging keeps the defaults (7 days, one datacenter): its data is test data.
+
+| Backup | Kept | Restores |
+|---|---|---|
+| Point-in-time (full weekly, differential every 12 hours (the setting: 12 or 24), transaction log about every 10 minutes) | 7 days (Basic's maximum) | Any second in those 7 days |
+| Long-term: each week's full backup | 7 weeks | That backup, even after the server is deleted |
+| Long-term: each month's first weekly full backup | 12 months | That backup, even after the server is deleted |
+
+- **Geo-redundant storage** (`--backup-storage-redundancy Geo` above): the backups are also copied to the paired
+  region, so a geo-restore into another region works while Sweden Central is down. Point-in-time backups up to the
+  database's size (2 GB) are free, and its 33 MB of data (2026-09-29) stays far below that; long-term backups cost a
+  few cents a month.
+- **A delete lock** on the database: deleting it, or the server or resource group with it, fails until the lock is
+  removed. It's on the database, not the server: there it would also block deleting the server's child resources,
+  which the deploys' temporary SQL firewall rules are.
+
+```bash
+az sql db ltr-policy set -g $RG -s lazydad-sql-swedencentral -n lazydad-db \
+  --weekly-retention P7W --monthly-retention P12M -o none
+az lock create -n lazydad-db-no-delete -t CanNotDelete -g $RG --namespace Microsoft.Sql \
+  --parent servers/lazydad-sql-swedencentral --resource-type databases --resource lazydad-db \
+  --notes "The jokes and votes. Remove it only to restore (runbook section 12) or to retire the app." -o none
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+az sql db ltr-policy set -g $RG -s lazydad-sql-swedencentral -n lazydad-db `
+  --weekly-retention P7W --monthly-retention P12M -o none
+az lock create -n lazydad-db-no-delete -t CanNotDelete -g $RG --namespace Microsoft.Sql `
+  --parent servers/lazydad-sql-swedencentral --resource-type databases --resource lazydad-db `
+  --notes 'The jokes and votes. Remove it only to restore (runbook section 12) or to retire the app.' -o none
+```
+
+</details>
+
+The first long-term backup appears within a week: it's the next weekly full backup. Section 12 has how to restore.
 
 ## 5. Azure OpenAI: AI Services without keys
 
@@ -1179,3 +1218,206 @@ lazydad:<tag> --query digest -o tsv`, then `--image lazydadacr.azurecr.io/lazyda
 --delete-enabled false`). An image built before #17 reports version `dev` unless you also pass `--set-env-vars
 App__Version=<tag>`; the next pipeline deploy removes that setting again. An image from before #30 (older than
 `ROLLBACK_MIN_COMMIT`) only knows API keys, so its model calls fail now that key authentication is off.
+
+### Restoring the database
+
+Section 4 sets up the backups. Every restore creates a **new database** on a server; it never overwrites one. You check
+the copy, then swap the names: the app's connection string and the deploys' migrations both use the name `lazydad-db`,
+so after the swap nothing else changes. Database users and roles come with the copy.
+
+| To get back | Restore from | Command |
+|---|---|---|
+| Any moment in the last 7 days | point-in-time backups | `az sql db restore --time` |
+| A week or month further back | long-term backups (weekly for 7 weeks, monthly for 12 months) | `az sql db ltr-backup restore` |
+| The database after Sweden Central is lost | geo-redundant backups (at most about an hour old) | `az sql db geo-backup restore`, to a server in another region |
+| A deleted database | its point-in-time backups, while the server exists | `az sql db restore --deleted-time` (see `az sql db list-deleted`) |
+
+**1. Restore a copy.** Point in time, e.g. just before a bad deploy (UTC):
+
+```bash
+S=lazydad-sql-swedencentral
+az sql db restore -g $RG -s $S -n lazydad-db --dest-name lazydad-db-restored \
+  --time 2026-09-29T08:30:00Z --service-objective Basic --backup-storage-redundancy Geo -o none
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$S = 'lazydad-sql-swedencentral'
+az sql db restore -g $RG -s $S -n lazydad-db --dest-name lazydad-db-restored `
+  --time 2026-09-29T08:30:00Z --service-objective Basic --backup-storage-redundancy Geo -o none
+```
+
+</details>
+
+Or a long-term backup: list them, then restore the one you want by its id.
+
+```bash
+az sql db ltr-backup list -l swedencentral -s $S -d lazydad-db --query "[].{time:backupTime, id:id}" -o table
+az sql db ltr-backup restore --backup-id "<id from the list>" --dest-database lazydad-db-restored \
+  --dest-server $S --dest-resource-group $RG --service-objective Basic --backup-storage-redundancy Geo -o none
+```
+
+*PowerShell 7: the same commands, with the query in single quotes.*
+
+A restore takes a few minutes for a database this size. It's billed as a second Basic database while it exists.
+
+**2. Check the copy**, in the portal's Query editor (as the Entra admin), next to the same query on `lazydad-db`:
+
+```sql
+SELECT (SELECT COUNT(*) FROM Jokes) AS jokes, (SELECT MAX(GeneratedAt) FROM Jokes) AS newest,
+       (SELECT SUM(Up + Down) FROM Jokes) AS votes, (SELECT COUNT(*) FROM TopJokes) AS top_jokes;
+```
+
+**3a. Just a test: delete the copy.**
+
+```bash
+az sql db delete -g $RG -s $S -n lazydad-db-restored --yes
+```
+
+*PowerShell 7: the same command.*
+
+**3b. For real: swap it in.** Close the Query editor first. A database with open connections can't be renamed, so
+the prod app stops for the swap: deactivating its only revision stops its replicas, and `lazydad.fyi` answers with
+errors for those few minutes. The lock and the long-term retention belong to the database, not its name, so they move
+to the new `lazydad-db` by hand. A backup can predate migrations, and the app never migrates by itself (the pipeline
+does, staging first, minutes later), so apply them while the app is still stopped: from an up-to-date checkout of
+`master`, with the pinned EF Core tool, as the server's Entra admin (your `az login`, from an IP the firewall allows).
+The reactivated revision then starts on the current schema; no deploy is needed. Keep the old database until you're
+sure, then delete it: its own point-in-time backups go with it, its long-term ones stay for their retention.
+
+The block stops at the first command that fails, so the app is only reactivated after every step before it worked. If
+it stops, the app stays stopped: read the error, fix the cause, and run the remaining commands by hand.
+
+```bash
+(
+set -e   # in a subshell, so it ends with the block
+REV=$(az containerapp show -n lazydad-app -g $RG --query properties.latestReadyRevisionName -o tsv)
+az containerapp revision deactivate -n lazydad-app -g $RG --revision $REV -o none
+az lock delete -n lazydad-db-no-delete -g $RG --namespace Microsoft.Sql \
+  --parent servers/$S --resource-type databases --resource lazydad-db
+az sql db rename -g $RG -s $S -n lazydad-db --new-name lazydad-db-before-restore -o none
+az sql db rename -g $RG -s $S -n lazydad-db-restored --new-name lazydad-db -o none
+# Section 4's backup commands again: the retention policy and the delete lock, now on the restored database.
+az sql db ltr-policy set -g $RG -s $S -n lazydad-db --weekly-retention P7W --monthly-retention P12M -o none
+az lock create -n lazydad-db-no-delete -t CanNotDelete -g $RG --namespace Microsoft.Sql \
+  --parent servers/$S --resource-type databases --resource lazydad-db \
+  --notes "The jokes and votes. Remove it only to restore (runbook section 12) or to retire the app." -o none
+# The restored database gets master's migrations (none, if the backup is recent enough), while nothing uses it.
+git switch master
+git pull
+dotnet tool restore
+dotnet ef database update --project src/LazyDad.Data --startup-project src/LazyDad.Api \
+  --connection "Server=tcp:$S.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60"
+az containerapp revision activate -n lazydad-app -g $RG --revision $REV -o none
+)
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+& {
+# In a script block, so the stop-on-error settings end with it. The second one makes a failing az, git or dotnet
+# command stop the block too (PowerShell 7.3 and later).
+$ErrorActionPreference = 'Stop'; $PSNativeCommandUseErrorActionPreference = $true
+$REV = az containerapp show -n lazydad-app -g $RG --query properties.latestReadyRevisionName -o tsv
+az containerapp revision deactivate -n lazydad-app -g $RG --revision $REV -o none
+az lock delete -n lazydad-db-no-delete -g $RG --namespace Microsoft.Sql `
+  --parent "servers/$S" --resource-type databases --resource lazydad-db
+az sql db rename -g $RG -s $S -n lazydad-db --new-name lazydad-db-before-restore -o none
+az sql db rename -g $RG -s $S -n lazydad-db-restored --new-name lazydad-db -o none
+# Section 4's backup commands again: the retention policy and the delete lock, now on the restored database.
+az sql db ltr-policy set -g $RG -s $S -n lazydad-db --weekly-retention P7W --monthly-retention P12M -o none
+az lock create -n lazydad-db-no-delete -t CanNotDelete -g $RG --namespace Microsoft.Sql `
+  --parent "servers/$S" --resource-type databases --resource lazydad-db `
+  --notes 'The jokes and votes. Remove it only to restore (runbook section 12) or to retire the app.' -o none
+# The restored database gets master's migrations (none, if the backup is recent enough), while nothing uses it.
+git switch master
+git pull
+dotnet tool restore
+dotnet ef database update --project src/LazyDad.Data --startup-project src/LazyDad.Api `
+  --connection "Server=tcp:$S.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60"
+az containerapp revision activate -n lazydad-app -g $RG --revision $REV -o none
+}
+```
+
+</details>
+
+Then check `https://lazydad.fyi/status`: the reactivated revision's startup tick saves jokes into the restored
+database.
+
+**After a region outage** (Sweden Central down, the server unreachable), the swap above doesn't apply: there's no
+`lazydad-db` to rename, only its geo-redundant backups (at most about an hour old). The copy goes straight to a new
+server in another region, under the final name, and the app and the deploys point at that server. The block first
+stops the prod app (deactivating its revision): if Sweden Central came back mid-way, the app would otherwise write
+votes and jokes to the old database again, and those writes would be lost when the app moves to the new one. The
+connection-string update at the end makes the new revision, which brings the app back:
+
+1. **A server in another region**, as in section 4 (Entra-only, you as the admin, the two firewall rules), e.g.
+   `lazydad-sql-northeurope` in North Europe. The deploy identities' `LazyDad Deployer` role covers it already (it's
+   on the resource group).
+2. **Geo-restore `lazydad-db` onto it**, then give it section 4's retention policy and lock (with `-s $NEW`). The
+   database users come with it, so the apps and the migrations can sign in as before.
+3. **Apply master's migrations** to it, as in 3b (the `dotnet ef database update` line, with `$NEW` as the server).
+4. **Point the prod app at it.** A new connection string makes a new revision, which starts on the new server; check
+   `https://lazydad.fyi/status` before relying on it.
+5. **Point production's deploys at it**, in a PR: Deploy Environment's `SQL_SERVER` (in
+   `.github/workflows/deploy-environment.yml`) is one value for both environments, and three steps use it: opening
+   the runner's firewall rule, the migration's connection, and closing the rule. So choose the server per
+   environment once, before the firewall step (production: the new server; staging: the old one), and use that for
+   all three. Changing `SQL_SERVER` itself would send staging's migrations to the new server, where its database
+   isn't, and Deploy Master would fail at staging. Until the PR is merged, production's migration step can't reach
+   its database.
+
+```bash
+(
+set -e   # stops at the first failure, like 3b
+S=lazydad-sql-swedencentral   # the unreachable server, whose geo-backups are restored
+NEW=lazydad-sql-northeurope
+REV=$(az containerapp show -n lazydad-app -g $RG --query properties.latestReadyRevisionName -o tsv)
+az containerapp revision deactivate -n lazydad-app -g $RG --revision $REV -o none   # no more writes to the old database
+ID=$(az sql db geo-backup list -g $RG -s $S --query "[?name=='lazydad-db'].id | [0]" -o tsv)
+az sql db geo-backup restore --geo-backup-id "$ID" --dest-database lazydad-db --dest-server $NEW -g $RG \
+  --service-objective Basic --backup-storage-redundancy Geo -o none
+az sql db ltr-policy set -g $RG -s $NEW -n lazydad-db --weekly-retention P7W --monthly-retention P12M -o none
+az lock create -n lazydad-db-no-delete -t CanNotDelete -g $RG --namespace Microsoft.Sql \
+  --parent servers/$NEW --resource-type databases --resource lazydad-db \
+  --notes "The jokes and votes. Remove it only to restore (runbook section 12) or to retire the app." -o none
+dotnet tool restore
+dotnet ef database update --project src/LazyDad.Data --startup-project src/LazyDad.Api \
+  --connection "Server=tcp:$NEW.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60"
+az containerapp update -n lazydad-app -g $RG -o none --set-env-vars \
+  "ConnectionStrings__DefaultConnection=Server=tcp:$NEW.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Managed Identity;Encrypt=True"
+)
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+& {
+$ErrorActionPreference = 'Stop'; $PSNativeCommandUseErrorActionPreference = $true   # stops at the first failure, like 3b
+$S = 'lazydad-sql-swedencentral'   # the unreachable server, whose geo-backups are restored
+$NEW = 'lazydad-sql-northeurope'
+$REV = az containerapp show -n lazydad-app -g $RG --query properties.latestReadyRevisionName -o tsv
+az containerapp revision deactivate -n lazydad-app -g $RG --revision $REV -o none   # no more writes to the old database
+$ID = az sql db geo-backup list -g $RG -s $S --query "[?name=='lazydad-db'].id | [0]" -o tsv
+az sql db geo-backup restore --geo-backup-id $ID --dest-database lazydad-db --dest-server $NEW -g $RG `
+  --service-objective Basic --backup-storage-redundancy Geo -o none
+az sql db ltr-policy set -g $RG -s $NEW -n lazydad-db --weekly-retention P7W --monthly-retention P12M -o none
+az lock create -n lazydad-db-no-delete -t CanNotDelete -g $RG --namespace Microsoft.Sql `
+  --parent "servers/$NEW" --resource-type databases --resource lazydad-db `
+  --notes 'The jokes and votes. Remove it only to restore (runbook section 12) or to retire the app.' -o none
+dotnet tool restore
+dotnet ef database update --project src/LazyDad.Data --startup-project src/LazyDad.Api `
+  --connection "Server=tcp:$NEW.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60"
+az containerapp update -n lazydad-app -g $RG -o none --set-env-vars `
+  "ConnectionStrings__DefaultConnection=Server=tcp:$NEW.database.windows.net,1433;Database=lazydad-db;Authentication=Active Directory Managed Identity;Encrypt=True"
+}
+```
+
+</details>
+
+Run it from an up-to-date checkout of `master` (for the migrations). Like 3b, the block stops at the first failure, so
+the app is only pointed at the new server once everything before it worked. Staging's database stays on the old server; staging can wait until Sweden Central is
+back. A second region that's always ready is the
+resilience plan's next phase.
