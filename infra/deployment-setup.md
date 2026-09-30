@@ -1156,7 +1156,7 @@ would look down and idle all the time.
   |---|---|---|
   | `LazyDadTickFailed` | a scheduler tick failed (15 minutes) | critical |
   | `LazyDadNoJokeSaved` | no joke saved for 5 hours (ticks run every 4); no data alerts too | critical |
-  | `LazyDadModelFailed` | a model errored or answered with no text (30 minutes), one alert per model; a slow model isn't a failure | warning |
+  | `LazyDadJokeFailed` | a model's joke failed (the model errored, or saving it did) or came back empty (30 minutes), one alert per model; a slow model isn't a failure | warning |
   | `LazyDadLeaderboardFailed` | the Top 3 update failed (30 minutes) | warning |
   | `LazyDadServerErrors` | more than 2 server errors (5xx) in 15 minutes, not counting `/healthz` | warning |
 

@@ -30,16 +30,18 @@ groups:
             Every model failed, or no tick ran (the app is down or its scheduler stopped). Check /status and the
             logs.
 
-      - alert: LazyDadModelFailed
-        # One alert per model: a model that errors or answers with no text. Slow answers aren't failures.
+      - alert: LazyDadJokeFailed
+        # One alert per model: its joke failed (the model errored, or saving the joke did) or came back empty. Slow
+        # answers aren't failures.
         expr: sum by (model) (increase(lazydad_jokes_total{job="lazydad-app", outcome=~"failed|empty"}[30m])) > 0
         labels:
           severity: warning
         annotations:
-          summary: 'Model {{ $labels.model }} failed or returned nothing on lazydad-app.'
+          summary: 'The joke from {{ $labels.model }} failed or came back empty on lazydad-app.'
           description: >-
-            The other models' jokes were still saved. The log line "Failed to generate joke" includes the provider's
-            error response.
+            Either the model errored or answered with no text (log lines "Failed to generate joke", with the provider's
+            error response, and "LLM returned an empty response"), or its joke couldn't be saved ("Failed to persist
+            joke": the database). The other models' jokes were still saved.
 
       - alert: LazyDadLeaderboardFailed
         expr: sum(increase(lazydad_leaderboard_updates_total{job="lazydad-app", outcome="failed"}[30m])) > 0
