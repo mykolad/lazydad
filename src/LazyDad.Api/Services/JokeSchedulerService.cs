@@ -181,35 +181,14 @@ public class JokeSchedulerService : BackgroundService
 
     private async Task<(IReadOnlyList<Joke> Saved, string Leaderboard)> GenerateAndPersistAsync(LanguageOptions language, CancellationToken stoppingToken)
     {
-        // All models for the language are queried in parallel.
-        var generated = await Task.WhenAll(language.LlmModels.Select(model => GenerateAsync(language, model, stoppingToken)));
+        // All models for the language are queried in parallel, and each joke is saved as soon as its model answers: a
+        // slow model (a thinking one can take minutes) delays only its own joke, not the others'.
+        var results = await Task.WhenAll(language.LlmModels.Select(async model =>
+            await GenerateAsync(language, model, stoppingToken) is { } joke ? await SaveAsync(joke, stoppingToken) : null));
+        var saved = results.OfType<Joke>().ToList();
 
         using var scope = scopeFactory.CreateScope();
-        var jokeRepository = scope.ServiceProvider.GetRequiredService<IJokeRepository>();
         var topJokeService = scope.ServiceProvider.GetRequiredService<TopJokeService>();
-
-        var saved = new List<Joke>();
-
-        foreach (var joke in generated.OfType<Joke>())
-        {
-            try
-            {
-                await jokeRepository.AddAsync(joke, stoppingToken);
-                saved.Add(joke);
-                metrics.RecordJoke(joke.Language, joke.Model, "saved");
-
-                logger.LogInformation("Joke saved for '{Language}' ({Model}): {Text}", joke.Language, joke.Model, joke.Text);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                metrics.RecordJoke(joke.Language, joke.Model, "failed");
-                logger.LogError(ex, "Failed to persist joke for '{Language}' ({Model}).", joke.Language, joke.Model);
-            }
-        }
 
         // Runs even when nothing new was saved, so an empty leaderboard still gets seeded.
         var leaderboard = "unchanged";
@@ -230,6 +209,35 @@ public class JokeSchedulerService : BackgroundService
         }
 
         return (saved, leaderboard);
+    }
+
+    /// <summary>
+    /// Saves one generated joke, in its own scope (the models' saves run in parallel, and a <c>DbContext</c> can't be
+    /// shared), and reports it on <c>/status</c> right away. Returns <c>null</c> if saving failed.
+    /// </summary>
+    private async Task<Joke?> SaveAsync(Joke joke, CancellationToken stoppingToken)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var jokeRepository = scope.ServiceProvider.GetRequiredService<IJokeRepository>();
+        try
+        {
+            await jokeRepository.AddAsync(joke, stoppingToken);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            metrics.RecordJoke(joke.Language, joke.Model, "failed");
+            logger.LogError(ex, "Failed to persist joke for '{Language}' ({Model}).", joke.Language, joke.Model);
+            return null;
+        }
+
+        metrics.RecordJoke(joke.Language, joke.Model, "saved");
+        status.RecordSavedJoke(new SavedJoke(joke.Language, joke.Id, joke.Model, DateTime.UtcNow));
+        logger.LogInformation("Joke saved for '{Language}' ({Model}): {Text}", joke.Language, joke.Model, joke.Text);
+        return joke;
     }
 
     /// <summary>Generates one joke with one model. Returns <c>null</c> on failure so sibling models are unaffected.</summary>

@@ -846,7 +846,8 @@ In the portal: *Settings → Environments → staging / production* shows each e
 **The first deploy.** Deploy Master builds the image (as staging's identity), migrates and rolls out staging, runs
 its smoke tests, then does the same for production. A green run means every sign-in in this runbook works:
 registry push and pull, the migrations as each deploy identity, and each app's database and model calls (the smoke
-tests wait for the new revision's startup tick to save a joke from every model).
+tests wait for the new revision's startup tick to save a joke; a model that fails or is slow shows up in Grafana, not
+in the deploy).
 
 ```bash
 gh workflow run deploy-master.yml -R $REPO --ref master
@@ -866,7 +867,10 @@ Invoke-RestMethod "https://$(az containerapp show -g $RG -n lazydad-app --query 
 
 </details>
 
-`/status` shows the version, the revision and the startup tick: a joke from every model, leaderboard not `failed`.
+`/status` shows the version, the revision, the process's id, each joke it saved as it went, and, once each language's
+startup tick is done, the tick's result: a joke from every model, leaderboard not `failed`. The smoke tests only wait
+for the first joke per language, so right after a deploy the tick can still be running (a thinking model can take
+minutes); a model that fails or answers empty is for the Grafana alerts.
 If the run fails at the Azure sign-in, compare the environment's `AZURE_CLIENT_ID` with the identity's client ID and
 its federated credential's subject (section 6); at the migrations, check the deploy identity's database user
 (section 8).

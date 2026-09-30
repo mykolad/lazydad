@@ -116,43 +116,41 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
     }
 
     [Fact]
-    public async Task ThisRevision_SavesAJokeFromEveryConfiguredModel_AndJudgesThem()
+    public async Task ThisRevision_SavesAJokeInEveryLanguage()
     {
-        // The new revision generates on startup and reports its own tick on /status (in-memory,
-        // so only the revision answering can have produced it). DB rows alone can't prove that:
-        // a draining revision's periodic tick could write them. This checks that the Azure OpenAI
-        // deployments, keys, DB writes and the judge all work in this revision.
+        // The new revision generates on startup and lists each joke on /status as soon as it's saved (in-memory, so
+        // only the revision answering can have saved it). DB rows alone can't prove that: a draining revision's
+        // periodic tick could write them. One joke per language shows that this revision reaches Azure OpenAI and
+        // the database. The slowest model and the judge aren't waited for: a thinking model can take minutes, and a
+        // model failing or answering late is for monitoring (Grafana alerts), not a reason to fail a deploy.
         var configured = SmokeTarget.ConfiguredLanguages();
         Assert.NotEmpty(configured);
 
+        // savedJokes is in memory, so each joke on it was saved by the process answering. After a restart
+        // (SMOKE_NOT_PROCESS), only the restarted process counts.
         var status = await target.PollAsync<JsonElement>(async () =>
         {
             var json = await target.GetJsonAsync("status");
             var isExpectedRevision = target.ExpectedRevision is null || json.GetProperty("revision").GetString() == target.ExpectedRevision;
-            // After a restart (SMOKE_TICKS_AFTER), only the restarted process's ticks count.
-            var reported = json.GetProperty("ticks").EnumerateArray()
-                .Where(t => target.TicksAfter is null || t.GetProperty("completedAt").GetDateTimeOffset() > target.TicksAfter)
-                .Select(t => t.GetProperty("language").GetString())
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            return isExpectedRevision && configured.Keys.All(reported.Contains) ? json : null;
-        }, SmokeTarget.GenerationTimeout, $"revision '{target.ExpectedRevision}' to report a tick for: {string.Join(", ", configured.Keys)}" +
-            (target.TicksAfter is null ? "" : $" completed after {target.TicksAfter:o}"));
+            var isNewProcess = target.NotProcess is null || json.GetProperty("process").GetString() != target.NotProcess;
+            var languages = json.GetProperty("savedJokes").EnumerateArray()
+                .Select(j => j.GetProperty("language").GetString()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            return isExpectedRevision && isNewProcess && configured.Keys.All(languages.Contains) ? json : null;
+        }, SmokeTarget.GenerationTimeout, $"revision '{target.ExpectedRevision}' to save a joke in: {string.Join(", ", configured.Keys)}" +
+            (target.NotProcess is null ? "" : $", from a process other than {target.NotProcess}"));
+
+        // The id the deploy's retry relies on to tell a restarted process from the old one.
+        Assert.False(string.IsNullOrWhiteSpace(status.GetProperty("process").GetString()), "/status reports no process id.");
 
         var jokes = await target.GetJsonAsync("jokes");
         var persisted = jokes.EnumerateArray().ToDictionary(j => j.GetProperty("id").GetInt32(), j => j.GetProperty("model").GetString());
-
-        foreach (var tick in status.GetProperty("ticks").EnumerateArray())
+        foreach (var joke in status.GetProperty("savedJokes").EnumerateArray())
         {
-            var language = tick.GetProperty("language").GetString()!;
-            Assert.True(tick.GetProperty("succeeded").GetBoolean(), $"'{language}' tick failed: {tick.GetProperty("error").GetString()}.");
-            Assert.NotEqual("failed", tick.GetProperty("leaderboard").GetString());
-
-            var saved = tick.GetProperty("jokes").EnumerateArray()
-                .Select(j => (Id: j.GetProperty("id").GetInt32(), Model: j.GetProperty("model").GetString()))
-                .ToList();
-            Assert.All(configured[language], model => Assert.Contains(saved, j => j.Model == model));
+            var language = joke.GetProperty("language").GetString()!;
+            var model = joke.GetProperty("model").GetString();
+            Assert.Contains(model, configured[language]);
             // What the revision says it saved is really in the DB and served by the API.
-            Assert.All(saved, j => Assert.Equal(j.Model, persisted.GetValueOrDefault(j.Id)));
+            Assert.Equal(model, persisted.GetValueOrDefault(joke.GetProperty("id").GetInt32()));
         }
     }
 
