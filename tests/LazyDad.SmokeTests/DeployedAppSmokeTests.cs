@@ -126,22 +126,25 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
         var configured = SmokeTarget.ConfiguredLanguages();
         Assert.NotEmpty(configured);
 
-        // After a restart (SMOKE_TICKS_AFTER), only jokes the restarted process saved count.
-        IEnumerable<JsonElement> SavedByThisProcess(JsonElement status) => status.GetProperty("savedJokes").EnumerateArray()
-            .Where(j => target.TicksAfter is null || j.GetProperty("savedAt").GetDateTimeOffset() > target.TicksAfter);
-
+        // savedJokes is in memory, so each joke on it was saved by the process answering. After a restart
+        // (SMOKE_NOT_PROCESS), only the restarted process counts.
         var status = await target.PollAsync<JsonElement>(async () =>
         {
             var json = await target.GetJsonAsync("status");
             var isExpectedRevision = target.ExpectedRevision is null || json.GetProperty("revision").GetString() == target.ExpectedRevision;
-            var languages = SavedByThisProcess(json).Select(j => j.GetProperty("language").GetString()).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            return isExpectedRevision && configured.Keys.All(languages.Contains) ? json : null;
+            var isNewProcess = target.NotProcess is null || json.GetProperty("process").GetString() != target.NotProcess;
+            var languages = json.GetProperty("savedJokes").EnumerateArray()
+                .Select(j => j.GetProperty("language").GetString()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            return isExpectedRevision && isNewProcess && configured.Keys.All(languages.Contains) ? json : null;
         }, SmokeTarget.GenerationTimeout, $"revision '{target.ExpectedRevision}' to save a joke in: {string.Join(", ", configured.Keys)}" +
-            (target.TicksAfter is null ? "" : $" after {target.TicksAfter:o}"));
+            (target.NotProcess is null ? "" : $", from a process other than {target.NotProcess}"));
+
+        // The id the deploy's retry relies on to tell a restarted process from the old one.
+        Assert.False(string.IsNullOrWhiteSpace(status.GetProperty("process").GetString()), "/status reports no process id.");
 
         var jokes = await target.GetJsonAsync("jokes");
         var persisted = jokes.EnumerateArray().ToDictionary(j => j.GetProperty("id").GetInt32(), j => j.GetProperty("model").GetString());
-        foreach (var joke in SavedByThisProcess(status))
+        foreach (var joke in status.GetProperty("savedJokes").EnumerateArray())
         {
             var language = joke.GetProperty("language").GetString()!;
             var model = joke.GetProperty("model").GetString();

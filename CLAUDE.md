@@ -250,7 +250,7 @@ Its second job, **`clean-database-migrations`**, runs against a throwaway SQL Se
    allows the runner through the app's IP
    restrictions if it has any (staging's `home` rule, production's Cloudflare ranges), and runs `tests/LazyDad.SmokeTests`
    against it. If they fail, it restarts the new revision (a fresh startup tick) and runs them once more,
-   counting only ticks completed after the restart (`SMOKE_TICKS_AFTER`).
+   counting only the restarted process (`/status` reports a per-process id; the retry passes the old one as `SMOKE_NOT_PROCESS`).
 3. **roll-back**, only if production failed **after its new revision took traffic**: the reusable
    `.github/workflows/roll-back.yml` (**Roll Back**) puts back the image that served before: the digest the production
    job read from its own revisions before the rollout (a job output, not the movable `previous-<environment>` tag).
