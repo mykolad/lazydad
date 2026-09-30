@@ -164,6 +164,12 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
     **Ingress allows listed IPs only** (the owner's `home` rule; Deploy Master adds its runner temporarily),
     so stray visitors can't wake it and spend LLM tokens.
   - Both pull from ACR with the `lazydad-acr-pull` managed identity; the ACR admin user is disabled.
+  - **Two repositories, repository permissions** (the registry's "RBAC Registry + ABAC Repository Permissions" mode):
+    every build lands in `lazydad-preview`, which staging runs from and which is all `lazydad-github-staging` can
+    write; production runs only from `lazydad`, which only `lazydad-github-cd` can write. Production's deploy copies
+    the tested digest from `lazydad-preview` and checks it's unchanged. So a previewed branch can't move production's
+    images or protection tags (runbook sections 2 and 6). Legacy `AcrPull`/`AcrPush` don't work in this mode, and the
+    purge task needs its own identity with a repository role.
 - Port exposed by the container: **8080**, the .NET base image's default (`ASPNETCORE_HTTP_PORTS=8080`); don't set `ASPNETCORE_URLS` too, or the app warns at every start
 - **Version metadata is baked into the image.** Build Image (`build-image.yml`) passes build args, and the Dockerfile turns
   them into `App__Version` (short SHA), `App__Revision` (full SHA), `App__CommitDate`, `App__SourceUrl`
@@ -187,9 +193,10 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
 - **Setup runbook:** `infra/deployment-setup.md` (bash, with a PowerShell 7 version of each block) creates everything behind Deploy Master from an
   empty subscription, in order, with managed identities and OIDC throughout (no database password, API
   key, connection-string secret or GitHub secret; the only credentials kept are the Grafana tokens in Key Vault), plus the operations (token rotation, Cloudflare's ranges, manual
-  rollback). That includes the weekly registry purge task (`purge-old-images`: keeps the last 30 days, 10 older
+  rollback). That includes the weekly registry purge task (`purge-old-images`, in both repositories, with its own
+  identity: keeps the last 30 days, 10 older
   images, and what each environment runs: revisions are pinned to the image digest, and the manifest
-  stays tagged `deployed-<env>` / `deploying-<env>`, applied in two phases around each rollout; `previous-<env>`
+  stays tagged `deployed-<env>` / `deploying-<env>` in the environment's repository, applied in two phases around each rollout; `previous-<env>`
   keeps what served before the latest rollout from the purge, for a manual rollback).
 
 ## Building and testing
@@ -231,11 +238,12 @@ Its second job, **`clean-database-migrations`**, runs against a throwaway SQL Se
 *Run workflow*). It builds once and promotes the same image:
 
 1. **build** (the reusable `.github/workflows/build-image.yml`, **Build Image**) builds the image
-   `lazydad:<short-sha>`, pushes it to ACR (outputting its digest), and builds the EF migration bundle
+   `lazydad-preview:<short-sha>`, pushes it to ACR (outputting its digest), and builds the EF migration bundle
    (`dotnet-ef`, pinned in `dotnet-tools.json`).
 2. **staging** then **production**: the same reusable `.github/workflows/deploy-environment.yml` (**Deploy Environment**) in each
    environment. It opens the SQL firewall for the runner, runs the bundle, closes the firewall,
-   protects the running and the new image with tags, rolls the app to the image **by digest**
+   for production copies the image into `lazydad` (same digest, checked), protects the running and the new image with
+   tags in the environment's repository, rolls the app to the image **by digest**
    (its version metadata is baked in; any old `App__Version` setting is removed), moves
    `deployed-<environment>` to it,
    allows the runner through the app's IP
@@ -279,7 +287,8 @@ Build Image and Deploy Environment steps, smoke tests included, against **stagin
 - **Production can't be reached from it:** the `production` environment accepts `master` only.
   `staging` also accepts `*/*` branches (`feature/…`, `fix/…`). The branch's own code (workflows, build) runs
   with staging's identity, which has no rights on production (runbook section 6), and Roll Back only trusts
-  images production's own revisions ran, since staging can push images too.
+  images production's own revisions ran. Staging's identity can only push to `lazydad-preview`, never to production's
+  `lazydad` repository.
 - **Migrations are off by default** (the *run-migrations* checkbox). Staging keeps any migration it
   applies, so only tick it for a branch whose migrations you'll merge unchanged.
 - **It shares the `deploy` concurrency group with Deploy Master,** so the two never interleave on

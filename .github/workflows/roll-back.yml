@@ -29,7 +29,8 @@ on:
         description: >-
           With only-if-serving: the digest of the image that served before the failed deploy, as
           Deploy Environment read it from production's revisions (its previous-digest output). Not the
-          previous-production tag, which anyone who can push to the registry can move.
+          previous-production tag: a tag can be moved (by production's deploy identity or an operator,
+          e.g. a concurrent or manual run), a job output can't.
         type: string
         required: false
         default: ''
@@ -78,7 +79,8 @@ jobs:
         run: |
           version=$(printf '%s' "$VERSION" | tr -d '[:space:]' | tr 'A-F' 'a-f')
 
-          # Revisions reference a digest, or (before digest pinning) a commit tag. Empty if it's gone.
+          # Revisions reference a digest, or (before digest pinning) a commit tag. Empty if it's gone. Everything
+          # production ran is in its own repository, lazydad: its deploys copy each image there (Deploy Environment).
           digest_of() {
             case "$1" in
               *@sha256:*) echo "${1#*@}" ;;
@@ -114,9 +116,10 @@ jobs:
           serving_digest=$(digest_of "${images[$serving]}")
 
           # The digests production's own revisions were pinned to: the only images trusted as a rollback
-          # target. Tags are mutable, and staging's identity (which branch previews run as) can push to the
-          # registry too, so a tag alone could point production at an image it never ran. Only production's
-          # identity creates production revisions. (Revisions from before digest pinning named a tag; not trusted.)
+          # target. Tags are mutable: staging's identity (which branch previews run as) can't write production's
+          # repository anymore, but production's identity and operators can move its tags, so a tag alone could
+          # still point production at an image it never ran. Only production's identity creates production
+          # revisions. (Revisions from before digest pinning named a tag; not trusted.)
           ran=()
           for image in "${images[@]}"; do
             case "$image" in *@sha256:*) ran+=("${image#*@}") ;; esac
@@ -135,8 +138,8 @@ jobs:
               skip "Production serves ${names[$serving]}, not $ONLY_IF_SERVING: the failed deploy never took traffic."
             fi
             # The failed deploy's own record of what served before it (the revision before this one isn't
-            # reliable: it may never have become ready). Never the previous-production tag: staging's
-            # identity can push to the registry, so it could move that tag while this runs.
+            # reliable: it may never have become ready). Never the previous-production tag: production's identity
+            # or an operator could move it while this runs (a concurrent or manual run); the job output can't move.
             if ! [[ "$PREVIOUS_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "::error::The failed deploy didn't report the image that served before it ('$PREVIOUS_DIGEST'); roll back by hand (Roll Back Production)."
               exit 1

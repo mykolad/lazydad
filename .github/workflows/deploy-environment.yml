@@ -52,6 +52,10 @@ env:
   RESOURCE_GROUP: lazydad-rg
   SQL_SERVER: lazydad-sql-swedencentral
   REGISTRY: lazydadacr.azurecr.io
+  # Every build lands in lazydad-preview, which staging runs from. Production runs only from lazydad, which only
+  # production's deploy identity can write: it copies the digest staging tested (see "Put the image into ...").
+  # So a previewed branch, which can write lazydad-preview only, can't touch what production runs or its tags.
+  REPOSITORY: ${{ inputs.environment == 'production' && 'lazydad' || 'lazydad-preview' }}
 
 jobs:
   deploy:
@@ -127,6 +131,34 @@ jobs:
         if: ${{ always() && steps.firewall.outputs.rule != '' }}
         run: az sql server firewall-rule delete -g "$RESOURCE_GROUP" -s "$SQL_SERVER" -n "${{ steps.firewall.outputs.rule }}"
 
+      # The environment's repository must have the digest under its commit tag (Roll Back Production finds images by
+      # it). A new build is only in lazydad-preview, so production copies it; a rollback's image is already in lazydad,
+      # but the purge may have removed its commit tag, so it's tagged again. The copy keeps the digest, and it's
+      # checked: production must run exactly what staging tested.
+      - name: Put the image into ${{ env.REPOSITORY }}
+        run: |
+          az acr login --name lazydadacr
+          tagged=$(az acr manifest show-metadata -r lazydadacr -n "$REPOSITORY:${{ inputs.tag }}" --query digest -o tsv 2> /dev/null || true)
+          if [ "$tagged" = "${{ inputs.digest }}" ]; then
+            echo "$REPOSITORY:${{ inputs.tag }} is already ${{ inputs.digest }}."
+            exit 0
+          fi
+          if az acr manifest show -r lazydadacr -n "$REPOSITORY@${{ inputs.digest }}" -o none 2> /dev/null; then
+            src="$REGISTRY/$REPOSITORY@${{ inputs.digest }}"
+          else
+            src="$REGISTRY/lazydad-preview@${{ inputs.digest }}"
+          fi
+          dst="$REGISTRY/$REPOSITORY:${{ inputs.tag }}"
+          docker pull -q "$src"
+          docker tag "$src" "$dst"
+          docker push -q "$dst"
+          copied=$(az acr manifest show-metadata -r lazydadacr -n "$REPOSITORY:${{ inputs.tag }}" --query digest -o tsv)
+          if [ "$copied" != "${{ inputs.digest }}" ]; then
+            echo "::error::Copying ${{ inputs.digest }} into $REPOSITORY produced $copied: not the image staging tested."
+            exit 1
+          fi
+          echo "Tagged ${{ inputs.digest }} in $REPOSITORY as ${{ inputs.tag }} (from $src)."
+
       # Two-phase protection from the weekly purge (which deletes only commit-style tags, then
       # untagged manifests), so the job can stop at any point and whatever runs is still tagged:
       #   1. before the rollout: re-tag what currently runs as deployed-<env> (this also repairs an
@@ -148,16 +180,16 @@ jobs:
           fi
           # What served before this rollout, as read from the environment's own revisions: the automatic
           # rollback's target (a job output, which nothing outside this job can change; tags can be moved by
-          # anyone who can push to the registry). Revisions are pinned by digest, so the image names it.
+          # anyone who can write the environment's repository). Revisions are pinned by digest, so the image names it.
           case "$serving" in
             *@sha256:*) echo "previous-digest=${serving#*@}" >> "$GITHUB_OUTPUT" ;;
             *) echo "::warning::The serving revision isn't pinned to a digest ($serving); an automatic rollback won't have a target." ;;
           esac
           # Fatal on failure (bash -e): never move the candidate tag while the serving image is unprotected.
-          retag "$serving" "$REGISTRY/lazydad:deployed-${{ inputs.environment }}"
+          retag "$serving" "$REGISTRY/$REPOSITORY:deployed-${{ inputs.environment }}"
           # What served before this rollout, kept from the purge so a manual rollback can still return to it.
-          retag "$serving" "$REGISTRY/lazydad:previous-${{ inputs.environment }}"
-          retag "$REGISTRY/lazydad@${{ inputs.digest }}" "$REGISTRY/lazydad:deploying-${{ inputs.environment }}"
+          retag "$serving" "$REGISTRY/$REPOSITORY:previous-${{ inputs.environment }}"
+          retag "$REGISTRY/$REPOSITORY@${{ inputs.digest }}" "$REGISTRY/$REPOSITORY:deploying-${{ inputs.environment }}"
 
       - name: Roll out ${{ inputs.tag }}
         id: app
@@ -177,7 +209,7 @@ jobs:
           # setting can never contradict the image.
           suffix="${{ inputs.revision-prefix }}${{ github.run_id }}-${{ github.run_attempt }}"
           az containerapp update -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
-            --image "$REGISTRY/lazydad@${{ inputs.digest }}" \
+            --image "$REGISTRY/$REPOSITORY@${{ inputs.digest }}" \
             --remove-env-vars App__Version \
             --revision-suffix "$suffix" -o none
           echo "revision=${{ inputs.app-name }}--$suffix" >> "$GITHUB_OUTPUT"
@@ -187,8 +219,8 @@ jobs:
       # Phase 2: the new digest now runs, so it becomes deployed-<env> (it was pulled in phase 1).
       - name: Tag the image as deployed-${{ inputs.environment }}
         run: |
-          dst="$REGISTRY/lazydad:deployed-${{ inputs.environment }}"
-          docker tag "$REGISTRY/lazydad@${{ inputs.digest }}" "$dst"
+          dst="$REGISTRY/$REPOSITORY:deployed-${{ inputs.environment }}"
+          docker tag "$REGISTRY/$REPOSITORY@${{ inputs.digest }}" "$dst"
           docker push -q "$dst"
 
       # Behind Cloudflare (runbook section 10), the app's ingress admits only Cloudflare's IPv4 ranges. The environment's
@@ -264,7 +296,7 @@ jobs:
         run: |
           {
             echo "### ${{ inputs.environment }}"
-            echo "- App: \`${{ inputs.app-name }}\`, image \`lazydad:${{ inputs.tag }}\` pinned to \`${{ inputs.digest }}\`, revision \`${{ steps.app.outputs.revision }}\`"
+            echo "- App: \`${{ inputs.app-name }}\`, image \`${{ env.REPOSITORY }}:${{ inputs.tag }}\` pinned to \`${{ inputs.digest }}\`, revision \`${{ steps.app.outputs.revision }}\`"
             echo "- URL: ${{ steps.app.outputs.url }}"
             echo "- Result: ${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"

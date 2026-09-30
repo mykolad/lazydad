@@ -30,7 +30,8 @@ jobs:
     name: build image + migration bundle
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # The staging environment scopes this job's Azure OIDC identity (it only needs AcrPush here).
+    # The staging environment scopes this job's Azure OIDC identity: it can write lazydad-preview only, where every
+    # build lands (a branch preview's too). Production's deploy copies a tested digest into lazydad from there.
     environment: staging
     permissions:
       contents: read
@@ -80,7 +81,7 @@ jobs:
         id: push
         run: |
           az acr login --name lazydadacr
-          image="$REGISTRY/lazydad:${{ steps.meta.outputs.tag }}"
+          image="$REGISTRY/lazydad-preview:${{ steps.meta.outputs.tag }}"
           # Version metadata is baked into the image (see Dockerfile): App__* settings + OCI labels.
           docker build -t "$image" \
             --build-arg VERSION=${{ steps.meta.outputs.tag }} \
