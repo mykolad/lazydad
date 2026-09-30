@@ -279,7 +279,19 @@ jobs:
           echo "::warning::Smoke tests failed; restarting revision ${{ steps.app.outputs.revision }} and retrying once."
           # The restarted process keeps the revision name, and the old one can still answer (and even finish its tick)
           # for a moment. Each process reports its own id on /status, so the retry only accepts a different one.
-          SMOKE_NOT_PROCESS=$(curl -fsS --max-time 30 "$SMOKE_BASE_URL/status" | jq -r '.process // empty' || true)
+          # Read from this revision only (a draining one may still answer), and never retry without it: an empty id
+          # would let the old process pass the retry.
+          SMOKE_NOT_PROCESS=""
+          for _ in $(seq 1 12); do
+            SMOKE_NOT_PROCESS=$(curl -fsS --max-time 20 "$SMOKE_BASE_URL/status" |
+              jq -r --arg revision "$SMOKE_EXPECTED_REVISION" 'select(.revision == $revision) | .process // empty') || SMOKE_NOT_PROCESS=""
+            [ -n "$SMOKE_NOT_PROCESS" ] && break
+            sleep 5
+          done
+          if [ -z "$SMOKE_NOT_PROCESS" ]; then
+            echo "::error::Couldn't read the process id of $SMOKE_EXPECTED_REVISION from /status, so the retry couldn't tell the restarted process from the old one; not retrying."
+            exit 1
+          fi
           export SMOKE_NOT_PROCESS
           az containerapp revision restart -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
             --revision "${{ steps.app.outputs.revision }}" -o none

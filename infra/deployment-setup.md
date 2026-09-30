@@ -867,7 +867,10 @@ Invoke-RestMethod "https://$(az containerapp show -g $RG -n lazydad-app --query 
 
 </details>
 
-`/status` shows the version, the revision, the startup tick (a joke from every model, leaderboard not `failed`) and the jokes the app saved.
+`/status` shows the version, the revision, the process's id, each joke it saved as it went, and, once each language's
+startup tick is done, the tick's result: a joke from every model, leaderboard not `failed`. The smoke tests only wait
+for the first joke per language, so right after a deploy the tick can still be running (a thinking model can take
+minutes); a model that fails or answers empty is for the Grafana alerts.
 If the run fails at the Azure sign-in, compare the environment's `AZURE_CLIENT_ID` with the identity's client ID and
 its federated credential's subject (section 6); at the migrations, check the deploy identity's database user
 (section 8).
