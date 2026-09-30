@@ -1,0 +1,65 @@
+# LazyDad's alert rules, in the Prometheus rule-file format. Import them once as Grafana-managed rules (runbook
+# section 11, step 4): Alerting -> Alert rules -> More -> Import to Grafana-managed rules, source "YAML file", the
+# stack's Prometheus data source (grafanacloud-<stack>-prom). Alerts go to the default notification policy.
+#
+# Production only: staging scales to zero and runs a tick only when it starts. The scheduler's counters start at 0
+# when the app starts (SchedulerMetrics.Initialize), so increase() also counts the first tick after a restart.
+groups:
+  - name: lazydad
+    interval: 5m
+    rules:
+      - alert: LazyDadTickFailed
+        expr: sum(increase(lazydad_scheduler_ticks_total{job="lazydad-app", outcome="failed"}[15m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: A scheduler tick failed on lazydad-app.
+          description: >-
+            The whole tick failed (no jokes, no leaderboard). /status shows the exception type; the logs
+            ({service_name="lazydad-app"}) show the error.
+
+      - alert: LazyDadNoJokeSaved
+        # Ticks run every 4 hours; 5 hours without a saved joke means one was missed. "or vector(0)": no data also alerts.
+        expr: (sum(increase(lazydad_jokes_total{job="lazydad-app", outcome="saved"}[5h])) or vector(0)) < 1
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: No joke saved on lazydad-app for 5 hours.
+          description: >-
+            Every model failed, or no tick ran (the app is down or its scheduler stopped). Check /status and the
+            logs.
+
+      - alert: LazyDadJokeFailed
+        # One alert per model: its joke failed (the model errored, or saving the joke did) or came back empty. Slow
+        # answers aren't failures.
+        expr: sum by (model) (increase(lazydad_jokes_total{job="lazydad-app", outcome=~"failed|empty"}[30m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: 'The joke from {{ $labels.model }} failed or came back empty on lazydad-app.'
+          description: >-
+            Either the model errored or answered with no text (log lines "Failed to generate joke", with the provider's
+            error response, and "LLM returned an empty response"), or its joke couldn't be saved ("Failed to persist
+            joke": the database). The other models' jokes were still saved.
+
+      - alert: LazyDadLeaderboardFailed
+        expr: sum(increase(lazydad_leaderboard_updates_total{job="lazydad-app", outcome="failed"}[30m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: The Top 3 update failed on lazydad-app.
+          description: >-
+            The judge's call or the leaderboard's database write failed, and the Top 3 stays as it was. The log line
+            "Failed to update the top jokes" includes the provider's error response. The update runs even when no new
+            joke was saved, so check LazyDadJokeFailed too: if every model failed as well, start there.
+
+      - alert: LazyDadServerErrors
+        expr: >-
+          sum(increase(http_server_request_duration_seconds_count{job="lazydad-app", http_route!="/healthz",
+          http_response_status_code=~"5.."}[15m])) > 2
+        labels:
+          severity: warning
+        annotations:
+          summary: lazydad-app answered more than 2 requests with a server error in 15 minutes.
+          description: The dashboard's "Responses per second, by status code" panel and the logs show which.

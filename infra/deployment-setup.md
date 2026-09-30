@@ -1152,17 +1152,22 @@ would look down and idle all the time.
 
 - *Testing & synthetics → Synthetics → Add check → HTTP*: `https://lazydad.fyi/healthz`, every 5 minutes from 2–3
   probes (well inside the free tier's executions), with its built-in alert when the check fails.
-- *Alerting → Contact points*: your email. Then *Alert rules* (Prometheus data source), evaluated every 5 minutes:
+- *Alerting → Contact points*: your email, and *Notification policies*: the default policy sends to it.
+- The alert rules are in `infra/grafana/lazydad-alert-rules.yaml` (the Prometheus rule-file format), evaluated every 5
+  minutes:
 
-  | Alert | Query | Condition |
+  | Alert | Fires when | Severity |
   |---|---|---|
-  | A scheduler tick failed | `sum(increase(lazydad_scheduler_ticks_total{job="lazydad-app", outcome="failed"}[15m]))` | > 0 |
-  | No joke saved for 5 hours (ticks run every 4) | `sum(increase(lazydad_jokes_total{job="lazydad-app", outcome="saved"}[5h]))` | < 1; *no data* also alerts |
-  | A model failed or returned nothing | `sum by (model) (increase(lazydad_jokes_total{job="lazydad-app", outcome=~"failed\|empty"}[4h]))` | > 0 |
-  | Server errors | `sum(increase(http_server_request_duration_seconds_count{job="lazydad-app", http_response_status_code=~"5.."}[15m]))` | > 2 |
+  | `LazyDadTickFailed` | a scheduler tick failed (15 minutes) | critical |
+  | `LazyDadNoJokeSaved` | no joke saved for 5 hours (ticks run every 4); no data alerts too | critical |
+  | `LazyDadJokeFailed` | a model's joke failed (the model errored, or saving it did) or came back empty (30 minutes), one alert per model; a slow model isn't a failure | warning |
+  | `LazyDadLeaderboardFailed` | the Top 3 update failed (30 minutes) | warning |
+  | `LazyDadServerErrors` | more than 2 server errors (5xx) in 15 minutes, not counting `/healthz` | warning |
 
-  Metric names are Grafana's translation of the OpenTelemetry names; if one doesn't match, pick it in the query
-  builder's metric browser.
+  Import them once: *Alerting → Alert rules → More → Import to Grafana-managed rules*, import source **YAML file**,
+  the file, the stack's `…-prom` data source, a folder (e.g. `LazyDad`), then *Import*. Grafana converts them to its own
+  rules, which you can then edit in the UI; to keep a change, edit the file too. Grafana Cloud's own rule folders
+  (`knowledge-graph`, `frontend-observability-asserts`, `Grafana`) come with the stack; leave them.
 
 **5. The dashboard.** `infra/grafana/lazydad-dashboard.json` shows one app at a time (the *App* selector at the
 top): requests, errors and latency; ticks, jokes and leaderboard updates by outcome; LLM call duration and tokens per

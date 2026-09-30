@@ -183,7 +183,7 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
   (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details).
 - **Monitoring:** a Grafana Cloud stack (free tier, `eu-north`) gets both apps' telemetry, one service per app
   (`job="lazydad-app"`, `"lazydad-app-staging"`), with the uptime check and email alerts on prod. The dashboard is
-  `infra/grafana/lazydad-dashboard.json` (imported by hand; keep it in sync with metric and label names).
+  `infra/grafana/lazydad-dashboard.json` and the alert rules `infra/grafana/lazydad-alert-rules.yaml` (both imported by hand; keep them in sync with metric and label names).
   `SchedulerMetrics.Initialize` starts every scheduler series at 0 when the scheduler starts, and `ExportNowAsync`
   sends those zeros before the first tick (the regular export is once a minute), so `increase()` also counts the first
   tick after a replica start. Request panels leave out `/healthz` (the uptime checks), which only traces filter. The OTLP credentials are
