@@ -50,8 +50,9 @@ groups:
         annotations:
           summary: The Top 3 update failed on lazydad-app.
           description: >-
-            The jokes were saved; the judge's call or the leaderboard's database write failed, and the Top 3 stays as it
-            was. The log line "Failed to update the top jokes" includes the provider's error response.
+            The judge's call or the leaderboard's database write failed, and the Top 3 stays as it was. The log line
+            "Failed to update the top jokes" includes the provider's error response. The update runs even when no new
+            joke was saved, so check LazyDadJokeFailed too: if every model failed as well, start there.
 
       - alert: LazyDadServerErrors
         expr: >-
