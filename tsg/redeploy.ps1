@@ -25,16 +25,27 @@ docker push "$ACR_SERVER/$TAG"
 # start, and the weekly purge deletes old commit tags (runbook section 2).
 $DIGEST = az acr manifest show-metadata -r $ACR_NAME -n $TAG --query digest -o tsv
 
+function Set-Tag([string] $Image, [string] $Tag) {
+    docker tag $Image "$ACR_SERVER/lazydad:$Tag"
+    docker push -q "$ACR_SERVER/lazydad:$Tag"
+}
+
 foreach ($target in $APPS) {
-    # As Deploy Environment does: what runs now stays tagged (previous-<target>), and the new digest is tagged
-    # deployed-<target> before the app moves to it, so the purge never deletes a manifest a revision runs.
-    $serving = az containerapp show --name $target.App --resource-group $RG --query "properties.template.containers[0].image" -o tsv
-    docker pull -q $serving
-    docker tag $serving "$ACR_SERVER/lazydad:previous-$($target.Target)"
-    docker push -q "$ACR_SERVER/lazydad:previous-$($target.Target)"
-    docker tag "$ACR_SERVER/$TAG" "$ACR_SERVER/lazydad:deployed-$($target.Target)"
-    docker push -q "$ACR_SERVER/lazydad:deployed-$($target.Target)"
+    # Two phases, as Deploy Environment does, so the purge never deletes a manifest a revision runs. First: the image
+    # of the revision serving traffic (not the app's desired image, which after a failed rollout names the failed one)
+    # is tagged deployed- and previous-<target>, and the new digest deploying-<target>.
+    $serving = @(az containerapp revision list --name $target.App --resource-group $RG -o json | ConvertFrom-Json |
+        Where-Object { $_.properties.trafficWeight -gt 0 } | ForEach-Object { $_.properties.template.containers[0].image })
+    if ($serving.Count -ne 1) {
+        throw "Expected exactly one revision of $($target.App) serving traffic, found $($serving.Count); not moving any tags."
+    }
+    docker pull -q $serving[0]
+    Set-Tag $serving[0] "deployed-$($target.Target)"
+    Set-Tag $serving[0] "previous-$($target.Target)"
+    Set-Tag "$ACR_SERVER/$TAG" "deploying-$($target.Target)"
     az containerapp update --name $target.App --resource-group $RG --image "$ACR_SERVER/lazydad@$DIGEST" --remove-env-vars App__Version
+    # Second: the new digest now runs, so it becomes deployed-<target>.
+    Set-Tag "$ACR_SERVER/$TAG" "deployed-$($target.Target)"
 }
 
 Write-Host ""
