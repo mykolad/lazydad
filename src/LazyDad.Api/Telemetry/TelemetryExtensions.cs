@@ -33,13 +33,18 @@ public static class TelemetryExtensions
             ? OtlpExportProtocol.Grpc
             : OtlpExportProtocol.HttpProtobuf;
 
+        // Container Apps sets CONTAINER_APP_NAME (lazydad-app, lazydad-app-swedencentral, lazydad-app-staging) and the
+        // replica name, so each app is its own service ("job" in Grafana), with no setting to forget.
+        var replica = configuration["CONTAINER_APP_REPLICA_NAME"] ?? Environment.MachineName;
         builder.Services.AddOpenTelemetry()
-            // Container Apps sets CONTAINER_APP_NAME (lazydad-app, lazydad-app-staging) and the replica name, so
-            // each environment is its own service ("job" in Grafana), with no setting to forget.
-            .ConfigureResource(resource => resource.AddService(
-                serviceName: configuration["CONTAINER_APP_NAME"] ?? "lazydad-local",
-                serviceVersion: configuration[$"{AppInfoOptions.SectionName}:{nameof(AppInfoOptions.Version)}"] ?? "dev",
-                serviceInstanceId: configuration["CONTAINER_APP_REPLICA_NAME"] ?? Environment.MachineName))
+            .ConfigureResource(resource => resource
+                .AddService(
+                    serviceName: configuration["CONTAINER_APP_NAME"] ?? "lazydad-local",
+                    serviceVersion: configuration[$"{AppInfoOptions.SectionName}:{nameof(AppInfoOptions.Version)}"] ?? "dev",
+                    serviceInstanceId: replica)
+                // Grafana's Application Observability counts hosts by this when there's no Kubernetes node or VM id
+                // (Container Apps has neither); without it, it flags the service as incompletely instrumented.
+                .AddAttributes([new KeyValuePair<string, object>("grafana.host.id", replica)]))
             .WithTracing(tracing => tracing
                 .AddSource(LazyDadTelemetry.Name, LazyDadTelemetry.ChatClientName)
                 // Uptime checks poll /healthz; they'd flood the traces. Its request metrics stay.
