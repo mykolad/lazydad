@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
 using LazyDad.Api.Services;
 using LazyDad.Api.Telemetry;
 using Microsoft.AspNetCore.Builder;
@@ -59,6 +60,7 @@ public class TelemetryTests
             // What Grafana Cloud's setup page shows: basic auth, the space URL-encoded as the spec requires.
             ["OTEL_EXPORTER_OTLP_HEADERS"] = "Authorization=Basic%20aW5zdGFuY2U6dG9rZW4=",
             ["CONTAINER_APP_NAME"] = "lazydad-app-under-test",
+            ["CONTAINER_APP_REPLICA_NAME"] = "lazydad-app-under-test--r1-replica-7",
         });
         builder.AddTelemetry();
         await using var app = builder.Build();
@@ -99,6 +101,9 @@ public class TelemetryTests
         var traces = collector.Body("/otlp/v1/traces");
         Assert.Contains("kept-value", traces);
         Assert.Contains("lazydad-app-under-test", traces);
+        // Grafana's host for Application Observability is the replica: in protobuf the attribute's value follows its key
+        // after a few framing bytes.
+        Assert.Matches(new Regex(@"grafana\.host\.id.{1,8}lazydad-app-under-test--r1-replica-7", RegexOptions.Singleline), traces);
         Assert.DoesNotContain("203.0.113.7", traces);
         Assert.DoesNotContain("FingerprintBrowser", traces);
         Assert.DoesNotContain("/healthz", traces);

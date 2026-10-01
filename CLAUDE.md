@@ -80,7 +80,9 @@ tests/LazyDad.SmokeTests — smoke tests against a deployed app (run by Deploy M
   lasts until the first regular due time after it, which it or any replica then runs.
 - **Telemetry** (`src/LazyDad.Api/Telemetry`): OpenTelemetry traces, metrics and logs over OTLP to Grafana Cloud
   (EU), on only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (the Container Apps settings; runbook section 11). The standard
-  `OTEL_*` variables apply, with `http/protobuf` as the default protocol. A trace per request (not `/healthz`) and per
+  `OTEL_*` variables apply, with `http/protobuf` as the default protocol. The resource names the app (`service.name`) and
+  the replica (`service.instance.id`, and `grafana.host.id`, which Grafana's Application Observability counts hosts
+  by: on the free tier, 2,232 host-hours a month, about three always-on replicas). A trace per request (not `/healthz`) and per
   scheduler tick (`joke tick`); `SchedulerMetrics` counts ticks, jokes and leaderboard updates by outcome, next to
   `/status`. **No visitor data:** `PersonalDataFilter` strips IPs and user agents from spans before export (a test
   checks the exported bytes), and the LLM spans don't record prompts or responses. All `ILogger` logs are exported,
