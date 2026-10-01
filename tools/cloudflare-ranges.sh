@@ -14,10 +14,11 @@
 #       Manager's health checks. Two sets of ingress rules are made to match two IPv4 lists (Container Apps' ingress is
 #       IPv4), all of them created if there are none yet: cloudflare-* Cloudflare's ranges, trafficmanager-* the
 #       AzureTrafficManager service tag (reading it needs an Azure login). Missing ranges are added (as
-#       <prefix>-<rule-tag>-<n>) and ranges no longer listed are removed in one update of the whole list (a PATCH), so
-#       it changes all at once: the app never admits only part of Cloudflare. It refuses to remove more than 3 of
-#       Cloudflare's or 50 of Traffic Manager's ranges at once (it then only adds). Other rules (staging's home, a
-#       deploy's runner) are kept. If either list can't be read, nothing changes.
+#       <prefix>-<rule-tag>-<n>, at most 32 characters: a long tag becomes a short hash) and ranges no longer listed
+#       are removed in one update of the whole list (a PATCH), so it changes all at once: the app never admits only
+#       part of Cloudflare. It refuses to remove more than 3 of Cloudflare's or 50 of Traffic Manager's ranges at once
+#       (it then only adds). Other rules (staging's home, a deploy's runner) are kept. If either list can't be read,
+#       nothing changes.
 #       off: any cloudflare-* and trafficmanager-* rules are removed, so the app's own address is open again (with no
 #       other Allow rule).
 set -euo pipefail
@@ -156,10 +157,23 @@ plan() {
         existing: ($mine | length),
         keep: (if $hold then $mine else $listed end),
         add: [$wanted - ($mine | map(.ipAddressRange)) | to_entries[]
-              | {name: "\($prefix)\($tag)-\(.key + 1)", ipAddressRange: .value, action: "Allow", description: "\($label) \(.value)"}],
+              | {name: "\($prefix)\($tag)-\(.key + 1)", ipAddressRange: .value, action: "Allow", description: "\($label) \(.value)"}
+              # Container Apps refuses the whole update if any name is longer (see name_tag); never send one.
+              | if (.name | length) > 32 then error("rule name \(.name) is longer than 32 characters") else . end],
         remove: (if $hold then [] else $obsolete end),
         held: (if $hold then $obsolete else [] end)
       }'
+}
+
+# The tag in new rules' names. Container Apps allows rule names of at most 32 characters, and the longest name is
+# trafficmanager-<tag>-<n> with n up to 3 digits, so a tag longer than 13 characters (a deploy's "r<run ID>-<attempt>"
+# is 14) becomes the first 10 hex digits of its SHA-1: still different for every sync.
+name_tag() {
+  if [ "${#1}" -le 13 ]; then
+    echo "$1"
+  else
+    printf '%s' "$1" | sha1sum | cut -c1-10
+  fi
 }
 
 sync() {
@@ -194,8 +208,8 @@ sync() {
   cloudflare=$(ranges 4)
   traffic_manager=$(traffic_manager_ranges)
   plans=$({
-    plan cloudflare Cloudflare 3 "$tag" "$cloudflare" "$current"
-    plan trafficmanager "Traffic Manager" 50 "$tag" "$traffic_manager" "$current"
+    plan cloudflare Cloudflare 3 "$(name_tag "$tag")" "$cloudflare" "$current"
+    plan trafficmanager "Traffic Manager" 50 "$(name_tag "$tag")" "$traffic_manager" "$current"
   } | jq_json -s .)
   if [ "$(jq '[.[] | (.add + .remove) | length] | add' <<< "$plans" | tr -d '\r')" = 0 ]; then
     jq_text --arg app "$app" '"\($app)'"'"'s rules match " + ([.[] | "\(.label) (\(.count) IPv4 ranges)"] | join(" and ")) + "."' <<< "$plans"
@@ -223,5 +237,5 @@ case "$command" in
   fetch) fetch "$@" ;;
   check) check "$@" ;;
   sync) sync "$@" ;;
-  *) sed -n '3,22p' "$0" >&2; exit 2 ;;
+  *) sed -n '3,23p' "$0" >&2; exit 2 ;;
 esac
