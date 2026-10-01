@@ -5,7 +5,9 @@ $PSNativeCommandUseErrorActionPreference = $true
 
 $ACR_NAME   = "lazydadacr"
 $RG         = "lazydad-rg"
-$APP_NAMES  = "lazydad-app", "lazydad-app-swedencentral"   # production runs in two regions
+# Production runs in two regions; each app's protection tags are deployed-/previous-<target> (see Deploy Environment).
+$APPS       = @{ App = "lazydad-app"; Target = "production" },
+              @{ App = "lazydad-app-swedencentral"; Target = "production-swedencentral" }
 $ACR_SERVER = az acr show --name $ACR_NAME --query loginServer -o tsv
 
 az acr login --name $ACR_NAME
@@ -19,12 +21,24 @@ docker build -t "$ACR_SERVER/$TAG" `
     --build-arg SOURCE_URL=https://github.com/mykolad/lazydad `
     .
 docker push "$ACR_SERVER/$TAG"
-foreach ($APP_NAME in $APP_NAMES) {
-    az containerapp update --name $APP_NAME --resource-group $RG --image "$ACR_SERVER/$TAG" --remove-env-vars App__Version
+# The revisions are pinned to the digest, not the commit tag: Container Apps pulls the image again on every replica
+# start, and the weekly purge deletes old commit tags (runbook section 2).
+$DIGEST = az acr manifest show-metadata -r $ACR_NAME -n $TAG --query digest -o tsv
+
+foreach ($target in $APPS) {
+    # As Deploy Environment does: what runs now stays tagged (previous-<target>), and the new digest is tagged
+    # deployed-<target> before the app moves to it, so the purge never deletes a manifest a revision runs.
+    $serving = az containerapp show --name $target.App --resource-group $RG --query "properties.template.containers[0].image" -o tsv
+    docker pull -q $serving
+    docker tag $serving "$ACR_SERVER/lazydad:previous-$($target.Target)"
+    docker push -q "$ACR_SERVER/lazydad:previous-$($target.Target)"
+    docker tag "$ACR_SERVER/$TAG" "$ACR_SERVER/lazydad:deployed-$($target.Target)"
+    docker push -q "$ACR_SERVER/lazydad:deployed-$($target.Target)"
+    az containerapp update --name $target.App --resource-group $RG --image "$ACR_SERVER/lazydad@$DIGEST" --remove-env-vars App__Version
 }
 
 Write-Host ""
-Write-Host "Deployed $TAG"
-foreach ($APP_NAME in $APP_NAMES) {
-    Write-Host "URL: https://$(az containerapp show --name $APP_NAME --resource-group $RG --query properties.configuration.ingress.fqdn -o tsv)"
+Write-Host "Deployed $TAG ($DIGEST)"
+foreach ($target in $APPS) {
+    Write-Host "URL: https://$(az containerapp show --name $target.App --resource-group $RG --query properties.configuration.ingress.fqdn -o tsv)"
 }
