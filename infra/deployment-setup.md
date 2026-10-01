@@ -699,14 +699,14 @@ OPENAI=https://lazydad-openai-resource.cognitiveservices.azure.com/
 for pair in lazydad-app:lazydad-cae lazydad-app-swedencentral:lazydad-cae-swedencentral; do
   az containerapp create -g $RG -n ${pair%%:*} --environment ${pair#*:} --image "lazydadacr.azurecr.io/lazydad@$DIGEST" \
     --user-assigned "$PULL_ID" "$PROD_ID" --registry-server lazydadacr.azurecr.io --registry-identity "$PULL_ID" \
-    --ingress external --target-port 8080 --min-replicas 1 --max-replicas 1 --cpu 0.5 --memory 1Gi \
+    --ingress external --target-port 8080 --min-replicas 1 --max-replicas 1 --cpu 0.25 --memory 0.5Gi \
     --env-vars "ConnectionStrings__DefaultConnection=$SQL;Database=lazydad-db;User Id=$PROD_CLIENT" \
       AZURE_CLIENT_ID=$PROD_CLIENT LlmProviders__AzureOpenAI__Endpoint=$OPENAI -o none
 done
 
 az containerapp create -g $RG -n lazydad-app-staging --environment lazydad-cae --image "lazydadacr.azurecr.io/lazydad-preview@$DIGEST" \
   --system-assigned --user-assigned "$PULL_ID" --registry-server lazydadacr.azurecr.io --registry-identity "$PULL_ID" \
-  --ingress external --target-port 8080 --min-replicas 0 --max-replicas 1 --cpu 0.5 --memory 1Gi \
+  --ingress external --target-port 8080 --min-replicas 0 --max-replicas 1 --cpu 0.25 --memory 0.5Gi \
   --env-vars "ConnectionStrings__DefaultConnection=$SQL;Database=lazydad-db-staging" LlmProviders__AzureOpenAI__Endpoint=$OPENAI -o none
 ```
 
@@ -724,14 +724,14 @@ $OPENAI = 'https://lazydad-openai-resource.cognitiveservices.azure.com/'
 foreach ($pair in @{ App = 'lazydad-app'; Env = 'lazydad-cae' }, @{ App = 'lazydad-app-swedencentral'; Env = 'lazydad-cae-swedencentral' }) {
   az containerapp create -g $RG -n $pair.App --environment $pair.Env --image "lazydadacr.azurecr.io/lazydad@$DIGEST" `
     --user-assigned $PULL_ID $PROD_ID --registry-server lazydadacr.azurecr.io --registry-identity $PULL_ID `
-    --ingress external --target-port 8080 --min-replicas 1 --max-replicas 1 --cpu 0.5 --memory 1Gi `
+    --ingress external --target-port 8080 --min-replicas 1 --max-replicas 1 --cpu 0.25 --memory 0.5Gi `
     --env-vars "ConnectionStrings__DefaultConnection=$SQL;Database=lazydad-db;User Id=$PROD_CLIENT" `
       "AZURE_CLIENT_ID=$PROD_CLIENT" "LlmProviders__AzureOpenAI__Endpoint=$OPENAI" -o none
 }
 
 az containerapp create -g $RG -n lazydad-app-staging --environment lazydad-cae --image "lazydadacr.azurecr.io/lazydad-preview@$DIGEST" `
   --system-assigned --user-assigned $PULL_ID --registry-server lazydadacr.azurecr.io --registry-identity $PULL_ID `
-  --ingress external --target-port 8080 --min-replicas 0 --max-replicas 1 --cpu 0.5 --memory 1Gi `
+  --ingress external --target-port 8080 --min-replicas 0 --max-replicas 1 --cpu 0.25 --memory 0.5Gi `
   --env-vars "ConnectionStrings__DefaultConnection=$SQL;Database=lazydad-db-staging" "LlmProviders__AzureOpenAI__Endpoint=$OPENAI" -o none
 ```
 
@@ -739,6 +739,12 @@ az containerapp create -g $RG -n lazydad-app-staging --environment lazydad-cae -
 
 - **Each prod app runs exactly one replica** (min = max = 1): two in all, one per region. **Staging scales to zero**
   when idle, and every cold start runs a real joke tick (LLM tokens).
+- **The smallest size, 0.25 vCPU / 0.5 GiB** (CPU and memory come in a 1:2 ratio), for all three. Container Apps bills
+  the allocation per second, whether it's used or not, and a mostly idle replica at the idle rate (September 2026: the
+  prod app cost $14 at 0.5 vCPU / 1 GiB, 98% of it idle). The app used 0.005 vCPU on average and 0.1 at its highest
+  (startup, a tick), and at most 264 MB of memory (week to 2026-10-01); .NET keeps its heap under 75% of the container's
+  memory. Staging gets the same size, so previews run under production's limits. The dashboard's CPU and memory panels
+  show the limits; if memory nears them, the next size is 0.5 vCPU / 1 GiB.
 - Both prod apps run the scheduler; the lease in the database (`SchedulerLocks`) makes one of them run each 4-hour
   batch. Each app's startup tick still runs, so a production deploy makes two extra batches, one per app.
 - The first revisions' startup ticks fail, and that's expected: the databases have no users or schema yet. Deploy

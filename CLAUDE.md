@@ -154,7 +154,7 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
   `LlmProviders:AzureOpenAI:ApiKey` is empty everywhere.
   `ROLLBACK_MIN_COMMIT` (a repository variable, #30's merge commit) keeps Roll Back from choosing older images, which
   only knew the key.
-- **Container Apps** (Consumption, 0.5 vCPU / 1 GiB each), production in **two regions**:
+- **Container Apps** (Consumption, 0.25 vCPU / 0.5 GiB each, the smallest size), production in **two regions**:
   - `lazydad-app` (prod, environment `lazydad-cae`, West Europe) and `lazydad-app-swedencentral` (prod, environment
     `lazydad-cae-swedencentral`, Sweden Central, next to the database): **exactly one replica each** (min = max = 1), no
     health probes yet. Same image, same settings, same database; the scheduler lease makes one of them run each batch

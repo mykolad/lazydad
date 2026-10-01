@@ -75,10 +75,10 @@
     },
     {
       "type": "stat", "title": "Memory now", "id": 7, "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
-      "description": "The app process's working set; the container has 1 GiB.",
+      "description": "The app process's working set; the container has 0.5 GiB (orange from 60%, red from 80%).",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "bytes", "decimals": 0, "color": { "mode": "thresholds" },
-        "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 644245094 }, { "color": "red", "value": 858993459 }] } }, "overrides": [] },
+        "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 322122547 }, { "color": "red", "value": 429496730 }] } }, "overrides": [] },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area", "textMode": "value" },
       "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" },
         "expr": "max(dotnet_process_memory_working_set_bytes{job=\"$job\"})" }]
@@ -190,22 +190,22 @@
     { "type": "row", "title": "Resources", "id": 40, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 } },
     {
       "type": "timeseries", "title": "CPU (cores)", "id": 41, "gridPos": { "h": 8, "w": 8, "x": 0, "y": 41 },
-      "description": "CPU time the app process used per second. The container has 0.5 vCPU (the dashed line).",
+      "description": "CPU time the app process used per second. The container has 0.25 vCPU (the dashed line).",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 3, "min": 0, "color": { "mode": "palette-classic" },
         "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "thresholdsStyle": { "mode": "dashed" } },
-        "thresholds": { "mode": "absolute", "steps": [{ "color": "transparent", "value": null }, { "color": "red", "value": 0.5 }] } }, "overrides": [] },
+        "thresholds": { "mode": "absolute", "steps": [{ "color": "transparent", "value": null }, { "color": "red", "value": 0.25 }] } }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{cpu_mode}}",
         "expr": "sum by (cpu_mode) (rate(dotnet_process_cpu_time_seconds_total{job=\"$job\"}[$__rate_interval]))" }]
     },
     {
       "type": "timeseries", "title": "Memory", "id": 42, "gridPos": { "h": 8, "w": 8, "x": 8, "y": 41 },
-      "description": "Working set (what the container counts) and the managed heap after the last garbage collection. The container has 1 GiB (the dashed line).",
+      "description": "Working set (what the container counts) and the managed heap after the last garbage collection. The container has 0.5 GiB (the dashed line).",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "bytes", "min": 0, "color": { "mode": "palette-classic" },
         "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "thresholdsStyle": { "mode": "dashed" } },
-        "thresholds": { "mode": "absolute", "steps": [{ "color": "transparent", "value": null }, { "color": "red", "value": 1073741824 }] } }, "overrides": [] },
+        "thresholds": { "mode": "absolute", "steps": [{ "color": "transparent", "value": null }, { "color": "red", "value": 536870912 }] } }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [
         { "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "working set",
