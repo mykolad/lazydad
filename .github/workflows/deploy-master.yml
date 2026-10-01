@@ -1,7 +1,8 @@
 name: Deploy Master
 
-# Build once, promote the same image: staging (migrate, deploy, smoke tests), then production,
-# which is rolled back automatically if it fails after taking traffic.
+# Build once, promote the same image: staging (migrate, deploy, smoke tests), then production's two apps, West Europe
+# (which migrates the shared database) and then Sweden Central. Each is rolled back automatically if it fails after
+# taking traffic.
 # Runs after "Build and Test" succeeds on a push to master, or manually (e.g. to redeploy master).
 on:
   workflow_run:
@@ -64,21 +65,54 @@ jobs:
       ref: ${{ needs.build.outputs.ref }}
       digest: ${{ needs.build.outputs.digest }}
 
-  # Production failed after its new revision took traffic (e.g. the smoke tests, even after their
-  # retry): put back the image that served before. Roll Back does nothing if the revision this run
-  # created isn't serving (the deploy failed earlier, so production never changed), or if the
-  # image that served before is the same one. The run still ends as failed, so GitHub notifies you.
-  # Migrations aren't rolled back.
+  # The second prod app, only once the first passed: both use the same database, which the job above migrated, and a
+  # build that fails in West Europe never reaches Sweden Central.
+  production-swedencentral:
+    needs: [build, production]
+    uses: ./.github/workflows/deploy-environment.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      environment: production
+      app-name: lazydad-app-swedencentral
+      instance: swedencentral
+      run-migrations: false
+      tag: ${{ needs.build.outputs.tag }}
+      ref: ${{ needs.build.outputs.ref }}
+      digest: ${{ needs.build.outputs.digest }}
+
+  # A production app failed after its new revision took traffic (e.g. the smoke tests, even after their retry): put
+  # back the image that served before. Roll Back does nothing if the revision this run created isn't serving (the
+  # deploy failed earlier, so that app never changed), or if the image that served before is the same one. The run
+  # still ends as failed, so GitHub notifies you. Migrations aren't rolled back.
+  # Both apps serve lazydad.fyi, so they go back together: West Europe also when only Sweden Central failed (the build
+  # got there only because West Europe passed). Sweden Central only when it failed itself: when West Europe fails, it
+  # never deploys.
   roll-back:
-    needs: production
-    if: ${{ failure() && needs.production.result == 'failure' }}
+    needs: [production, production-swedencentral]
+    if: ${{ failure() && (needs.production.result == 'failure' || needs.production-swedencentral.result == 'failure') }}
     uses: ./.github/workflows/roll-back.yml
     permissions:
       contents: read
       id-token: write
     with:
+      app-name: lazydad-app
       # Deploy Environment's naming, with its default "r" prefix.
       only-if-serving: lazydad-app--r${{ github.run_id }}-${{ github.run_attempt }}
-      # Read from production's revisions by the production job itself (outputs survive its failure),
-      # so a tag moved by anyone else can't choose the rollback target.
+      # Read from the app's revisions by its production job itself (outputs survive its failure), so a tag moved by
+      # anyone else can't choose the rollback target.
       previous-digest: ${{ needs.production.outputs.previous-digest }}
+
+  roll-back-swedencentral:
+    needs: production-swedencentral
+    if: ${{ failure() && needs.production-swedencentral.result == 'failure' }}
+    uses: ./.github/workflows/roll-back.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      app-name: lazydad-app-swedencentral
+      instance: swedencentral
+      only-if-serving: lazydad-app-swedencentral--r${{ github.run_id }}-${{ github.run_attempt }}
+      previous-digest: ${{ needs.production-swedencentral.outputs.previous-digest }}

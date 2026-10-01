@@ -1,15 +1,24 @@
 name: Roll Back
 
-# Reusable: put production back on an earlier master build, without rebuilding it. The resolve job
-# finds the image, then production runs the same Deploy Environment steps as Deploy Master
+# Reusable: put one production app back on an earlier master build, without rebuilding it. The resolve job
+# finds the image, then the app runs the same Deploy Environment steps as Deploy Master
 # (protection tags, rollout by digest, smoke tests from that commit) minus migrations: the
 # database keeps its current schema, so the older code must work with it (additive migrations do).
 # Called by Roll Back Production (manual) and by Deploy Master (automatic, when production's
-# smoke tests fail). No concurrency group here: the callers hold "deploy", and a called workflow
+# smoke tests fail), once per app. No concurrency group here: the callers hold "deploy", and a called workflow
 # asking for its caller's group deadlocks.
 on:
   workflow_call:
     inputs:
+      app-name:
+        description: The production app to roll back
+        type: string
+        required: true
+      instance:
+        description: Deploy Environment's instance for that app (its protection tags' suffix; empty for lazydad-app)
+        type: string
+        required: false
+        default: ''
       version:
         description: >-
           Commit to roll back to (short SHA). Empty: the image of the latest earlier revision that
@@ -19,7 +28,7 @@ on:
         default: ''
       only-if-serving:
         description: >-
-          Automatic rollback: the revision the failed deploy created. If it isn't serving traffic,
+          Automatic rollback: the revision this run's deploy created in the app. If it isn't serving traffic,
           the deploy never took over and there's nothing to roll back. Otherwise the target is
           previous-digest, unless it's the same image.
         type: string
@@ -27,9 +36,9 @@ on:
         default: ''
       previous-digest:
         description: >-
-          With only-if-serving: the digest of the image that served before the failed deploy, as
-          Deploy Environment read it from production's revisions (its previous-digest output). Not the
-          previous-production tag: a tag can be moved (by production's deploy identity or an operator,
+          With only-if-serving: the digest of the image that served before this run's deploy, as
+          Deploy Environment read it from the app's revisions (its previous-digest output). Not the
+          previous-<env> tag: a tag can be moved (by production's deploy identity or an operator,
           e.g. a concurrent or manual run), a job output can't.
         type: string
         required: false
@@ -38,11 +47,13 @@ on:
 env:
   RESOURCE_GROUP: lazydad-rg
   REGISTRY: lazydadacr.azurecr.io
-  APP_NAME: lazydad-app
+  APP_NAME: ${{ inputs.app-name }}
+  # Every production app: an image any of them ran is a trusted rollback target for each (see "Resolve the image").
+  PRODUCTION_APPS: lazydad-app lazydad-app-swedencentral
 
 jobs:
   resolve:
-    name: resolve the version
+    name: resolve the version (${{ inputs.app-name }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Azure login only works through an environment (see infra/deployment-setup.md). Production's
@@ -115,14 +126,18 @@ jobs:
           fi
           serving_digest=$(digest_of "${images[$serving]}")
 
-          # The digests production's own revisions were pinned to: the only images trusted as a rollback
-          # target. Tags are mutable: staging's identity (which branch previews run as) can't write production's
-          # repository anymore, but production's identity and operators can move its tags, so a tag alone could
-          # still point production at an image it never ran. Only production's identity creates production
-          # revisions. (Revisions from before digest pinning named a tag; not trusted.)
+          # The digests production's own revisions were pinned to, in any of its apps: the only images trusted as a
+          # rollback target. Tags are mutable: staging's identity (which branch previews run as) can't write
+          # production's repository anymore, but production's identity and operators can move its tags, so a tag alone
+          # could still point production at an image it never ran. Only production's identity creates production
+          # revisions. Both apps count, so an app with a short history (Sweden Central's, at first) can still go back to
+          # what the other ran. (Revisions from before digest pinning named a tag; not trusted.)
           ran=()
-          for image in "${images[@]}"; do
-            case "$image" in *@sha256:*) ran+=("${image#*@}") ;; esac
+          for app in $PRODUCTION_APPS; do
+            while IFS= read -r image; do
+              case "$image" in *@sha256:*) ran+=("${image#*@}") ;; esac
+            done < <(az containerapp revision list -n "$app" -g "$RESOURCE_GROUP" --all \
+              --query "[?properties.provisioningState=='Provisioned' || properties.trafficWeight > \`0\`].properties.template.containers[0].image" -o tsv)
           done
 
           # Ends the job successfully without a rollout (the production job is skipped).
@@ -135,10 +150,10 @@ jobs:
 
           if [ -n "$ONLY_IF_SERVING" ]; then
             if [ "${names[$serving]}" != "$ONLY_IF_SERVING" ]; then
-              skip "Production serves ${names[$serving]}, not $ONLY_IF_SERVING: the failed deploy never took traffic."
+              skip "$APP_NAME serves ${names[$serving]}, not $ONLY_IF_SERVING: this run's deploy never took its traffic."
             fi
             # The failed deploy's own record of what served before it (the revision before this one isn't
-            # reliable: it may never have become ready). Never the previous-production tag: production's identity
+            # reliable: it may never have become ready). Never the previous-<env> tag: production's identity
             # or an operator could move it while this runs (a concurrent or manual run); the job output can't move.
             if ! [[ "$PREVIOUS_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "::error::The failed deploy didn't report the image that served before it ('$PREVIOUS_DIGEST'); roll back by hand (Roll Back Production)."
@@ -181,11 +196,11 @@ jobs:
           fi
 
           if [ "$digest" = "$serving_digest" ]; then
-            echo "::error::Production already runs that image (revision ${names[$serving]})."
+            echo "::error::$APP_NAME already runs that image (revision ${names[$serving]})."
             exit 1
           fi
           if ! printf '%s\n' "${ran[@]}" | grep -qxF "$digest"; then
-            echo "::error::$digest never ran in production (it's not in the app's revision history), so it isn't trusted as a rollback target. Roll back by hand if you're sure (infra/deployment-setup.md, section 12: Manual rollback)."
+            echo "::error::$digest never ran in production (it's in no production app's revision history), so it isn't trusted as a rollback target. Roll back by hand if you're sure (infra/deployment-setup.md, section 12: Manual rollback)."
             exit 1
           fi
 
@@ -220,9 +235,9 @@ jobs:
             echo "digest=$digest"
           } >> "$GITHUB_OUTPUT"
           {
-            echo "### Rolling production back to \`${ref:0:7}\`"
+            echo "### Rolling $APP_NAME back to \`${ref:0:7}\`"
             if [ -n "$ONLY_IF_SERVING" ]; then
-              echo "- **Automatic:** the deploy that created \`$ONLY_IF_SERVING\` failed after it took traffic."
+              echo "- **Automatic:** this run's production deploy failed (in this app or the other one) after \`$ONLY_IF_SERVING\` took traffic."
             fi
             echo "- From revision \`${names[$serving]}\` (\`${serving_digest:-unknown digest}\`)"
             echo "- To \`$image\`, commit $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$ref"
@@ -238,7 +253,8 @@ jobs:
       id-token: write
     with:
       environment: production
-      app-name: lazydad-app
+      app-name: ${{ inputs.app-name }}
+      instance: ${{ inputs.instance }}
       run-migrations: false
       # "rb", not Deploy Master's "r": an automatic rollback runs in the same workflow run as the
       # failed deploy, so the same prefix would reuse its revision name.

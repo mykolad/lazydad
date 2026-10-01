@@ -1,6 +1,6 @@
 name: Roll Back Production
 
-# Manual: put production back on an earlier master build, without rebuilding it (see roll-back.yml).
+# Manual: put production's apps back on an earlier master build, without rebuilding it (see roll-back.yml).
 # The next Deploy Master run rolls forward again; revert on master to stay on this version.
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ on:
       version:
         description: >-
           Commit to roll back to (the short SHA shown on the page, e.g. c050a46). Leave empty
-          for the version production ran before the current one.
+          for the version each app ran before its current one.
         type: string
         required: false
         default: ''
@@ -21,6 +21,7 @@ concurrency:
   group: deploy
   cancel-in-progress: false
 
+# Both apps serve lazydad.fyi, so both go back, side by side (each on its own; one failing doesn't stop the other).
 jobs:
   roll-back:
     uses: ./.github/workflows/roll-back.yml
@@ -28,4 +29,15 @@ jobs:
       contents: read
       id-token: write
     with:
+      app-name: lazydad-app
+      version: ${{ inputs.version }}
+
+  roll-back-swedencentral:
+    uses: ./.github/workflows/roll-back.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      app-name: lazydad-app-swedencentral
+      instance: swedencentral
       version: ${{ inputs.version }}

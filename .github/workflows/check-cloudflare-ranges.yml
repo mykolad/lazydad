@@ -2,7 +2,7 @@ name: Check Cloudflare Ranges
 
 # Weekly: are Cloudflare's published IP ranges still the ones the app trusts (Cloudflare:IpRanges in appsettings.json)?
 # If not, it opens an issue (or comments on the open one) listing what to add and remove, and fails, so a change
-# can't go unnoticed. The fix is a PR updating appsettings.json; its deploy also brings the prod app's ingress rules
+# can't go unnoticed. The fix is a PR updating appsettings.json; its deploy also brings the prod apps' ingress rules
 # up to date (Deploy Environment syncs them on every deploy). Once the lists match again, it closes the issue.
 # No Azure login: it only reads Cloudflare's public API and the repository.
 on:
@@ -51,7 +51,7 @@ jobs:
               body=$(printf '%s\n\n```\n%s\n```\n\n%s\n' \
                 "Cloudflare's published ranges (https://www.cloudflare.com/ips/) no longer match \`Cloudflare:IpRanges\` in \`src/LazyDad.Api/appsettings.json\` ($RUN_URL)." \
                 "$(cat result.txt)" \
-                "Fix: update that list in a PR. Its deploy also syncs the prod app's ingress rules. Until then, visitors reaching the app through a new range aren't told apart for the vote limit, and if the app is locked to Cloudflare, a new range is only admitted after the next deploy (runbook section 12).")
+                "Fix: update that list in a PR. Its deploy also syncs the prod apps' ingress rules. Until then, visitors reaching the app through a new range aren't told apart for the vote limit, and if the app is locked to Cloudflare, a new range is only admitted after the next deploy (runbook section 12).")
               if [ -n "$number" ]; then
                 gh issue comment "$number" --body "$body"
               else
