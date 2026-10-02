@@ -4,18 +4,23 @@ using LazyDad.Api.Services;
 using LazyDad.Data.Entities;
 using LazyDad.Data.Repositories;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
 using Moq;
 
 namespace LazyDad.Tests;
 
-public class JokesControllerTests
+public sealed class JokesControllerTests : IDisposable
 {
     private readonly Mock<IJokeRepository> jokeRepositoryMock = new();
     private readonly Mock<ITopJokeRepository> topJokeRepositoryMock = new();
 
     private readonly SchedulerStatus schedulerStatus = new();
+    // The default lifetime (30 s): a test's second read comes from the cache.
+    private readonly JokeReadCache cache = new(new ConfigurationBuilder().Build());
 
-    private JokesController CreateController() => new(jokeRepositoryMock.Object, topJokeRepositoryMock.Object, schedulerStatus);
+    private JokesController CreateController() => new(jokeRepositoryMock.Object, topJokeRepositoryMock.Object, schedulerStatus, cache);
+
+    public void Dispose() => cache.Dispose();
 
     private static JsonElement Json(IActionResult result)
         => JsonDocument.Parse(JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(result).Value, JsonSerializerOptions.Web)).RootElement;
@@ -163,6 +168,43 @@ public class JokesControllerTests
         var json = Json(await CreateController().GetSummary(CancellationToken.None));
 
         Assert.Equal(JsonValueKind.Null, json.GetProperty("nextBatchAt").ValueKind);
+    }
+
+    [Fact]
+    public async Task ReadsWithinTheCacheLifetime_AskTheDatabaseOnce()
+    {
+        jokeRepositoryMock.Setup(r => r.CountAsync(It.IsAny<CancellationToken>())).ReturnsAsync(955);
+        jokeRepositoryMock.Setup(r => r.GetPageAsync(JokeSort.Newest, null, 21, It.IsAny<CancellationToken>())).ReturnsAsync([MakeJoke(9)]);
+        topJokeRepositoryMock.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+
+        // Two visitors loading the page: the summary, the Top 3 and the first page each, then one more.
+        for (var visitor = 0; visitor < 2; visitor++)
+        {
+            await CreateController().GetSummary(CancellationToken.None);
+            await CreateController().GetTop(CancellationToken.None);
+            await CreateController().GetFeed("new", null, 20, CancellationToken.None);
+        }
+
+        jokeRepositoryMock.Verify(r => r.CountAsync(It.IsAny<CancellationToken>()), Times.Once);
+        jokeRepositoryMock.Verify(r => r.GetPageAsync(It.IsAny<JokeSort>(), It.IsAny<JokeCursor?>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
+        topJokeRepositoryMock.Verify(r => r.GetAllAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task EachFeedPage_IsCachedOnItsOwn()
+    {
+        var cursor = new JokeCursor(5, new DateTime(2026, 9, 23, 4, 0, 0, DateTimeKind.Utc), 3);
+        jokeRepositoryMock.Setup(r => r.GetPageAsync(JokeSort.Newest, null, 3, It.IsAny<CancellationToken>())).ReturnsAsync([MakeJoke(4)]);
+        jokeRepositoryMock.Setup(r => r.GetPageAsync(JokeSort.Newest, cursor, 3, It.IsAny<CancellationToken>())).ReturnsAsync([MakeJoke(2)]);
+        jokeRepositoryMock.Setup(r => r.GetPageAsync(JokeSort.TopVoted, null, 3, It.IsAny<CancellationToken>())).ReturnsAsync([MakeJoke(7)]);
+
+        var first = Json(await CreateController().GetFeed("new", null, 2, CancellationToken.None));
+        var second = Json(await CreateController().GetFeed("new", cursor.ToString(), 2, CancellationToken.None));
+        var top = Json(await CreateController().GetFeed("top", null, 2, CancellationToken.None));
+
+        Assert.Equal(4, first.GetProperty("items")[0].GetProperty("id").GetInt32());
+        Assert.Equal(2, second.GetProperty("items")[0].GetProperty("id").GetInt32());
+        Assert.Equal(7, top.GetProperty("items")[0].GetProperty("id").GetInt32());
     }
 
     [Theory]

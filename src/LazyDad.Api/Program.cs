@@ -53,6 +53,7 @@ builder.Services.AddScoped<JokeGenerationService>();
 builder.Services.AddScoped<TopJokeService>();
 builder.Services.AddScoped<HtmlGeneratorService>();
 builder.Services.AddSingleton<SchedulerStatus>();
+builder.Services.AddSingleton<JokeReadCache>();
 builder.Services.Configure<AppInfoOptions>(builder.Configuration.GetSection(AppInfoOptions.SectionName));
 builder.Services.Configure<CloudflareOptions>(builder.Configuration.GetSection(CloudflareOptions.SectionName));
 builder.Services.AddHostedService<JokeSchedulerService>();

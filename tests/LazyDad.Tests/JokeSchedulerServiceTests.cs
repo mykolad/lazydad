@@ -6,6 +6,7 @@ using LazyDad.Api.Telemetry;
 using LazyDad.Data.Entities;
 using LazyDad.Data.Repositories;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 using Microsoft.Extensions.Logging;
@@ -31,6 +32,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     private readonly Mock<ILlmClientFactory> llmClientFactoryMock = new();
     private readonly List<Joke> saved = [];
     private readonly SchedulerStatus status = new();
+    private readonly JokeReadCache readCache = new(new ConfigurationBuilder().Build());
     private readonly ServiceProvider metricsProvider = new ServiceCollection().AddMetrics().BuildServiceProvider();
     private ServiceProvider? provider;
     // Leaving TopJokeService out of DI makes the whole tick throw, not just one step of it.
@@ -53,6 +55,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     {
         provider?.Dispose();
         metricsProvider.Dispose();
+        readCache.Dispose();
     }
 
     /// <summary>Collects one of the scheduler's counters (only this test's meter factory, so parallel tests don't mix in).</summary>
@@ -98,7 +101,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
 
         return new JokeSchedulerService(
             provider.GetRequiredService<IServiceScopeFactory>(), options, status,
-            new SchedulerMetrics(metricsProvider.GetRequiredService<IMeterFactory>()), NullLogger<JokeSchedulerService>.Instance);
+            new SchedulerMetrics(metricsProvider.GetRequiredService<IMeterFactory>()), readCache, NullLogger<JokeSchedulerService>.Instance);
     }
 
     /// <summary>
@@ -227,6 +230,35 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         Assert.True(tick.Succeeded);
         Assert.Empty(tick.Jokes);
         Assert.Equal(["blank/empty"], Measured(jokes, "model", "outcome"));
+    }
+
+    [Fact]
+    public async Task Tick_ThatSavesAJoke_DropsThisReplicasCachedReads()
+    {
+        SetupModel("fast", () => Reply("Жарт"));
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+        await readCache.GetOrLoadAsync("count", () => Task.FromResult(1));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        // The page's next reads come from the database, with the new joke, not from a copy made before it.
+        Assert.Equal(2, await readCache.GetOrLoadAsync("count", () => Task.FromResult(2)));
+    }
+
+    [Fact]
+    public async Task Tick_ThatChangesNothing_KeepsTheCachedReads()
+    {
+        SetupModel("blank", () => Reply("   "));
+        var scheduler = CreateScheduler(Ukrainian("blank"));
+        await readCache.GetOrLoadAsync("count", () => Task.FromResult(1));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Equal(1, await readCache.GetOrLoadAsync("count", () => Task.FromResult(2)));
     }
 
     [Fact]

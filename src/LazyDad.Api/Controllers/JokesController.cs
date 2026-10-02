@@ -15,12 +15,15 @@ public class JokesController : ControllerBase
     private readonly IJokeRepository jokeRepository;
     private readonly ITopJokeRepository topJokeRepository;
     private readonly SchedulerStatus schedulerStatus;
+    private readonly JokeReadCache cache;
 
-    public JokesController(IJokeRepository jokeRepository, ITopJokeRepository topJokeRepository, SchedulerStatus schedulerStatus)
+    public JokesController(IJokeRepository jokeRepository, ITopJokeRepository topJokeRepository, SchedulerStatus schedulerStatus,
+        JokeReadCache cache)
     {
         this.jokeRepository = jokeRepository;
         this.topJokeRepository = topJokeRepository;
         this.schedulerStatus = schedulerStatus;
+        this.cache = cache;
     }
 
     [HttpGet]
@@ -33,7 +36,7 @@ public class JokesController : ControllerBase
     [HttpGet("top")]
     public async Task<IActionResult> GetTop(CancellationToken cancellationToken)
     {
-        var top = await topJokeRepository.GetAllAsync(cancellationToken);
+        var top = await cache.GetOrLoadAsync("top", () => topJokeRepository.GetAllAsync(cancellationToken));
         return Ok(top.Select(t => new
         {
             t.Language,
@@ -70,10 +73,11 @@ public class JokesController : ControllerBase
         if (after is not null && !JokeCursor.TryParse(after, out cursor))
             return BadRequest("after must be a 'next' value from a previous page.");
 
-        var total = await jokeRepository.CountAsync(cancellationToken);
+        var total = await cache.GetOrLoadAsync("count", () => jokeRepository.CountAsync(cancellationToken));
         // One extra row says whether another page exists, so the last page has no "next" even
-        // when it's exactly full.
-        var rows = await jokeRepository.GetPageAsync(order.Value, cursor, limit + 1, cancellationToken);
+        // when it's exactly full. Every visitor scrolling the same list asks for the same pages.
+        var rows = await cache.GetOrLoadAsync($"feed:{sort}:{after}:{limit}",
+            () => jokeRepository.GetPageAsync(order.Value, cursor, limit + 1, cancellationToken));
         var items = rows.Take(limit).ToList();
         var next = rows.Count > limit ? JokeCursor.After(items[^1]).ToString() : null;
         return Ok(new { total, items, next });
@@ -83,7 +87,7 @@ public class JokesController : ControllerBase
     [HttpGet("summary")]
     public async Task<IActionResult> GetSummary(CancellationToken cancellationToken)
     {
-        var count = await jokeRepository.CountAsync(cancellationToken);
+        var count = await cache.GetOrLoadAsync("count", () => jokeRepository.CountAsync(cancellationToken));
         return Ok(new { count, nextBatchAt = schedulerStatus.NextTickAt });
     }
 
