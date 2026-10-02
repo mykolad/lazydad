@@ -19,7 +19,8 @@
   const T = {
     ua: {
       count: n => `${n} ${UK_JOKES[ukPlural.select(n)]} згенеровано`,
-      top: 'Топ-3 від ШІ-судді', why: 'Чому це смішно', judged: 'оцінив', next: 'Нові жарти через',
+      top: 'Топ-3 від ШІ-судді', why: 'Чому це смішно', showWhy: 'Показати, чому це смішно', hideWhy: 'Сховати пояснення',
+      judged: 'оцінив', next: 'Нові жарти через',
       all: 'Усі жарти', newest: 'Нові', best: 'Найкращі', copy: 'Копіювати', copied: 'Скопійовано',
       share: 'Поділитися', up: 'за', down: 'проти', upA: 'Смішно', downA: 'Не смішно',
       more: 'Шукаємо ще жарти…', end: 'Це всі жарти. Поки що.', emptyT: 'Тато ще прокидається',
@@ -31,7 +32,8 @@
     },
     en: {
       count: n => `${n} ${n === 1 ? 'joke' : 'jokes'} generated so far`,
-      top: 'Top 3 by the AI judge', why: 'Why it’s funny', judged: 'judged by', next: 'New batch in',
+      top: 'Top 3 by the AI judge', why: 'Why it’s funny', showWhy: 'Show why it’s funny', hideWhy: 'Hide the explanation',
+      judged: 'judged by', next: 'New batch in',
       all: 'All jokes', newest: 'Newest', best: 'Top voted', copy: 'Copy', copied: 'Copied',
       share: 'Share', up: 'up', down: 'down', upA: 'Funny', downA: 'Not funny',
       more: 'Finding more jokes…', end: 'That’s every joke. For now.', emptyT: 'Dad is still waking up',
@@ -52,7 +54,9 @@
     check: size => svg(size, '<path d="M20 6 9 17l-5-5"/>'),
     share: svg(17, '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.59 13.51 6.83 3.98M15.41 6.51l-6.82 3.98"/>'),
     pause: svg(14, '<rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/>'),
-    play: svg(14, '<polygon points="6 3 20 12 6 21 6 3"/>')
+    play: svg(14, '<polygon points="6 3 20 12 6 21 6 3"/>'),
+    // A lightbulb: "why it's funny".
+    why: svg(16, '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/>')
   };
 
   // localStorage can be unavailable (private mode, blocked storage): the page still works, it just forgets.
@@ -92,7 +96,8 @@
     pageFailed: false,
     generation: 0,
     refreshPending: false,    // a batch landed but showing it failed; retry on the next poll
-    copied: null
+    copied: null,
+    explained: new Set()      // ids of jokes whose "why it's funny" the reader opened (this visit only)
   };
   const pendingVotes = new Map();
   const lastVoteAt = new Map(); // joke id → when its shown counts last changed through a vote
@@ -553,9 +558,40 @@
     return `<article class="ld-joke">${voteHtml(joke, true)}` +
       '<div class="ld-joke-body">' +
       `<p class="ld-joke-text"${langAttr(joke)}>${esc(joke.text)}</p>` +
+      whyNoteHtml(joke) +
       `<div class="ld-joke-foot"><span class="ld-joke-meta">${esc(shortDate(joke.generatedAt))} · ${esc(joke.model)}</span>` +
+      whyButtonHtml(joke) +
       `<button type="button" class="ld-copy" data-copy="${joke.id}" aria-label="${esc(copyLabel)}" title="${esc(copyLabel)}">${copyButtonInner(joke)}</button></div>` +
       '</div></article>';
+  }
+
+  // "Why it's funny", written by the model with the joke: hidden until the reader asks (the lightbulb). Jokes from before
+  // explanations have none, so no button either. The explanation is in English, like the Top 3's.
+  function whyNoteHtml(joke) {
+    if (!joke.explanation) return '';
+    return `<div class="ld-note ld-why" id="ld-why-${joke.id}"${state.explained.has(joke.id) ? '' : ' hidden'}>` +
+      `<span class="ld-label">${esc(t().why)}</span><p lang="en">${esc(joke.explanation)}</p></div>`;
+  }
+
+  function whyButtonHtml(joke) {
+    if (!joke.explanation) return '';
+    const open = state.explained.has(joke.id);
+    const label = open ? t().hideWhy : t().showWhy;
+    return `<button type="button" class="ld-copy" data-why="${joke.id}" aria-expanded="${open}" aria-controls="ld-why-${joke.id}"` +
+      ` aria-label="${esc(label)}" title="${esc(label)}">${ICON.why}</button>`;
+  }
+
+  function toggleWhy(id) {
+    if (state.explained.has(id)) state.explained.delete(id); else state.explained.add(id);
+    const open = state.explained.has(id);
+    const label = open ? t().hideWhy : t().showWhy;
+    document.querySelectorAll(`[data-why="${id}"]`).forEach(b => {
+      b.setAttribute('aria-expanded', String(open));
+      b.setAttribute('aria-label', label);
+      b.title = label;
+    });
+    const note = $(`ld-why-${id}`);
+    if (note) note.hidden = !open;
   }
 
   // Newly inserted rows get their vote state painted here (and whenever a joke's votes change).
@@ -639,6 +675,8 @@
       renderSpotlight();
     } else if (target.dataset.spot !== undefined) {
       selectSpot(Number(target.dataset.spot));
+    } else if (target.dataset.why) {
+      toggleWhy(Number(target.dataset.why));
     } else if (target.dataset.copy) {
       copyText(state.jokes.get(Number(target.dataset.copy)));
     } else if (target.dataset.share) {

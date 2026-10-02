@@ -32,7 +32,9 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
 
 - `JokeGenerationService` only generates text — the caller (`JokeSchedulerService`)
   is responsible for persisting and for updating the leaderboard. Keeps responsibilities
-  small and scoped.
+  small and scoped. The model answers with the joke, a `---` line, and one English sentence on why it's funny
+  (`JokeDraft`; `Jokes.Explanation`, nullable, 500 characters): no extra call. An answer without the separator is all
+  joke, with no explanation. The page hides the explanation behind a lightbulb on each feed row.
 - `JokeSchedulerService` is a singleton `BackgroundService`; it uses
   `IServiceScopeFactory` to resolve scoped services (`JokeGenerationService`,
   `IJokeRepository`, `TopJokeService`) per operation. It records each language's next tick

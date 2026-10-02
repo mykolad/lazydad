@@ -18,6 +18,7 @@ public class LazyDadDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Language).HasMaxLength(50).IsRequired();
             entity.Property(e => e.Text).HasMaxLength(2000).IsRequired();
+            entity.Property(e => e.Explanation).HasMaxLength(500);
             // Index speeds up the common query: get jokes by language
             entity.HasIndex(e => e.Language);
             // The feed's default order and its keyset cursor (newest first, ties by id).
