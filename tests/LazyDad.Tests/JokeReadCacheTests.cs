@@ -86,6 +86,19 @@ public class JokeReadCacheTests
     }
 
     [Fact]
+    public async Task EntriesCostTheirRows_SoAPageBeyondTheBudgetIsntKept()
+    {
+        using var cache = Create(null);
+        var loads = 0;
+        Func<IServiceProvider, CancellationToken, Task<int[]>> load = (_, _) => { loads++; return Task.FromResult(new int[JokeReadCache.MaxRows + 1]); };
+
+        await cache.GetOrLoadAsync("huge", load, CancellationToken.None);
+        await cache.GetOrLoadAsync("huge", load, CancellationToken.None);
+
+        Assert.Equal(2, loads);
+    }
+
+    [Fact]
     public async Task Invalidate_MakesTheNextReadLoadAgain()
     {
         using var cache = Create(null);

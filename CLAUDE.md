@@ -50,7 +50,7 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
 - **API for the page:** `GET /jokes/feed?sort=new|top&limit=(≤ 50)[&after=<next>]` → `{total, items, next}` (keyset cursor, so new jokes don't shift pages);
   `GET /jokes/summary` → `{count, nextBatchAt}`; `POST /jokes/{id}/vote {value, previous}` → `{up, down}`.
 - **Read cache** (`JokeReadCache`, `ReadCache:Seconds`, 30 by default, 0 = off): the joke count, the Top 3 and each
-  feed page (by sort, cursor and size) are kept in memory per replica, since every visitor reads the same ones and the
+  feed page (by sort, cursor and size) are kept in memory per replica (at most 20,000 rows), since every visitor reads the same ones and the
   load test found the database to be the first limit. Votes aren't cached; other visitors see a vote's counts when
   their copy expires. The scheduler drops its replica's copies when it saves a joke or updates the Top 3; the other
   region's replica catches up within the lifetime.

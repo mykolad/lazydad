@@ -15,10 +15,13 @@ public sealed class JokeReadCache : IDisposable
 {
     public const string SecondsKey = "ReadCache:Seconds";
     public const int DefaultSeconds = 30;
-    // Bounds the entries (one per key): the feed has a key per page, sort and size, and anyone can ask for any of them.
-    private const int MaxEntries = 2000;
+    // The memory budget, in rows: each entry costs the rows it holds (a feed page up to 51 jokes, the count 1), since
+    // anyone can ask for any page. A joke's text is at most 2,000 characters (4 KB), so 20,000 rows stay under about 80 MB
+    // of the replica's 512 MB even then; real jokes (about 150 characters) take about a tenth. Past it, MemoryCache
+    // doesn't keep the new entry and makes room by dropping others (expired ones first).
+    public const int MaxRows = 20_000;
 
-    private readonly MemoryCache cache = new(new MemoryCacheOptions { SizeLimit = MaxEntries });
+    private readonly MemoryCache cache = new(new MemoryCacheOptions { SizeLimit = MaxRows });
     // The load in progress for each key: visitors who miss the cache at the same moment (when an entry expires, or right
     // after Invalidate) wait for one database query instead of each running their own.
     private readonly ConcurrentDictionary<string, Lazy<Task<object?>>> loading = new();
@@ -61,7 +64,7 @@ public sealed class JokeReadCache : IDisposable
         try
         {
             var value = await LoadInOwnScopeAsync(load, CancellationToken.None);
-            cache.Set(fullKey, value, new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = lifetime, Size = 1 });
+            cache.Set(fullKey, value, new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = lifetime, Size = Rows(value) });
             return value;
         }
         finally
@@ -70,6 +73,8 @@ public sealed class JokeReadCache : IDisposable
             loading.TryRemove(fullKey, out _);
         }
     }
+
+    private static long Rows<T>(T value) => value is System.Collections.ICollection rows ? Math.Max(1, rows.Count) : 1;
 
     // Every load gets its own DI scope, so its DbContext lives exactly as long as the query: a shared load mustn't use the
     // scope of the request that started it, which ASP.NET disposes when that request ends or is cancelled.
