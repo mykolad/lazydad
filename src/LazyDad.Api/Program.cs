@@ -1,6 +1,4 @@
-using System.Threading.RateLimiting;
 using LazyDad.Api.Configuration;
-using LazyDad.Api.Controllers;
 using LazyDad.Api.Networking;
 using LazyDad.Api.Services;
 using LazyDad.Api.Telemetry;
@@ -25,14 +23,8 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
     options.KnownIPNetworks.Clear();
     options.KnownProxies.Clear();
 });
-// Votes are anonymous, so at least cap how fast one address can cast them.
-builder.Services.AddRateLimiter(options =>
-{
-    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    options.AddPolicy(JokesController.VotePolicy, context => RateLimitPartition.GetFixedWindowLimiter(
-        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-        _ => new FixedWindowRateLimiterOptions { PermitLimit = 30, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
-});
+// Votes are anonymous, so at least cap how fast one address can cast them (RateLimiting:VotesPerMinute).
+builder.Services.AddVoteRateLimit(builder.Configuration);
 
 // A connect timeout long enough for a paused serverless database to resume (see SqlConnectionStrings).
 builder.Services.AddDbContext<LazyDadDbContext>(options =>

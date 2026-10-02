@@ -14,6 +14,7 @@ src/LazyDad.Api    — ASP.NET Core Web API (controllers, background services, c
 src/LazyDad.Data   — EF Core DbContext, entities, migrations, repositories
 tests/LazyDad.Tests      — xUnit + Moq unit tests (plus SQLite in-memory for repositories)
 tests/LazyDad.SmokeTests — smoke tests against a deployed app (run by Deploy Master, not by Build and Test)
+tests/load               — the load test: k6 visitors (visitors.js) and the database seeding (Seed.cs, a file-based app)
 ```
 
 ## Code style rules
@@ -50,7 +51,8 @@ tests/LazyDad.SmokeTests — smoke tests against a deployed app (run by Deploy M
   `GET /jokes/summary` → `{count, nextBatchAt}`; `POST /jokes/{id}/vote {value, previous}` → `{up, down}`.
 - **Votes are anonymous.** The browser remembers its vote and sends it as `previous`, so switching or
   removing adjusts the counts; the update is one atomic SQL `UPDATE` that never goes below zero. The
-  endpoint is rate-limited to 30 votes per minute per client IP: from `X-Forwarded-For` (set by the Container Apps
+  endpoint is rate-limited to 30 votes per minute per client IP (`RateLimiting:VotesPerMinute`, `VoteRateLimit`; only the
+  load test raises it): from `X-Forwarded-For` (set by the Container Apps
   ingress), or, for requests from Cloudflare's ranges, from `CF-Connecting-IP` (`CloudflareClientAddressMiddleware`;
   anyone can send that header, so only Cloudflare's count). Server-side dedupe needs sign-in, which doesn't exist yet.
 - One loop per enabled language runs concurrently via `Task.WhenAll`: a startup tick, then a delay to each regular
@@ -332,6 +334,18 @@ rebuilding, side by side.
 - **The next Deploy Master run rolls forward again.** To stay on the old version, revert on master.
 - Its resolve job logs in through the `production` environment, so each rollback shows an extra
   production deployment in GitHub.
+
+### Load Test Environment
+
+`.github/workflows/load-test-environment.yml` (**Load Test Environment**) is manual, from any branch: it builds the
+branch's image (into `lazydad-loadtest`), creates a Basic SQL database (prod's tier) on `lazydad-sql-loadtest` with
+synthetic jokes (`tests/load/Seed.cs`; the *jokes* input), and runs `lazydad-app-loadtest` in `lazydad-cae` at prod's
+size with the *replicas* input, the scheduler off, the vote limit raised, only the owner's IP admitted (copied from
+staging's `home` rule, never written to the repo or logs) and telemetry to Grafana (no alerts). Everything is in
+`lazydad-loadtest-rg`, all `lazydad-github-loadtest` can change. The run then waits at tear-down for the owner's
+approval (the `loadtest-teardown` environment). The load comes from the owner's machine: `k6 run -e BASE_URL=…
+tests/load/visitors.js`, which plays visitors (page, then read about 15 s, vote twice, scroll; up to 10 scrolls) in
+growing steps until p95 > 2 s or errors > 2%. Runbook section 12, "Load test".
 
 `tsg/redeploy.ps1` is only a manual fallback now. It skips staging, migrations and smoke tests.
 

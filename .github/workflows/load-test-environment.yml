@@ -1,0 +1,307 @@
+name: Load Test Environment
+
+# Manual: a production-like copy of the app to load-test, from any branch, and its clean-up. The set-up job builds the
+# branch's image, creates a SQL server with a Basic database (prod's tier) in Sweden Central filled with synthetic
+# jokes, and runs the app in lazydad-cae (West Europe) at prod's size with the chosen number of replicas, admitting
+# only the owner's IP (staging's "home" rule) and sending telemetry to Grafana as lazydad-app-loadtest (no alerts:
+# the rules match production's apps only). The run then waits at "tear-down": approve it in the run (Review
+# deployments) to delete everything, or reject it to keep the environment, e.g. to change the replicas with a new run.
+# The load itself comes from the owner's machine, not GitHub's runners: tests/load/visitors.js (runbook section 12,
+# "Load test").
+#
+# Everything lives in lazydad-loadtest-rg, which is all lazydad-github-loadtest can change, so a branch's own
+# workflow or build can't touch production or staging (runbook section 12).
+on:
+  workflow_dispatch:
+    inputs:
+      jokes:
+        description: Synthetic jokes in the database (production had about 1,200 in October 2026)
+        type: string
+        default: '1200'
+      replicas:
+        description: Replicas of the app (production runs one per region)
+        type: choice
+        options: ['1', '2', '3', '4', '5']
+        default: '1'
+      tear-down-only:
+        description: Skip the set-up and only delete what an earlier run left
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One load-test environment at a time. A run waiting at its tear-down holds the group: approve or reject it first.
+concurrency:
+  group: load-test
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  RESOURCE_GROUP: lazydad-loadtest-rg
+  MAIN_RESOURCE_GROUP: lazydad-rg
+  APP: lazydad-app-loadtest
+  APP_IDENTITY: lazydad-loadtest-app
+  CONTAINER_ENVIRONMENT: lazydad-cae
+  SQL_SERVER: lazydad-sql-loadtest
+  DATABASE: lazydad-db-loadtest
+  REGISTRY: lazydadacr.azurecr.io
+  REPOSITORY: lazydad-loadtest
+
+jobs:
+  set-up:
+    if: ${{ !inputs.tear-down-only }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment:
+      name: loadtest
+      url: ${{ steps.app.outputs.url }}
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check the inputs
+        env:
+          JOKES: ${{ inputs.jokes }}
+        run: |
+          if ! [[ "$JOKES" =~ ^[0-9]+$ ]] || [ "$JOKES" -lt 1 ] || [ "$JOKES" -gt 100000 ]; then
+            echo "::error::jokes must be a whole number from 1 to 100000, not '$JOKES'."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # As Build Image does, but into lazydad-loadtest, the only repository this identity can write.
+      - name: Build the EF migration bundle
+        run: |
+          dotnet tool restore
+          dotnet restore src/LazyDad.Api -r linux-x64
+          dotnet ef migrations bundle --project src/LazyDad.Data --startup-project src/LazyDad.Api \
+            --configuration Release --self-contained --target-runtime linux-x64 --output efbundle --force
+
+      - name: Build and push the image
+        id: image
+        run: |
+          az acr login --name lazydadacr
+          tag=$(git rev-parse --short=7 HEAD)
+          image="$REGISTRY/$REPOSITORY:$tag"
+          docker build -t "$image" \
+            --build-arg VERSION="$tag" \
+            --build-arg REVISION="$(git rev-parse HEAD)" \
+            --build-arg COMMIT_DATE="$(git show -s --format=%cI HEAD)" \
+            --build-arg SOURCE_URL="${{ github.server_url }}/${{ github.repository }}" \
+            .
+          docker push -q "$image"
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$image")
+          {
+            echo "tag=$tag"
+            echo "digest=${digest#*@}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Detect runner IP
+        id: runner
+        run: echo "ip=$(curl -fsS https://api.ipify.org)" >> "$GITHUB_OUTPUT"
+
+      # Entra-only, like production's server. Its Entra admin is this workflow's identity, so the next steps can create
+      # the schema, the app's database user and the jokes; the object id comes from the identity's own access token.
+      - name: Create the SQL server and the database
+        run: |
+          if ! az sql server show -g "$RESOURCE_GROUP" -n "$SQL_SERVER" -o none 2> /dev/null; then
+            payload=$(az account get-access-token --query accessToken -o tsv | cut -d. -f2 | tr '_-' '/+')
+            case $(( ${#payload} % 4 )) in 2) payload+='==' ;; 3) payload+='=' ;; esac
+            oid=$(printf '%s' "$payload" | base64 -d | jq -r .oid)
+            az sql server create -g "$RESOURCE_GROUP" -n "$SQL_SERVER" -l swedencentral --minimal-tls-version 1.2 \
+              --enable-ad-only-auth --external-admin-principal-type Application \
+              --external-admin-name lazydad-github-loadtest --external-admin-sid "$oid" -o none
+            az sql server firewall-rule create -g "$RESOURCE_GROUP" -s "$SQL_SERVER" -n AllowAzureServices \
+              --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0 -o none
+          fi
+          if ! az sql db show -g "$RESOURCE_GROUP" -s "$SQL_SERVER" -n "$DATABASE" -o none 2> /dev/null; then
+            # Production's tier: Basic, 5 DTU. Local backups: it's thrown away after the test.
+            az sql db create -g "$RESOURCE_GROUP" -s "$SQL_SERVER" -n "$DATABASE" \
+              --service-objective Basic --max-size 2GB --backup-storage-redundancy Local -o none
+          fi
+
+      - name: Open the SQL firewall for this runner
+        id: firewall
+        run: |
+          rule="gh-${{ github.run_id }}-${{ github.run_attempt }}"
+          az sql server firewall-rule create -g "$RESOURCE_GROUP" -s "$SQL_SERVER" -n "$rule" \
+            --start-ip-address "${{ steps.runner.outputs.ip }}" --end-ip-address "${{ steps.runner.outputs.ip }}" -o none
+          echo "rule=$rule" >> "$GITHUB_OUTPUT"
+
+      - name: Migrate, create the app's database user and seed the jokes
+        env:
+          JOKES: ${{ inputs.jokes }}
+        run: |
+          connection="Server=tcp:$SQL_SERVER.database.windows.net,1433;Database=$DATABASE;Authentication=Active Directory Default;Encrypt=True;Connect Timeout=60"
+          chmod +x ./efbundle
+          for attempt in 1 2 3; do
+            ./efbundle --connection "$connection" && break
+            [ "$attempt" = 3 ] && { echo "::error::Migrations failed after 3 attempts."; exit 1; }
+            echo "::warning::Migration attempt $attempt failed; retrying in 30s."
+            sleep 30
+          done
+          principal=$(az identity show -g "$MAIN_RESOURCE_GROUP" -n "$APP_IDENTITY" --query principalId -o tsv)
+          dotnet run tests/load/Seed.cs -- "$connection" "$JOKES" "$APP_IDENTITY" "$principal"
+
+      - name: Close the SQL firewall
+        if: ${{ always() && steps.firewall.outputs.rule != '' }}
+        run: az sql server firewall-rule delete -g "$RESOURCE_GROUP" -s "$SQL_SERVER" -n "${{ steps.firewall.outputs.rule }}"
+
+      # Production's size and settings, with: the chosen replicas; the scheduler and the leaderboard off (no LLM calls,
+      # and the app has no model access); the vote limit raised (every simulated visitor comes from one address); and
+      # its own Grafana token (OtlpHeadersLoadTest), read as lazydad-loadtest-app.
+      - name: Create or update the app
+        id: app
+        env:
+          REPLICAS: ${{ inputs.replicas }}
+        run: |
+          pull_id=$(az identity show -g "$MAIN_RESOURCE_GROUP" -n lazydad-acr-pull --query id -o tsv)
+          app_id=$(az identity show -g "$MAIN_RESOURCE_GROUP" -n "$APP_IDENTITY" --query id -o tsv)
+          client=$(az identity show -g "$MAIN_RESOURCE_GROUP" -n "$APP_IDENTITY" --query clientId -o tsv)
+          image="$REGISTRY/$REPOSITORY@${{ steps.image.outputs.digest }}"
+          suffix="lt${{ github.run_id }}-${{ github.run_attempt }}"
+          settings=(
+            "ConnectionStrings__DefaultConnection=Server=tcp:$SQL_SERVER.database.windows.net,1433;Authentication=Active Directory Managed Identity;Encrypt=True;Database=$DATABASE;User Id=$client"
+            "AZURE_CLIENT_ID=$client"
+            "JokeGeneration__Languages__0__Enabled=false"
+            "TopJokes__Enabled=false"
+            "RateLimiting__VotesPerMinute=1000000"
+            "OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-eu-north-0.grafana.net/otlp"
+            "OTEL_EXPORTER_OTLP_HEADERS=secretref:otlp-headers"
+            "OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=loadtest"
+          )
+          if az containerapp show -g "$RESOURCE_GROUP" -n "$APP" -o none 2> /dev/null; then
+            az containerapp update -g "$RESOURCE_GROUP" -n "$APP" --image "$image" --revision-suffix "$suffix" \
+              --min-replicas "$REPLICAS" --max-replicas "$REPLICAS" --set-env-vars "${settings[@]}" -o none
+          else
+            environment=$(az containerapp env show -g "$MAIN_RESOURCE_GROUP" -n "$CONTAINER_ENVIRONMENT" --query id -o tsv)
+            az containerapp create -g "$RESOURCE_GROUP" -n "$APP" --environment "$environment" --image "$image" \
+              --revision-suffix "$suffix" --user-assigned "$pull_id" "$app_id" \
+              --registry-server "$REGISTRY" --registry-identity "$pull_id" \
+              --ingress external --target-port 8080 --min-replicas "$REPLICAS" --max-replicas "$REPLICAS" \
+              --cpu 0.25 --memory 0.5Gi \
+              --secrets "otlp-headers=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/OtlpHeadersLoadTest,identityref:$app_id" \
+              --env-vars "${settings[@]}" -o none
+          fi
+          fqdn=$(az containerapp show -g "$RESOURCE_GROUP" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv)
+          {
+            echo "url=https://$fqdn"
+            echo "revision=$APP--$suffix"
+          } >> "$GITHUB_OUTPUT"
+
+      # Only the owner's IP, the same as staging's "home" rule, copied so it never appears in this public repository or
+      # its logs; and this runner, for the check below.
+      - name: Admit only the owner, and this runner for a moment
+        id: ingress
+        run: |
+          home=$(az containerapp ingress access-restriction list -g "$MAIN_RESOURCE_GROUP" -n lazydad-app-staging \
+            --query "[?name=='home'].ipAddressRange | [0]" -o tsv)
+          if [ -z "$home" ]; then
+            echo "::error::Staging has no 'home' ingress rule to copy (runbook section 7); the app would be open to everyone."
+            exit 1
+          fi
+          echo "::add-mask::$home"
+          az containerapp ingress access-restriction set -g "$RESOURCE_GROUP" -n "$APP" --rule-name home \
+            --ip-address "$home" --action Allow --description "Owner's home IP (copied from staging)" -o none
+          rule="gh-${{ github.run_id }}-${{ github.run_attempt }}"
+          az containerapp ingress access-restriction set -g "$RESOURCE_GROUP" -n "$APP" --rule-name "$rule" \
+            --ip-address "${{ steps.runner.outputs.ip }}/32" --action Allow --description "Load Test Environment run ${{ github.run_id }}" -o none
+          echo "rule=$rule" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for the new revision
+        env:
+          URL: ${{ steps.app.outputs.url }}
+          REVISION: ${{ steps.app.outputs.revision }}
+        run: |
+          for _ in $(seq 1 60); do
+            healthz=$(curl -fsS --max-time 10 "$URL/healthz" || true)
+            if [ "$(jq -r '.revision // empty' <<< "$healthz" 2> /dev/null)" = "$REVISION" ]; then
+              count=$(curl -fsS --max-time 30 "$URL/jokes/summary" | jq -r .count)
+              echo "$REVISION answers, with $count jokes."
+              echo "count=$count" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::$REVISION didn't answer within 10 minutes; see its console logs in Log Analytics."
+          exit 1
+
+      - name: Remove this runner from the app's ingress
+        if: ${{ always() && steps.ingress.outputs.rule != '' }}
+        run: |
+          az containerapp ingress access-restriction remove -g "$RESOURCE_GROUP" -n "$APP" \
+            --rule-name "${{ steps.ingress.outputs.rule }}" -o none
+
+      - name: Summary
+        if: ${{ success() }}
+        env:
+          URL: ${{ steps.app.outputs.url }}
+        run: |
+          {
+            echo "### Load test environment ready"
+            echo "- App: $URL, image \`$REPOSITORY:${{ steps.image.outputs.tag }}\` ($GITHUB_REF_NAME), ${{ inputs.replicas }} replica(s) of 0.25 vCPU / 0.5 GiB"
+            echo "- Database: \`$DATABASE\` on \`$SQL_SERVER\` (Basic, 5 DTU), ${count:-?} jokes"
+            echo "- Run the load from your machine (it admits your IP only):"
+            echo "  \`k6 run -e BASE_URL=$URL tests/load/visitors.js\`"
+            echo "- Grafana: the LazyDad dashboard with App \`$APP\`."
+            echo "- When you're done: approve **tear-down** in this run (Review deployments). Reject it to keep the environment."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # The pause: this environment requires the owner's approval (runbook section 12) and has no Azure access itself.
+  approve-tear-down:
+    needs: set-up
+    if: ${{ always() && (inputs.tear-down-only || needs.set-up.result != 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: loadtest-teardown
+    steps:
+      - run: echo "Tear-down approved."
+
+  tear-down:
+    needs: approve-tear-down
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: loadtest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Delete the app, the SQL server and the images
+        run: |
+          if az containerapp show -g "$RESOURCE_GROUP" -n "$APP" -o none 2> /dev/null; then
+            az containerapp delete -g "$RESOURCE_GROUP" -n "$APP" --yes -o none
+            echo "Deleted $APP."
+          fi
+          if az sql server show -g "$RESOURCE_GROUP" -n "$SQL_SERVER" -o none 2> /dev/null; then
+            az sql server delete -g "$RESOURCE_GROUP" -n "$SQL_SERVER" --yes -o none
+            echo "Deleted $SQL_SERVER and its database."
+          fi
+          if az acr repository show -n lazydadacr --repository "$REPOSITORY" -o none 2> /dev/null; then
+            az acr repository delete -n lazydadacr --repository "$REPOSITORY" --yes -o none
+            echo "Deleted the $REPOSITORY images."
+          fi
+          left=$(az resource list -g "$RESOURCE_GROUP" --query "[].name" -o tsv)
+          if [ -n "$left" ]; then
+            echo "::warning::$RESOURCE_GROUP still holds: $left"
+          fi
+          echo "### Load test environment deleted" >> "$GITHUB_STEP_SUMMARY"
