@@ -500,12 +500,21 @@
       ? `<button type="button" data-rotation aria-label="${esc(state.rotationStopped ? strings.startRotation : strings.stopRotation)}" ` +
         `title="${esc(state.rotationStopped ? strings.startRotation : strings.stopRotation)}">${state.rotationStopped ? ICON.play : ICON.pause}</button>`
       : '';
+    // Every entry is laid out in the same grid cell and only the current one is shown, so the panel is always as tall as
+    // the tallest entry: rotating doesn't change its height. On a phone the panel sits above the feed, and a height
+    // change moved the jokes the reader was looking at (Safari has no scroll anchoring to hold them in place).
+    const slides = state.top.map((e, i) => {
+      const current = i === state.spot;
+      return `<div class="ld-spot-slide"${current ? '' : ' aria-hidden="true" inert'}>` +
+        `<div class="ld-rank" aria-hidden="true">${e.rank}</div>` +
+        `<p class="ld-spot-text"${langAttr(e.joke)}>${esc(e.joke.text)}</p>` +
+        `<div class="ld-note"><span class="ld-label">${esc(strings.why)}</span><p lang="en">${esc(e.reason)}</p></div>` +
+        `<span class="ld-spot-meta">${esc(shortDate(e.joke.generatedAt))} · ${esc(e.joke.model)} · ${esc(strings.judged)} ${esc(e.judgeModel)}</span>` +
+        '</div>';
+    }).join('');
     panel.innerHTML =
       `<div class="ld-panel-head"><h2 class="ld-panel-title">${esc(strings.top)}</h2><div class="ld-tabs">${tabs}${rotation}</div></div>` +
-      `<div class="ld-rank" aria-hidden="true">${entry.rank}</div>` +
-      `<p class="ld-spot-text"${langAttr(joke)}>${esc(joke.text)}</p>` +
-      `<div class="ld-note"><span class="ld-label">${esc(strings.why)}</span><p lang="en">${esc(entry.reason)}</p></div>` +
-      `<span class="ld-spot-meta">${esc(shortDate(joke.generatedAt))} · ${esc(joke.model)} · ${esc(strings.judged)} ${esc(entry.judgeModel)}</span>` +
+      `<div class="ld-spot-slides">${slides}</div>` +
       `<div class="ld-spot-actions">${voteHtml(joke, false)}` +
       `<button type="button" class="ld-round" data-share="${joke.id}" aria-label="${esc(copied ? strings.copied : strings.share)}">${copied ? ICON.check(17) : ICON.share}</button></div>`;
     paintVotes(joke);
