@@ -32,7 +32,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     private readonly Mock<ILlmClientFactory> llmClientFactoryMock = new();
     private readonly List<Joke> saved = [];
     private readonly SchedulerStatus status = new();
-    private readonly JokeReadCache readCache = new(new ConfigurationBuilder().Build());
+    private readonly JokeReadCache readCache = new(new ConfigurationBuilder().Build(), new ServiceCollection().BuildServiceProvider().GetRequiredService<IServiceScopeFactory>());
     private readonly ServiceProvider metricsProvider = new ServiceCollection().AddMetrics().BuildServiceProvider();
     private ServiceProvider? provider;
     // Leaving TopJokeService out of DI makes the whole tick throw, not just one step of it.
@@ -237,14 +237,14 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     {
         SetupModel("fast", () => Reply("Жарт"));
         var scheduler = CreateScheduler(Ukrainian("fast"));
-        await readCache.GetOrLoadAsync("count", _ => Task.FromResult(1), CancellationToken.None);
+        await readCache.GetOrLoadAsync("count", (_, _) => Task.FromResult(1), CancellationToken.None);
 
         await scheduler.StartAsync(CancellationToken.None);
         await StartupTicksDoneAsync();
         await scheduler.StopAsync(CancellationToken.None);
 
         // The page's next reads come from the database, with the new joke, not from a copy made before it.
-        Assert.Equal(2, await readCache.GetOrLoadAsync("count", _ => Task.FromResult(2), CancellationToken.None));
+        Assert.Equal(2, await readCache.GetOrLoadAsync("count", (_, _) => Task.FromResult(2), CancellationToken.None));
     }
 
     [Fact]
@@ -252,13 +252,13 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     {
         SetupModel("blank", () => Reply("   "));
         var scheduler = CreateScheduler(Ukrainian("blank"));
-        await readCache.GetOrLoadAsync("count", _ => Task.FromResult(1), CancellationToken.None);
+        await readCache.GetOrLoadAsync("count", (_, _) => Task.FromResult(1), CancellationToken.None);
 
         await scheduler.StartAsync(CancellationToken.None);
         await StartupTicksDoneAsync();
         await scheduler.StopAsync(CancellationToken.None);
 
-        Assert.Equal(1, await readCache.GetOrLoadAsync("count", _ => Task.FromResult(2), CancellationToken.None));
+        Assert.Equal(1, await readCache.GetOrLoadAsync("count", (_, _) => Task.FromResult(2), CancellationToken.None));
     }
 
     [Fact]

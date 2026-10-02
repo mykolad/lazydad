@@ -5,6 +5,7 @@ using LazyDad.Data.Entities;
 using LazyDad.Data.Repositories;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
 namespace LazyDad.Tests;
@@ -15,12 +16,26 @@ public sealed class JokesControllerTests : IDisposable
     private readonly Mock<ITopJokeRepository> topJokeRepositoryMock = new();
 
     private readonly SchedulerStatus schedulerStatus = new();
-    // The default lifetime (30 s): a test's second read comes from the cache.
-    private readonly JokeReadCache cache = new(new ConfigurationBuilder().Build());
+    private readonly ServiceProvider services;
+    // The default lifetime (30 s): a test's second read comes from the cache. Its loads resolve the mocks from their scopes.
+    private readonly JokeReadCache cache;
 
-    private JokesController CreateController() => new(jokeRepositoryMock.Object, topJokeRepositoryMock.Object, schedulerStatus, cache);
+    public JokesControllerTests()
+    {
+        services = new ServiceCollection()
+            .AddSingleton(jokeRepositoryMock.Object)
+            .AddSingleton(topJokeRepositoryMock.Object)
+            .BuildServiceProvider();
+        cache = new JokeReadCache(new ConfigurationBuilder().Build(), services.GetRequiredService<IServiceScopeFactory>());
+    }
 
-    public void Dispose() => cache.Dispose();
+    private JokesController CreateController() => new(jokeRepositoryMock.Object, schedulerStatus, cache);
+
+    public void Dispose()
+    {
+        cache.Dispose();
+        services.Dispose();
+    }
 
     private static JsonElement Json(IActionResult result)
         => JsonDocument.Parse(JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(result).Value, JsonSerializerOptions.Web)).RootElement;
