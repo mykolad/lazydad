@@ -25,7 +25,7 @@ when its app stops answering; Cloudflare stays in front of both. Both apps use t
 | 9 | GitHub environments and variables; the first deploy |
 | 10 | `lazydad.fyi` behind Cloudflare and Traffic Manager |
 | 11 | Monitoring and logs: Grafana Cloud |
-| 12 | Operations: checks, token rotation, the ingress ranges, taking a region out, registry purge, manual rollback, restoring the database |
+| 12 | Operations: checks, token rotation, the ingress ranges, taking a region out, a load test, registry purge, manual rollback, restoring the database |
 
 What it all looks like at the end:
 
@@ -45,6 +45,7 @@ What it all looks like at the end:
 | Container App | `lazydad-app-swedencentral` (prod) | Sweden Central | 1 replica, `lazydad.fyi` |
 | Container App | `lazydad-app-staging` | West Europe | 0–1 replicas, your IP only |
 | Traffic Manager profile | `lazydad-traffic` | global | weighted 50/50 between the prod apps, health checks on `/healthz` |
+| Resource group | `lazydad-loadtest-rg` | West Europe | empty between load tests (section 12, "Load test") |
 
 | Identity | Kind | Signs in as it | Roles |
 |---|---|---|---|
@@ -53,6 +54,8 @@ What it all looks like at the end:
 | `lazydad-acr-pull` | user-assigned | all three apps, to pull images | `Container Registry Repository Reader` (all repositories) |
 | `lazydad-github-cd` | user-assigned | GitHub's `production` environment | `Container Registry Repository Writer` on `lazydad`, `Reader` on `lazydad-preview`, `Reader` on the registry; `Contributor` on both prod apps; `LazyDad Deployer`; `LazyDad Service Tag Reader`; migrations in `lazydad-db` |
 | `lazydad-github-staging` | user-assigned | GitHub's `staging` environment (branch previews too) | `Container Registry Repository Writer` on `lazydad-preview` only, `Reader` on the registry; `Contributor` on `lazydad-app-staging`; `LazyDad Deployer`; migrations in `lazydad-db-staging` |
+| `lazydad-github-loadtest` | user-assigned | GitHub's `loadtest` environment (any branch) | `Contributor` on `lazydad-loadtest-rg`; `LazyDad Deployer` on `lazydad-cae`; `Managed Identity Operator` on `lazydad-acr-pull` and `lazydad-loadtest-app`; `Container Registry Repository Contributor` on `lazydad-loadtest`, `Reader` on the registry; `Reader` on `lazydad-app-staging` (section 12, "Load test") |
+| `lazydad-loadtest-app` | user-assigned | the load-test app | `Key Vault Secrets User` on `OtlpHeadersStaging`; its user in the load-test database |
 | you | your account | local runs, this runbook | `Owner`; the SQL server's Entra admin; `Foundry User`; `Key Vault Secrets Officer` + `Certificates Officer`; `Container Registry Repository Contributor` + `Catalog Lister` |
 
 ## Before you start
@@ -1415,7 +1418,7 @@ At any time, and after any change to roles (a role assignment with an empty `--s
 terminal didn't have, fails, so check):
 
 ```bash
-for id in lazydad-acr-pull lazydad-production lazydad-github-staging lazydad-github-cd; do
+for id in lazydad-acr-pull lazydad-production lazydad-github-staging lazydad-github-cd lazydad-github-loadtest lazydad-loadtest-app; do
   echo "== $id"
   az role assignment list --assignee "$(az identity show -g $RG -n $id --query principalId -o tsv)" --all \
     --query "[].{role:roleDefinitionName, scope:scope}" -o table
@@ -1430,7 +1433,7 @@ done
 <details><summary>PowerShell 7</summary>
 
 ```powershell
-foreach ($id in 'lazydad-acr-pull', 'lazydad-production', 'lazydad-github-staging', 'lazydad-github-cd') {
+foreach ($id in 'lazydad-acr-pull', 'lazydad-production', 'lazydad-github-staging', 'lazydad-github-cd', 'lazydad-github-loadtest', 'lazydad-loadtest-app') {
   "== $id"
   az role assignment list --assignee (az identity show -g $RG -n $id --query principalId -o tsv) --all `
     --query '[].{role:roleDefinitionName, scope:scope}' -o table
@@ -1532,6 +1535,161 @@ az network traffic-manager endpoint update -g $RG --profile-name lazydad-traffic
 Cloudflare keeps Traffic Manager's answer for up to a minute, so a change takes a minute or two to reach every
 visitor. A disabled region keeps running its scheduler (the lease still spreads the batches over both apps) and its
 deploys; it just gets no visitors.
+
+### Load test
+
+How many visitors can production take? The **Load Test Environment** workflow (*Actions → Load Test Environment →
+Run workflow*, from any branch, e.g. one with an optimization to try) sets up a copy of production to find out, and
+deletes it afterwards. The load itself comes from your machine, with [k6](https://k6.io) and
+`tests/load/visitors.js`: not from GitHub's runners, and not through Cloudflare (whose bot protection would block it).
+
+What the set-up job creates, all in `lazydad-loadtest-rg`, which is empty between tests:
+
+| Resource | Like production | Different |
+|---|---|---|
+| `lazydad-app-loadtest`, in `lazydad-cae` (West Europe) | 0.25 vCPU / 0.5 GiB per replica, the image built from the branch | the *replicas* input (1–5); the scheduler and the leaderboard off (no LLM calls); the vote limit raised (all simulated visitors share your address); only your IP admitted (copied from staging's `home` rule) |
+| `lazydad-sql-loadtest` (Sweden Central), database `lazydad-db-loadtest` | Basic (5 DTU), Entra-only | the *jokes* input: synthetic jokes, two per 4 hours going back from now, with a few votes each and a Top 3 |
+| Images in `lazydad-loadtest` | | the branch's build |
+
+The app sends telemetry to Grafana as `lazydad-app-loadtest` (pick it in the dashboard's *App* selector) with staging's
+token, `OtlpHeadersStaging` (write-only, and branch code can read it anyway through staging); the alert rules only
+match production's apps. Each replica counts toward Grafana's host-hours (section 11) while it runs. Cost: a few cents an hour for the app and the Basic database; under a dollar if
+it's left for a day.
+
+The run then waits at its **tear-down** job: approve it in the run (*Review deployments*) to delete the app, the SQL
+server and the images; reject it to keep the environment, e.g. to change the replicas with another run (which updates
+the app and keeps the database). *tear-down-only* deletes whatever an earlier run left.
+
+**Who can do what.** Any branch can run the workflow, so a branch's own workflow and build run with
+`lazydad-github-loadtest`, which can only: change `lazydad-loadtest-rg`; add an app to `lazydad-cae` (the
+`LazyDad Deployer` role on that environment); attach `lazydad-acr-pull` (which pulls images) and `lazydad-loadtest-app`
+(which reads `OtlpHeadersStaging`) to an app; write and delete images in `lazydad-loadtest` only; and read staging's
+app (for the `home` rule). Nothing in production or staging. The SQL server's Entra admin is that identity itself, so
+it creates the schema, the app's database user (`WITH SID`, the identity's client ID: no directory lookup, which a
+workflow's identity can't do) and the jokes. The app is never open to everyone: the set-up stops before creating
+anything if staging has no `home` rule, and a new app starts with internal ingress, made external only once its rules
+admit just your IP.
+
+**1. Once: the identities, their roles and the resource group.** (The first role needs section 6's
+`LazyDad Deployer`.)
+
+```bash
+az group create -n lazydad-loadtest-rg -l westeurope -o none
+az identity create -g $RG -n lazydad-github-loadtest -l westeurope -o none
+az identity create -g $RG -n lazydad-loadtest-app -l westeurope -o none
+LT=$(az identity show -g $RG -n lazydad-github-loadtest --query principalId -o tsv)
+ACR_ID=$(az acr show -n lazydadacr --query id -o tsv)
+role() {   # $1 the role, $2 the scope
+  az role assignment create --assignee-object-id "$LT" --assignee-principal-type ServicePrincipal --role "$1" --scope "$2" -o none
+}
+role Contributor "$(az group show -n lazydad-loadtest-rg --query id -o tsv)"
+role "LazyDad Deployer" "$(az containerapp env show -g $RG -n lazydad-cae --query id -o tsv)"
+role "Managed Identity Operator" "$(az identity show -g $RG -n lazydad-acr-pull --query id -o tsv)"
+role "Managed Identity Operator" "$(az identity show -g $RG -n lazydad-loadtest-app --query id -o tsv)"
+role Reader "$ACR_ID"
+role Reader "$(az containerapp show -g $RG -n lazydad-app-staging --query id -o tsv)"
+# The registry role, limited to lazydad-loadtest (section 6's condition), deletes included:
+not=""
+for action in content/read metadata/read content/write metadata/write content/delete metadata/delete; do
+  not+="${not:+ AND }!(ActionMatches{'Microsoft.ContainerRegistry/registries/repositories/$action'})"
+done
+az role assignment create --assignee-object-id "$LT" --assignee-principal-type ServicePrincipal \
+  --role "Container Registry Repository Contributor" --scope "$ACR_ID" --condition-version 2.0 -o none \
+  --condition "(($not) OR (@Request[Microsoft.ContainerRegistry/registries/repositories:name] StringEqualsIgnoreCase 'lazydad-loadtest'))"
+# Trusted from the loadtest GitHub environment only (section 6's immutable subject):
+az identity federated-credential create -g $RG --identity-name lazydad-github-loadtest -n github-loadtest-immutable \
+  --issuer https://token.actions.githubusercontent.com --audiences api://AzureADTokenExchange -o none \
+  --subject "repo:mykolad@$(gh api users/mykolad --jq .id)/lazydad@$(gh api repos/$REPO --jq .id):environment:loadtest"
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+az group create -n lazydad-loadtest-rg -l westeurope -o none
+az identity create -g $RG -n lazydad-github-loadtest -l westeurope -o none
+az identity create -g $RG -n lazydad-loadtest-app -l westeurope -o none
+$LT = az identity show -g $RG -n lazydad-github-loadtest --query principalId -o tsv
+$ACR_ID = az acr show -n lazydadacr --query id -o tsv
+function Add-Role([string]$Role, [string]$Scope) {
+  az role assignment create --assignee-object-id $LT --assignee-principal-type ServicePrincipal --role $Role --scope $Scope -o none
+}
+Add-Role Contributor (az group show -n lazydad-loadtest-rg --query id -o tsv)
+Add-Role 'LazyDad Deployer' (az containerapp env show -g $RG -n lazydad-cae --query id -o tsv)
+Add-Role 'Managed Identity Operator' (az identity show -g $RG -n lazydad-acr-pull --query id -o tsv)
+Add-Role 'Managed Identity Operator' (az identity show -g $RG -n lazydad-loadtest-app --query id -o tsv)
+Add-Role Reader $ACR_ID
+Add-Role Reader (az containerapp show -g $RG -n lazydad-app-staging --query id -o tsv)
+# The registry role, limited to lazydad-loadtest (section 6's condition), deletes included:
+$not = ('content/read', 'metadata/read', 'content/write', 'metadata/write', 'content/delete', 'metadata/delete' |
+  ForEach-Object { "!(ActionMatches{'Microsoft.ContainerRegistry/registries/repositories/$_'})" }) -join ' AND '
+az role assignment create --assignee-object-id $LT --assignee-principal-type ServicePrincipal `
+  --role 'Container Registry Repository Contributor' --scope $ACR_ID --condition-version 2.0 -o none `
+  --condition "(($not) OR (@Request[Microsoft.ContainerRegistry/registries/repositories:name] StringEqualsIgnoreCase 'lazydad-loadtest'))"
+# Trusted from the loadtest GitHub environment only (section 6's immutable subject):
+az identity federated-credential create -g $RG --identity-name lazydad-github-loadtest -n github-loadtest-immutable `
+  --issuer https://token.actions.githubusercontent.com --audiences api://AzureADTokenExchange -o none `
+  --subject "repo:mykolad@$(gh api users/mykolad --jq .id)/lazydad@$(gh api repos/$REPO --jq .id):environment:loadtest"
+```
+
+</details>
+
+**2. Once: let the app read staging's Grafana token.** No new token: the load-test app sends with `OtlpHeadersStaging`.
+
+```bash
+az role assignment create --assignee-object-id "$(az identity show -g $RG -n lazydad-loadtest-app --query principalId -o tsv)" \
+  --assignee-principal-type ServicePrincipal --role "Key Vault Secrets User" \
+  --scope "$(az keyvault show -n lazydad-kv --query id -o tsv)/secrets/OtlpHeadersStaging" -o none
+```
+
+*PowerShell 7: the same command, with `` ` `` for `\` and `(az …)` for `"$(az …)"`.*
+
+**3. Once: the GitHub environments.** `loadtest` accepts every branch (no branch policy) and holds the identity;
+`loadtest-teardown` holds nothing but your approval, which the tear-down waits for.
+
+```bash
+gh api -X PUT repos/$REPO/environments/loadtest > /dev/null
+gh variable set AZURE_CLIENT_ID -R $REPO --env loadtest --body "$(az identity show -g $RG -n lazydad-github-loadtest --query clientId -o tsv)"
+echo "{\"reviewers\":[{\"type\":\"User\",\"id\":$(gh api users/mykolad --jq .id)}]}" |
+  gh api -X PUT repos/$REPO/environments/loadtest-teardown --input - > /dev/null
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+gh api -X PUT "repos/$REPO/environments/loadtest" | Out-Null
+gh variable set AZURE_CLIENT_ID -R $REPO --env loadtest --body (az identity show -g $RG -n lazydad-github-loadtest --query clientId -o tsv)
+"{""reviewers"":[{""type"":""User"",""id"":$(gh api users/mykolad --jq .id)}]}" |
+  gh api -X PUT "repos/$REPO/environments/loadtest-teardown" --input - | Out-Null
+```
+
+</details>
+
+**4. A test.**
+
+1. *Actions → Load Test Environment → Run workflow*: the branch, *jokes* and *replicas*. In about 10 minutes the
+   run's summary shows the app's address and the k6 command.
+2. From your machine (k6: `winget install k6 --source winget`, or the release zip):
+
+   ```bash
+   k6 run -e BASE_URL=https://lazydad-app-loadtest.<environment domain> tests/load/visitors.js
+   ```
+
+   Each simulated visitor loads the page as a browser does (its files, the summary, the Top 3, the first 20 jokes),
+   then up to 10 times reads for about 15 seconds, votes on two jokes of the batch and scrolls to the next 20. New
+   visitors arrive in 3-minute steps of about 10, 50, 100, 200 and 400 at once; k6 stops early when p95 latency
+   passes 2 seconds or more than 2% of requests fail. `-e STAGES=10,50` and `-e STEP=1m` change the steps.
+3. Watch Grafana (*App* `lazydad-app-loadtest`: requests, latency, CPU and memory against the limits), and afterwards
+   Azure's view of the containers and the database:
+
+   ```bash
+   APP_ID=$(az containerapp show -g lazydad-loadtest-rg -n lazydad-app-loadtest --query id -o tsv)
+   DB_ID=$(az sql db show -g lazydad-loadtest-rg -s lazydad-sql-loadtest -n lazydad-db-loadtest --query id -o tsv)
+   az monitor metrics list --resource "$APP_ID" --metric UsageNanoCores WorkingSetBytes RestartCount Requests \
+     --aggregation Maximum --interval PT1M --offset 1h -o table
+   az monitor metrics list --resource "$DB_ID" --metric dtu_consumption_percent --aggregation Maximum --interval PT1M --offset 1h -o table
+   ```
+
+4. Approve **tear-down** in the run.
 
 ### Registry purge
 
