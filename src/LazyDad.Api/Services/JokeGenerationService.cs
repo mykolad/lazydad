@@ -46,22 +46,34 @@ public class JokeGenerationService
     internal static string BuildSystemPrompt(LanguageOptions language, IReadOnlyList<string> recentJokes)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("You are a dad joke generator. Generate exactly one original dad joke.");
+        // "Dad joke" names a style, not a subject. Without saying so, models writing in a language with no such term
+        // (Ukrainian) took it literally: every joke starred a father ("Тато взяв … бо чув, що …"), and the recent jokes
+        // below, all in that mould, taught the next ones to copy it.
+        sb.AppendLine("You write dad jokes. A dad joke is a style of humour, not a subject: a short, corny, groan-worthy joke");
+        sb.AppendLine("built on a pun or wordplay, the kind a father tells at the dinner table. It doesn't need a father in it,");
+        sb.AppendLine("and most good ones don't have one. Generate exactly one original dad joke.");
 
         if (!string.IsNullOrWhiteSpace(language.PromptHint))
             sb.AppendLine(language.PromptHint);
 
         sb.AppendLine();
         sb.AppendLine("Rules:");
-        sb.AppendLine("- The joke must be a classic dad joke: a pun, wordplay, or groan-worthy one-liner.");
+        sb.AppendLine("- The joke must be a classic dad joke, built on a pun or wordplay that works in the joke's own language (not a");
+        sb.AppendLine("  translated English pun). It can be a one-liner or a short dialogue.");
+        sb.AppendLine("- Don't make a father (\"dad\", in any language) a character unless the pun itself needs one.");
+        sb.AppendLine("- Vary the form: a question and its answer, a one-liner, a mini-dialogue of two to four lines (each line on");
+        sb.AppendLine("  its own line, starting with a dash), or a mock definition.");
+        sb.AppendLine("  Pick any everyday subject: food, work, school, animals, weather, technology, sport, places.");
         sb.AppendLine("- The joke must be family-friendly.");
         sb.AppendLine("- Do NOT mention \"Russia\" or \"Russian\" anywhere in the joke.");
 
         if (recentJokes.Count > 0)
         {
-            sb.AppendLine("- Do NOT repeat any of the following already-used jokes:");
+            sb.AppendLine("- Do NOT repeat any of the following already-used jokes, and don't reuse their openings, characters or");
+            sb.AppendLine("  structure (e.g. the same first words, or the same \"someone took X because they heard Y\" template):");
+            // One line each: a dialogue's lines are joined with " / ", so they don't read as rules or other jokes.
             foreach (var joke in recentJokes)
-                sb.AppendLine($"  * {joke}");
+                sb.AppendLine($"  * {string.Join(" / ", joke.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))}");
         }
 
         sb.AppendLine("- Respond with ONLY the joke text. No explanation, no numbering, no quotes.");
