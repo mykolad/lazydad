@@ -237,14 +237,14 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     {
         SetupModel("fast", () => Reply("Жарт"));
         var scheduler = CreateScheduler(Ukrainian("fast"));
-        await readCache.GetOrLoadAsync("count", () => Task.FromResult(1));
+        await readCache.GetOrLoadAsync("count", _ => Task.FromResult(1), CancellationToken.None);
 
         await scheduler.StartAsync(CancellationToken.None);
         await StartupTicksDoneAsync();
         await scheduler.StopAsync(CancellationToken.None);
 
         // The page's next reads come from the database, with the new joke, not from a copy made before it.
-        Assert.Equal(2, await readCache.GetOrLoadAsync("count", () => Task.FromResult(2)));
+        Assert.Equal(2, await readCache.GetOrLoadAsync("count", _ => Task.FromResult(2), CancellationToken.None));
     }
 
     [Fact]
@@ -252,13 +252,13 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     {
         SetupModel("blank", () => Reply("   "));
         var scheduler = CreateScheduler(Ukrainian("blank"));
-        await readCache.GetOrLoadAsync("count", () => Task.FromResult(1));
+        await readCache.GetOrLoadAsync("count", _ => Task.FromResult(1), CancellationToken.None);
 
         await scheduler.StartAsync(CancellationToken.None);
         await StartupTicksDoneAsync();
         await scheduler.StopAsync(CancellationToken.None);
 
-        Assert.Equal(1, await readCache.GetOrLoadAsync("count", () => Task.FromResult(2)));
+        Assert.Equal(1, await readCache.GetOrLoadAsync("count", _ => Task.FromResult(2), CancellationToken.None));
     }
 
     [Fact]
