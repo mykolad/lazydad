@@ -1392,10 +1392,12 @@ would look down and idle all the time.
   rules, which you can then edit in the UI; to keep a change, edit the file too. Grafana Cloud's own rule folders
   (`knowledge-graph`, `frontend-observability-asserts`, `Grafana`) come with the stack; leave them.
 
-**5. The dashboard.** `infra/grafana/lazydad-dashboard.json` shows one app at a time (the *App* selector at the
-top): requests, errors and latency; ticks, jokes and leaderboard updates by outcome; LLM call duration and tokens per
-model; CPU and memory against the container's limits; SQL and outbound calls; and the logs. In Grafana:
-*Dashboards → New → Import*, upload the file, *Import*. The *Metrics* and *Logs* selectors at the top offer only the
+**5. The dashboard.** `infra/grafana/lazydad-dashboard.json` shows the apps picked in the *App* selector at the top:
+production's two by default, added up (pick one app, or staging, to see it alone). Requests, errors and latency; ticks,
+jokes and leaderboard updates by outcome (ticks per app: each batch runs on one of them); LLM call duration and tokens
+per model; CPU and memory per app against each container's limits; SQL and outbound calls; and the logs, each line
+starting with its app's name. In Grafana: *Dashboards → New → Import*, upload the file, *Import* (to update it, the same,
+with *Overwrite*: the file keeps the dashboard's uid). The *Metrics* and *Logs* selectors at the top offer only the
 stack's `…-prom` and `…-logs` data sources (Grafana Cloud's names), so it picks those; other Loki data sources, such as
 `…-alert-state-history`, hold Grafana's own records, not the app's logs. Editing it in Grafana is fine; to keep a change, export
 it (*Share → Export*, with "Export for sharing externally" off) and replace the file in a PR.
