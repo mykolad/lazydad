@@ -49,8 +49,12 @@ await using (var count = new SqlCommand("SELECT COUNT(*) FROM Jokes", connection
 }
 
 // Like production: two jokes per 4-hour tick (one per model), going back in time from now, texts of a real joke's
-// length, and a few votes each. Then a Top 3, as the judge would have left it.
+// length, and a few votes each. Then a Top 3, as the judge would have left it. Both in one transaction: a seed that stops
+// halfway leaves no jokes, so the next run seeds again instead of keeping jokes without a Top 3.
 await ExecuteAsync("""
+    SET XACT_ABORT ON;
+    BEGIN TRANSACTION;
+
     WITH numbers AS (
         SELECT TOP (@jokes) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS i
         FROM sys.all_objects a CROSS JOIN sys.all_objects b)
@@ -67,6 +71,8 @@ await ExecuteAsync("""
     SELECT TOP (3) N'Ukrainian', ROW_NUMBER() OVER (ORDER BY Up - Down DESC, Id), Id, N'Load test seed', N'gpt-6-sol', SYSUTCDATETIME()
     FROM Jokes
     ORDER BY Up - Down DESC, Id;
+
+    COMMIT;
     """, ("@jokes", jokes));
 Console.WriteLine($"Seeded {jokes} jokes and a Top 3.");
 return 0;
