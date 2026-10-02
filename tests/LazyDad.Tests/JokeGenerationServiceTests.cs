@@ -116,6 +116,18 @@ public class JokeGenerationServiceTests
     }
 
     [Fact]
+    public void BuildSystemPrompt_TreatsADadJokeAsAStyle_AndAsksForVariety()
+    {
+        var prompt = JokeGenerationService.BuildSystemPrompt(ukrainianLanguage, ["Тато взяв гарбуз на збори, бо чув, що там ділитимуть гарбузи."]);
+
+        Assert.Contains("a style of humour, not a subject", prompt);
+        Assert.Contains("Don't make a father", prompt);
+        Assert.Contains("Vary the form", prompt);
+        // The recent jokes are listed to avoid their templates too, not only their exact text.
+        Assert.Contains("don't reuse their openings", prompt);
+    }
+
+    [Fact]
     public void BuildSystemPrompt_IncludesPromptHint()
     {
         var prompt = JokeGenerationService.BuildSystemPrompt(ukrainianLanguage, []);
