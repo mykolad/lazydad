@@ -150,6 +150,10 @@ html[data-theme="dark"] .ld-panel { background: #3d472b; }
 .ld-label { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--color-accent-2-700); }
 .ld-note p { margin: 0; font-size: 14px; text-wrap: pretty; }
 .ld-spot-meta { font-size: 13px; }
+/* The Top 3's entries share one grid cell, so the panel keeps the tallest one's height while they rotate. */
+.ld-spot-slides { display: grid; }
+.ld-spot-slide { grid-area: 1 / 1; display: flex; flex-direction: column; gap: 20px; }
+.ld-spot-slide[aria-hidden="true"] { visibility: hidden; }
 .ld-spot-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .ld-round {
   width: 40px; height: 40px; border: 0; border-radius: 999px; cursor: pointer;
