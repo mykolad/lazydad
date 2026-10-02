@@ -210,6 +210,9 @@ a.ld-version:hover { color: var(--color-text); }
   background: transparent; color: color-mix(in srgb, var(--color-text) 70%, transparent); font: 600 12px var(--font-body);
 }
 .ld-copy:hover { background: color-mix(in srgb, var(--color-text) 8%, transparent); }
+/* The lightbulb while its "why it's funny" is open, and that note in a feed row (smaller than the Top 3's). */
+.ld-copy[aria-expanded="true"] { background: var(--color-accent-2-100); color: var(--color-accent-2-700); }
+.ld-why { padding: 10px 14px; border-radius: 16px; }
 
 .ld-sentinel { height: 1px; }
 .ld-more {

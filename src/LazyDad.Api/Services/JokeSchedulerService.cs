@@ -259,9 +259,9 @@ public class JokeSchedulerService : BackgroundService
         {
             logger.LogInformation("Generating joke for '{Language}' using {Model}...", language.Language, model.Model);
 
-            var text = await generationService.GenerateAsync(language, model, stoppingToken);
+            var draft = await generationService.GenerateAsync(language, model, stoppingToken);
 
-            if (string.IsNullOrWhiteSpace(text))
+            if (string.IsNullOrWhiteSpace(draft.Text))
             {
                 metrics.RecordJoke(language.Language, model.Model, "empty");
                 logger.LogWarning("LLM returned an empty response for '{Language}' ({Model}). Skipping.", language.Language, model.Model);
@@ -272,7 +272,8 @@ public class JokeSchedulerService : BackgroundService
             {
                 Language = language.Language,
                 Model = model.Model,
-                Text = text,
+                Text = draft.Text,
+                Explanation = draft.Explanation,
                 GeneratedAt = DateTime.UtcNow
             };
         }

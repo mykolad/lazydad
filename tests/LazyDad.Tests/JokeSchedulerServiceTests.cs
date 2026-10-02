@@ -233,6 +233,21 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Tick_SavesTheJokesExplanationWithIt()
+    {
+        SetupModel("fast", () => Reply("— Чому годинник пішов?\n— Бо мав багато часу!\n---\nA pun on \"пішов\"."));
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        var joke = Assert.Single(saved);
+        Assert.Equal("— Чому годинник пішов?\n— Бо мав багато часу!", joke.Text);
+        Assert.Equal("A pun on \"пішов\".", joke.Explanation);
+    }
+
+    [Fact]
     public async Task Tick_ThatSavesAJoke_DropsThisReplicasCachedReads()
     {
         SetupModel("fast", () => Reply("Жарт"));
