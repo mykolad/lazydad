@@ -6,7 +6,7 @@ namespace LazyDad.Api.Services;
 /// <summary>
 /// Keeps what every visitor reads the same (the joke count, the Top 3, the feed's pages) in memory for
 /// <see cref="SecondsKey"/> seconds (<see cref="DefaultSeconds"/> unless set; 0 turns it off), so the database
-/// serves them once per replica per period, not once per visitor: the load test (runbook section 12) found the
+/// serves them once per replica per period, not once per visitor: the load test (docs/performance.md) found the
 /// database to be the first limit. A vote isn't seen by other visitors until their copy expires (the voter's own counts
 /// come from the vote's response). The replica that saves a joke or updates the Top 3 drops its copies at once
 /// (<see cref="Invalidate"/>); the other region's replica sees them when its copies expire.
