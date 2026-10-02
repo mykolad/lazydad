@@ -1691,21 +1691,7 @@ gh variable set AZURE_CLIENT_ID -R $REPO --env loadtest --body (az identity show
 
 4. Approve **tear-down** in the run.
 
-**Results so far.** 2026-10-02, `master` at `fe3bc19`, 2 replicas, 1,200 jokes, `-e STAGES=450,600,800,1000`:
-
-| Visitors at once | Requests per minute | p95 latency | App CPU, busiest replica (of 250 m) | Database DTU (Basic) |
-|---|---|---|---|---|
-| 220 | 3,000 | 102 ms | 69 m | 41% |
-| 430 | 5,900 | 119 ms | 161 m | 81% |
-| 480 | 6,600 | 504 ms | 164 m | 76% |
-| 540 | 7,200 | 1.1 s | 187 m | 91% |
-| 620 | 7,300 | 2.4 s | 204 m | **100%** |
-
-The **database runs out first**: from about 7,300 requests a minute (about 120 a second, 500 visitors at once)
-throughput stops growing and requests queue (latency climbs, no errors yet), with the app's CPU at about 80%. Memory
-stayed at about 250 MB of 512 MB. Comfortable load is about 430 visitors at once. The next steps up are the database
-(S0, 10 DTU, about $15 a month) or caching what every visitor gets the same (the summary, the Top 3, the feed's first
-page).
+Results, and what each optimization changed: `docs/performance.md`. Add each run's results there.
 
 ### Registry purge
 

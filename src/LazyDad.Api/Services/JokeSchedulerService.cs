@@ -14,6 +14,7 @@ public class JokeSchedulerService : BackgroundService
     private readonly IOptions<JokeGenerationOptions> options;
     private readonly SchedulerStatus status;
     private readonly SchedulerMetrics metrics;
+    private readonly JokeReadCache readCache;
     private readonly ILogger<JokeSchedulerService> logger;
     // Identifies this process in SchedulerLocks: the machine (the Container Apps replica) plus a per-process part.
     private readonly string instanceId =
@@ -24,12 +25,14 @@ public class JokeSchedulerService : BackgroundService
         IOptions<JokeGenerationOptions> options,
         SchedulerStatus status,
         SchedulerMetrics metrics,
+        JokeReadCache readCache,
         ILogger<JokeSchedulerService> logger)
     {
         this.scopeFactory = scopeFactory;
         this.options = options;
         this.status = status;
         this.metrics = metrics;
+        this.readCache = readCache;
         this.logger = logger;
     }
 
@@ -195,7 +198,10 @@ public class JokeSchedulerService : BackgroundService
         try
         {
             if (await topJokeService.UpdateAsync(language.Language, saved, stoppingToken))
+            {
                 leaderboard = "updated";
+                readCache.Invalidate();
+            }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -236,6 +242,8 @@ public class JokeSchedulerService : BackgroundService
 
         metrics.RecordJoke(joke.Language, joke.Model, "saved");
         status.RecordSavedJoke(new SavedJoke(joke.Language, joke.Id, joke.Model, DateTime.UtcNow));
+        // This replica's visitors see it at once; the other region's when their cached copies expire.
+        readCache.Invalidate();
         logger.LogInformation("Joke saved for '{Language}' ({Model}): {Text}", joke.Language, joke.Model, joke.Text);
         return joke;
     }
