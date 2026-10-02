@@ -55,7 +55,7 @@ What it all looks like at the end:
 | `lazydad-github-cd` | user-assigned | GitHub's `production` environment | `Container Registry Repository Writer` on `lazydad`, `Reader` on `lazydad-preview`, `Reader` on the registry; `Contributor` on both prod apps; `LazyDad Deployer`; `LazyDad Service Tag Reader`; migrations in `lazydad-db` |
 | `lazydad-github-staging` | user-assigned | GitHub's `staging` environment (branch previews too) | `Container Registry Repository Writer` on `lazydad-preview` only, `Reader` on the registry; `Contributor` on `lazydad-app-staging`; `LazyDad Deployer`; migrations in `lazydad-db-staging` |
 | `lazydad-github-loadtest` | user-assigned | GitHub's `loadtest` environment (any branch) | `Contributor` on `lazydad-loadtest-rg`; `LazyDad Deployer` on `lazydad-cae`; `Managed Identity Operator` on `lazydad-acr-pull` and `lazydad-loadtest-app`; `Container Registry Repository Contributor` on `lazydad-loadtest`, `Reader` on the registry; `Reader` on `lazydad-app-staging` (section 12, "Load test") |
-| `lazydad-loadtest-app` | user-assigned | the load-test app | `Key Vault Secrets User` on `OtlpHeadersLoadTest`; its user in the load-test database |
+| `lazydad-loadtest-app` | user-assigned | the load-test app | `Key Vault Secrets User` on `OtlpHeadersStaging`; its user in the load-test database |
 | you | your account | local runs, this runbook | `Owner`; the SQL server's Entra admin; `Foundry User`; `Key Vault Secrets Officer` + `Certificates Officer`; `Container Registry Repository Contributor` + `Catalog Lister` |
 
 ## Before you start
@@ -1551,9 +1551,9 @@ What the set-up job creates, all in `lazydad-loadtest-rg`, which is empty betwee
 | `lazydad-sql-loadtest` (Sweden Central), database `lazydad-db-loadtest` | Basic (5 DTU), Entra-only | the *jokes* input: synthetic jokes, two per 4 hours going back from now, with a few votes each and a Top 3 |
 | Images in `lazydad-loadtest` | | the branch's build |
 
-The app sends telemetry to Grafana as `lazydad-app-loadtest` (pick it in the dashboard's *App* selector) with its own
-token, `OtlpHeadersLoadTest`; the alert rules only match production's apps. Each replica counts toward Grafana's
-host-hours (section 11) while it runs. Cost: a few cents an hour for the app and the Basic database; under a dollar if
+The app sends telemetry to Grafana as `lazydad-app-loadtest` (pick it in the dashboard's *App* selector) with staging's
+token, `OtlpHeadersStaging` (write-only, and branch code can read it anyway through staging); the alert rules only
+match production's apps. Each replica counts toward Grafana's host-hours (section 11) while it runs. Cost: a few cents an hour for the app and the Basic database; under a dollar if
 it's left for a day.
 
 The run then waits at its **tear-down** job: approve it in the run (*Review deployments*) to delete the app, the SQL
@@ -1563,7 +1563,7 @@ the app and keeps the database). *tear-down-only* deletes whatever an earlier ru
 **Who can do what.** Any branch can run the workflow, so a branch's own workflow and build run with
 `lazydad-github-loadtest`, which can only: change `lazydad-loadtest-rg`; add an app to `lazydad-cae` (the
 `LazyDad Deployer` role on that environment); attach `lazydad-acr-pull` (which pulls images) and `lazydad-loadtest-app`
-(which reads `OtlpHeadersLoadTest`) to an app; write and delete images in `lazydad-loadtest` only; and read staging's
+(which reads `OtlpHeadersStaging`) to an app; write and delete images in `lazydad-loadtest` only; and read staging's
 app (for the `home` rule). Nothing in production or staging. The SQL server's Entra admin is that identity itself, so
 it creates the schema, the app's database user (`WITH SID`, the identity's client ID: no directory lookup, which a
 workflow's identity can't do) and the jokes. The app is never open to everyone: the set-up stops before creating
@@ -1633,14 +1633,12 @@ az identity federated-credential create -g $RG --identity-name lazydad-github-lo
 
 </details>
 
-**2. Once: a Grafana token for it.** Create a third token in Grafana (as in section 11, step 1: metrics, logs and traces
-write), store it with section 11's helper as `OtlpHeadersLoadTest` (`store_token OtlpHeadersLoadTest` or
-`Set-GrafanaToken OtlpHeadersLoadTest`), and let the app's identity read it:
+**2. Once: let the app read staging's Grafana token.** No new token: the load-test app sends with `OtlpHeadersStaging`.
 
 ```bash
 az role assignment create --assignee-object-id "$(az identity show -g $RG -n lazydad-loadtest-app --query principalId -o tsv)" \
   --assignee-principal-type ServicePrincipal --role "Key Vault Secrets User" \
-  --scope "$(az keyvault show -n lazydad-kv --query id -o tsv)/secrets/OtlpHeadersLoadTest" -o none
+  --scope "$(az keyvault show -n lazydad-kv --query id -o tsv)/secrets/OtlpHeadersStaging" -o none
 ```
 
 *PowerShell 7: the same command, with `` ` `` for `\` and `(az …)` for `"$(az …)"`.*

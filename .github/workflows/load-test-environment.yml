@@ -176,7 +176,8 @@ jobs:
 
       # Production's size and settings, with: the chosen replicas; the scheduler and the leaderboard off (no LLM calls,
       # and the app has no model access); the vote limit raised (every simulated visitor comes from one address); and
-      # its own Grafana token (OtlpHeadersLoadTest), read as lazydad-loadtest-app.
+      # staging's Grafana token (OtlpHeadersStaging: a write-only token that branch code can already read), read as
+      # lazydad-loadtest-app.
       - name: Create or update the app
         id: app
         env:
@@ -207,7 +208,7 @@ jobs:
               --registry-server "$REGISTRY" --registry-identity "$pull_id" \
               --ingress internal --target-port 8080 --min-replicas "$REPLICAS" --max-replicas "$REPLICAS" \
               --cpu 0.25 --memory 0.5Gi \
-              --secrets "otlp-headers=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/OtlpHeadersLoadTest,identityref:$app_id" \
+              --secrets "otlp-headers=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/OtlpHeadersStaging,identityref:$app_id" \
               --env-vars "${settings[@]}" -o none
           fi
           echo "revision=$APP--$suffix" >> "$GITHUB_OUTPUT"

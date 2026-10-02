@@ -341,7 +341,7 @@ rebuilding, side by side.
 branch's image (into `lazydad-loadtest`), creates a Basic SQL database (prod's tier) on `lazydad-sql-loadtest` with
 synthetic jokes (`tests/load/Seed.cs`; the *jokes* input), and runs `lazydad-app-loadtest` in `lazydad-cae` at prod's
 size with the *replicas* input, the scheduler off, the vote limit raised, only the owner's IP admitted (copied from
-staging's `home` rule, never written to the repo or logs) and telemetry to Grafana (no alerts). Everything is in
+staging's `home` rule, never written to the repo or logs) and telemetry to Grafana with staging's token (no alerts). Everything is in
 `lazydad-loadtest-rg`, all `lazydad-github-loadtest` can change. The run then waits at tear-down for the owner's
 approval (the `loadtest-teardown` environment). The load comes from the owner's machine: `k6 run -e BASE_URL=…
 tests/load/visitors.js`, which plays visitors (page, then read about 15 s, vote twice, scroll; up to 10 scrolls) in
