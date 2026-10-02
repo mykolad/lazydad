@@ -1707,6 +1707,21 @@ stayed at about 250 MB of 512 MB. Comfortable load is about 430 visitors at once
 (S0, 10 DTU, about $15 a month) or caching what every visitor gets the same (the summary, the Top 3, the feed's first
 page).
 
+**With the read cache** (`JokeReadCache`, 30 seconds), the same run on 2026-10-02 at `c3fe8a4`: no step reached a
+limit.
+
+| Visitors at once | Requests per minute | p95 latency | App CPU, busiest replica (of 250 m) | Database DTU (Basic) |
+|---|---|---|---|---|
+| 460 | 7,100 | 91 ms | 112 m | 36% |
+| 640 | 9,800 | 97 ms | 162 m | 47% |
+| 790 | 12,100 | 97 ms | 186 m | 61% |
+| 860 | 12,800 | 155 ms | 218 m | 70% |
+
+Throughput is now **at least 1.75 times** the uncached limit, at the same latency. What's left in the database is mostly
+votes (this test votes twice every 15 seconds per visitor, far more than real visitors do), and the app's CPU (about 87%
+at 860 at once) is the next limit, so about 850 visitors at once is comfortable. The database's workers (Basic allows
+30 at once) briefly hit 100% a few times without a failed request; S0 would add headroom there.
+
 ### Registry purge
 
 Preview what it would delete, check runs, or run it now:
