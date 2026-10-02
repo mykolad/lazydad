@@ -4,15 +4,15 @@
 // with votes and a Top 3, so the feed, its pages and the leaderboard look like production's. Run it after the
 // migrations, signed in as the server's Entra admin (Active Directory Default: the workflow's Azure login).
 //
-//   dotnet run tests/load/Seed.cs -- <connection string> <jokes> <app identity name> <app identity object id>
+//   dotnet run tests/load/Seed.cs -- <connection string> <jokes> <app identity name> <app identity client id>
 //
 // A database that already has jokes keeps them (a re-run of the set-up), so only the user is checked again.
 
 using Microsoft.Data.SqlClient;
 
-if (args.Length != 4 || !int.TryParse(args[1], out var jokes) || jokes < 1 || !Guid.TryParse(args[3], out var objectId))
+if (args.Length != 4 || !int.TryParse(args[1], out var jokes) || jokes < 1 || !Guid.TryParse(args[3], out var clientId))
 {
-    Console.Error.WriteLine("Usage: dotnet run tests/load/Seed.cs -- <connection string> <jokes (>= 1)> <app identity name> <app identity object id>");
+    Console.Error.WriteLine("Usage: dotnet run tests/load/Seed.cs -- <connection string> <jokes (>= 1)> <app identity name> <app identity client id>");
     return 2;
 }
 var connectionString = args[0];
@@ -21,20 +21,21 @@ var appUser = args[2];
 await using var connection = new SqlConnection(connectionString);
 await connection.OpenAsync();
 
-// The app signs in as its user-assigned identity; WITH OBJECT_ID skips the directory lookup, but the user's name must
-// start with the identity's display name. QUOTENAME guards the name, the object id is a parsed Guid.
+// The app signs in as its user-assigned identity. FROM EXTERNAL PROVIDER would make the server look it up in Microsoft
+// Graph, which it may do with a person's sign-in (yours, in section 8) but not with this workflow's identity; WITH SID
+// (the identity's client id) and TYPE = E need no lookup. QUOTENAME guards the name, the client id is a parsed Guid.
 await ExecuteAsync("""
     IF DATABASE_PRINCIPAL_ID(@user) IS NULL
     BEGIN
-        DECLARE @create nvarchar(400) = N'CREATE USER ' + QUOTENAME(@user) + N' FROM EXTERNAL PROVIDER WITH OBJECT_ID = '''
-            + CONVERT(nvarchar(36), @objectId) + N'''';
+        DECLARE @create nvarchar(400) = N'CREATE USER ' + QUOTENAME(@user) + N' WITH SID = '
+            + CONVERT(nvarchar(34), CONVERT(varbinary(16), @clientId), 1) + N', TYPE = E';
         EXEC (@create);
     END
     DECLARE @reader nvarchar(400) = N'ALTER ROLE db_datareader ADD MEMBER ' + QUOTENAME(@user);
     DECLARE @writer nvarchar(400) = N'ALTER ROLE db_datawriter ADD MEMBER ' + QUOTENAME(@user);
     EXEC (@reader);
     EXEC (@writer);
-    """, ("@user", appUser), ("@objectId", objectId));
+    """, ("@user", appUser), ("@clientId", clientId));
 Console.WriteLine($"Database user {appUser}: ready.");
 
 await using (var count = new SqlCommand("SELECT COUNT(*) FROM Jokes", connection))

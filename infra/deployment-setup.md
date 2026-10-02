@@ -1565,8 +1565,10 @@ the app and keeps the database). *tear-down-only* deletes whatever an earlier ru
 `LazyDad Deployer` role on that environment); attach `lazydad-acr-pull` (which pulls images) and `lazydad-loadtest-app`
 (which reads `OtlpHeadersLoadTest`) to an app; write and delete images in `lazydad-loadtest` only; and read staging's
 app (for the `home` rule). Nothing in production or staging. The SQL server's Entra admin is that identity itself, so
-it creates the schema, the app's database user and the jokes. A new app is open to everyone for the few seconds before
-its ingress rule is set; it holds only synthetic jokes.
+it creates the schema, the app's database user (`WITH SID`, the identity's client ID: no directory lookup, which a
+workflow's identity can't do) and the jokes. The app is never open to everyone: the set-up stops before creating
+anything if staging has no `home` rule, and a new app starts with internal ingress, made external only once its rules
+admit just your IP.
 
 **1. Once: the identities, their roles and the resource group.** (The first role needs section 6's
 `LazyDad Deployer`.)

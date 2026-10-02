@@ -30,7 +30,7 @@ export const options = {
       timeUnit: '1m',
       startRate: 1,
       preAllocatedVUs: 50,
-      maxVUs: Math.max(...STAGES) * 2,
+      maxVUs: Math.max(50, ...STAGES.map(atOnce => atOnce * 2)),
       stages: STAGES.flatMap(atOnce => [
         { target: Math.ceil(atOnce / 3), duration: '30s' },
         { target: Math.ceil(atOnce / 3), duration: STEP },
