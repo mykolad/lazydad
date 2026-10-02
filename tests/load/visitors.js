@@ -22,6 +22,10 @@ const READ_MAX = 20;
 // page at once ≈ 3 × the rate: about 10, 50, 100, 200, 400. STAGES='10,50' (visitors at once) overrides it.
 const STAGES = (__ENV.STAGES || '10,50,100,200,400').split(',').map(Number);
 const STEP = __ENV.STEP || '3m';
+// Every simulated visitor is prepared before the run: k6 can't start new ones fast enough mid-test (a first run with 50
+// prepared dropped 202 visits at about 250 at once). A visit lasts under 3 minutes, so 1.5 × the largest step is
+// enough; each takes a few MB on the machine running k6.
+const VUS = Math.max(50, Math.ceil(Math.max(...STAGES) * 1.5));
 
 export const options = {
   scenarios: {
@@ -29,8 +33,8 @@ export const options = {
       executor: 'ramping-arrival-rate',
       timeUnit: '1m',
       startRate: 1,
-      preAllocatedVUs: 50,
-      maxVUs: Math.max(50, ...STAGES.map(atOnce => atOnce * 2)),
+      preAllocatedVUs: VUS,
+      maxVUs: VUS,
       stages: STAGES.flatMap(atOnce => [
         { target: Math.ceil(atOnce / 3), duration: '30s' },
         { target: Math.ceil(atOnce / 3), duration: STEP },
