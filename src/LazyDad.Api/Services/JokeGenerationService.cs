@@ -58,10 +58,11 @@ public class JokeGenerationService
 
         sb.AppendLine();
         sb.AppendLine("Rules:");
-        sb.AppendLine("- The joke must be a classic dad joke: a pun, wordplay, or groan-worthy one-liner. The wordplay must work in");
-        sb.AppendLine("  the joke's own language, not be a translated English pun.");
+        sb.AppendLine("- The joke must be a classic dad joke, built on a pun or wordplay that works in the joke's own language (not a");
+        sb.AppendLine("  translated English pun). It can be a one-liner or a short dialogue.");
         sb.AppendLine("- Don't make a father (\"dad\", in any language) a character unless the pun itself needs one.");
-        sb.AppendLine("- Vary the form: a question and its answer, a one-liner, a two-line dialogue, or a mock definition.");
+        sb.AppendLine("- Vary the form: a question and its answer, a one-liner, a mini-dialogue of two to four lines (each line on");
+        sb.AppendLine("  its own line, starting with a dash), or a mock definition.");
         sb.AppendLine("  Pick any everyday subject: food, work, school, animals, weather, technology, sport, places.");
         sb.AppendLine("- The joke must be family-friendly.");
         sb.AppendLine("- Do NOT mention \"Russia\" or \"Russian\" anywhere in the joke.");
@@ -70,8 +71,9 @@ public class JokeGenerationService
         {
             sb.AppendLine("- Do NOT repeat any of the following already-used jokes, and don't reuse their openings, characters or");
             sb.AppendLine("  structure (e.g. the same first words, or the same \"someone took X because they heard Y\" template):");
+            // One line each: a dialogue's lines are joined with " / ", so they don't read as rules or other jokes.
             foreach (var joke in recentJokes)
-                sb.AppendLine($"  * {joke}");
+                sb.AppendLine($"  * {string.Join(" / ", joke.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))}");
         }
 
         sb.AppendLine("- Respond with ONLY the joke text. No explanation, no numbering, no quotes.");

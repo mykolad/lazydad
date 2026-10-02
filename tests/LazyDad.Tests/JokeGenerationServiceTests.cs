@@ -128,6 +128,14 @@ public class JokeGenerationServiceTests
     }
 
     [Fact]
+    public void BuildSystemPrompt_ListsARecentDialogueOnOneLine()
+    {
+        var prompt = JokeGenerationService.BuildSystemPrompt(ukrainianLanguage, ["— Чому ти спізнився?\r\n— Годинник відстає!"]);
+
+        Assert.Contains("  * — Чому ти спізнився? / — Годинник відстає!", prompt);
+    }
+
+    [Fact]
     public void BuildSystemPrompt_IncludesPromptHint()
     {
         var prompt = JokeGenerationService.BuildSystemPrompt(ukrainianLanguage, []);
