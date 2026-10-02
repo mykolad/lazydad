@@ -1691,7 +1691,7 @@ gh variable set AZURE_CLIENT_ID -R $REPO --env loadtest --body (az identity show
 
 4. Approve **tear-down** in the run.
 
-Results, and what each optimization changed: `docs/performance.md`. Add each run's there.
+Results, and what each optimization changed: `docs/performance.md`. Add each run's results there.
 
 ### Registry purge
 
