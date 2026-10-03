@@ -489,8 +489,6 @@
       return;
     }
     const strings = t();
-    const joke = entry.joke;
-    const copied = state.copied === joke.id;
     const refocus = focusedControl(panel);
     const tabs = state.top.map((e, i) =>
       `<button type="button" data-spot="${i}" aria-label="${esc(strings.place)} ${e.rank}" aria-current="${i === state.spot}">${e.rank}</button>`).join('');
@@ -500,25 +498,43 @@
       ? `<button type="button" data-rotation aria-label="${esc(state.rotationStopped ? strings.startRotation : strings.stopRotation)}" ` +
         `title="${esc(state.rotationStopped ? strings.startRotation : strings.stopRotation)}">${state.rotationStopped ? ICON.play : ICON.pause}</button>`
       : '';
-    // Every entry is laid out in the same grid cell and only the current one is shown, so the panel is always as tall as
-    // the tallest entry: rotating doesn't change its height. On a phone the panel sits above the feed, and a height
-    // change moved the jokes the reader was looking at (Safari has no scroll anchoring to hold them in place).
+    // Every entry, with its own votes and share button, is laid out in the same grid cell and only the current one is
+    // shown: the panel is as tall as the tallest entry, and a rotation only switches which one is visible (showSpot),
+    // without rebuilding anything. On a phone the panel sits above the feed; rebuilding it every 7 seconds made Safari
+    // (which has no scroll anchoring) move the jokes the reader was looking at.
     const slides = state.top.map((e, i) => {
-      const current = i === state.spot;
-      return `<div class="ld-spot-slide"${current ? '' : ' aria-hidden="true" inert'}>` +
+      const copied = state.copied === e.joke.id;
+      return `<div class="ld-spot-slide"${i === state.spot ? '' : ' aria-hidden="true" inert'}>` +
         `<div class="ld-rank" aria-hidden="true">${e.rank}</div>` +
         `<p class="ld-spot-text"${langAttr(e.joke)}>${esc(e.joke.text)}</p>` +
         `<div class="ld-note"><span class="ld-label">${esc(strings.why)}</span><p lang="en">${esc(e.reason)}</p></div>` +
         `<span class="ld-spot-meta">${esc(shortDate(e.joke.generatedAt))} · ${esc(e.joke.model)} · ${esc(strings.judged)} ${esc(e.judgeModel)}</span>` +
+        `<div class="ld-spot-actions">${voteHtml(e.joke, false)}` +
+        `<button type="button" class="ld-round" data-share="${e.joke.id}" aria-label="${esc(copied ? strings.copied : strings.share)}">${copied ? ICON.check(17) : ICON.share}</button></div>` +
         '</div>';
     }).join('');
     panel.innerHTML =
       `<div class="ld-panel-head"><h2 class="ld-panel-title">${esc(strings.top)}</h2><div class="ld-tabs">${tabs}${rotation}</div></div>` +
-      `<div class="ld-spot-slides">${slides}</div>` +
-      `<div class="ld-spot-actions">${voteHtml(joke, false)}` +
-      `<button type="button" class="ld-round" data-share="${joke.id}" aria-label="${esc(copied ? strings.copied : strings.share)}">${copied ? ICON.check(17) : ICON.share}</button></div>`;
-    paintVotes(joke);
+      `<div class="ld-spot-slides">${slides}</div>`;
+    state.top.forEach(e => paintVotes(e.joke));
     restoreFocus(panel, refocus);
+  }
+
+  // Shows the current entry: only attributes change, so nothing in the page moves.
+  function showSpot() {
+    const panel = $('ld-spotlight');
+    const slides = panel.querySelectorAll('.ld-spot-slide');
+    if (slides.length !== state.top.length) {
+      renderSpotlight();
+      return;
+    }
+    slides.forEach((slide, i) => {
+      const current = i === state.spot;
+      slide.toggleAttribute('inert', !current);
+      if (current) slide.removeAttribute('aria-hidden'); else slide.setAttribute('aria-hidden', 'true');
+    });
+    panel.querySelectorAll('.ld-tabs [data-spot]').forEach(tab =>
+      tab.setAttribute('aria-current', String(Number(tab.dataset.spot) === state.spot)));
   }
 
   function renderTopList() {
@@ -557,7 +573,7 @@
   function selectSpot(index) {
     if (!state.top.length) return;
     state.spot = (index + state.top.length) % state.top.length;
-    renderSpotlight();
+    showSpot();
     $$('.ld-toprow').forEach(row => row.setAttribute('aria-current', String(Number(row.dataset.spot) === state.spot)));
   }
 
