@@ -40,20 +40,38 @@
 </main>
 <script>
   const ROUNDS = /*DATA*/[];
-  const KEY = 'lazydad-similarity-answers';
-  let answers = {};
-  try { answers = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { /* not kept */ }
-  let revealed = false;
+  // Answers belong to these rounds: a re-run with other jokes or another X/Y order gets its own key.
+  const signature = ROUNDS.map(r => [r.joke.id, r.xIs, ...r.x.map(j => j.id), ...r.y.map(j => j.id)].join(',')).join(';');
+  let hash = 0;
+  for (const c of signature) hash = (hash * 31 + c.codePointAt(0)) >>> 0;
+  const KEY = `lazydad-similarity-${hash.toString(36)}`;
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { /* not kept */ }
+  const answers = saved.answers || {};
+  let revealed = saved.revealed === true;
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify({ answers, revealed })); } catch { /* not kept */ } };
 
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const tags = j => revealed ? ` <span class="tag">(${esc(j.topic)}, ${esc(j.wordplay)})</span>` : '';
   const list = items => `<ol>${items.map(j => `<li><span class="joke" lang="uk">${esc(j.text)}</span>${tags(j)}</li>`).join('')}</ol>`;
 
+  function score() {
+    const wins = { Jev: 0, Embeddings: 0, same: 0 };
+    ROUNDS.forEach((r, i) => {
+      const a = answers[i];
+      if (a === 'same') wins.same++;
+      else if (a === 'x') wins[r.xIs]++;
+      else if (a === 'y') wins[r.xIs === 'Jev' ? 'Embeddings' : 'Jev']++;
+    });
+    return wins;
+  }
+
   function render() {
+    // Once revealed, the choices are frozen: the score stays blind and matches what's saved.
     document.getElementById('rounds').innerHTML = ROUNDS.map((r, i) => {
       const yIs = r.xIs === 'Jev' ? 'Embeddings' : 'Jev';
       const choice = (value, label) =>
-        `<button type="button" data-round="${i}" data-value="${value}" aria-pressed="${answers[i] === value}">${label}</button>`;
+        `<button type="button" data-round="${i}" data-value="${value}" aria-pressed="${answers[i] === value}"${revealed ? ' disabled' : ''}>${label}</button>`;
       return `<section class="card" aria-labelledby="joke-${i}">
         <h2 class="muted" style="font-size:14px;margin:0">Joke ${i + 1} of ${ROUNDS.length}</h2>
         <p class="joke" id="joke-${i}" lang="uk"><strong>${esc(r.joke.text)}</strong>${tags(r.joke)}</p>
@@ -67,34 +85,28 @@
         ${revealed ? `<p class="tag">The two lists share ${r.overlap} of 3 jokes.</p>` : ''}
       </section>`;
     }).join('');
-    const done = Object.keys(answers).length;
+    const done = ROUNDS.filter((_, i) => answers[i] !== undefined).length;
     document.getElementById('progress').textContent = `${done} of ${ROUNDS.length} answered.`;
-  }
-
-  function score() {
-    const wins = { Jev: 0, Embeddings: 0, same: 0 };
-    ROUNDS.forEach((r, i) => {
-      const a = answers[i];
-      if (a === 'same') wins.same++;
-      else if (a === 'x') wins[r.xIs]++;
-      else if (a === 'y') wins[r.xIs === 'Jev' ? 'Embeddings' : 'Jev']++;
-    });
-    return wins;
+    // The methods are revealed only when every round has an answer.
+    document.getElementById('reveal').disabled = revealed || done < ROUNDS.length;
+    const w = score();
+    document.getElementById('score').innerHTML = revealed
+      ? `<p class="reveal">Jev: ${w.Jev} · Embeddings: ${w.Embeddings} · About the same: ${w.same}</p>`
+      : '';
   }
 
   document.addEventListener('click', event => {
     const button = event.target.closest('button');
-    if (!button) return;
+    if (!button || button.disabled) return;
     if (button.id === 'reveal') {
+      if (ROUNDS.some((_, i) => answers[i] === undefined)) return;
       revealed = true;
-      const w = score();
-      document.getElementById('score').innerHTML =
-        `<p class="reveal">Jev: ${w.Jev} · Embeddings: ${w.Embeddings} · About the same: ${w.same} ` +
-        `(of ${Object.keys(answers).length} answered)</p>`;
-    } else if (button.dataset.round !== undefined) {
+    } else if (button.dataset.round !== undefined && !revealed) {
       answers[button.dataset.round] = button.dataset.value;
-      try { localStorage.setItem(KEY, JSON.stringify(answers)); } catch { /* not kept */ }
+    } else {
+      return;
     }
+    save();
     render();
   });
   render();

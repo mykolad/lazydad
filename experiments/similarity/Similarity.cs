@@ -102,26 +102,34 @@ if (missing.Count > 0)
     var cost = 0.0;
     var done = 0;
     using var gate = new SemaphoreSlim(6);
-    await Task.WhenAll(missing.Select(async joke =>
+    try
     {
-        await gate.WaitAsync();
-        try
+        await Task.WhenAll(missing.Select(async joke =>
         {
-            var answer = await JevAsync(http, key, Input(joke), topics, wordplay);
-            lock (jev)
+            await gate.WaitAsync();
+            try
             {
-                jev[joke.Id] = answer;
-                cost += answer.CostUsd;
-                if (++done % 100 == 0)
+                var answer = await JevAsync(http, key, Input(joke), topics, wordplay);
+                lock (jev)
                 {
-                    Console.WriteLine($"Jev: {done} of {missing.Count} (${cost:F4} so far)");
-                    File.WriteAllText(jevPath, JsonSerializer.Serialize(jev, json));
+                    jev[joke.Id] = answer;
+                    cost += answer.CostUsd;
+                    if (++done % 100 == 0)
+                    {
+                        Console.WriteLine($"Jev: {done} of {missing.Count} (${cost:F4} so far)");
+                        File.WriteAllText(jevPath, JsonSerializer.Serialize(jev, json));
+                    }
                 }
             }
-        }
-        finally { gate.Release(); }
-    }));
-    File.WriteAllText(jevPath, JsonSerializer.Serialize(jev, json));
+            finally { gate.Release(); }
+        }));
+    }
+    finally
+    {
+        // Also when a request failed for good: every answer so far is paid for, so the next run doesn't ask again.
+        // The requests still running when one fails finish first (WhenAll waits for all of them), so jev isn't changing.
+        File.WriteAllText(jevPath, JsonSerializer.Serialize(jev, json));
+    }
     Console.WriteLine($"Jev: {missing.Count} jokes classified, ${cost:F4}.");
 }
 

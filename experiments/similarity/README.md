@@ -15,12 +15,10 @@ Both see the same input: the joke and, when it has one, its "why it's funny".
 
 1. **The Jev key**, in a file outside the repository (never commit it, never paste it in a chat):
    `%USERPROFILE%\.lazydad\jev-key.txt`, or any file `JEV_KEY_FILE` names.
-2. **The embedding model**, once (PowerShell or bash):
+2. **The embedding model**, once (one line, so it pastes into PowerShell or bash):
 
-   ```powershell
-   az cognitiveservices account deployment create -g lazydad-rg -n lazydad-openai-resource `
-     --deployment-name text-embedding-3-small --model-name text-embedding-3-small --model-format OpenAI `
-     --model-version 1 --sku-name GlobalStandard --sku-capacity 50 -o none
+   ```
+   az cognitiveservices account deployment create -g lazydad-rg -n lazydad-openai-resource --deployment-name text-embedding-3-small --model-name text-embedding-3-small --model-format OpenAI --model-version 1 --sku-name GlobalStandard --sku-capacity 50 -o none
    ```
 
    Your `az login` calls it (you have `Foundry User` on the resource, runbook section 5).
