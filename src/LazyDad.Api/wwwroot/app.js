@@ -8,6 +8,8 @@
   const ROTATE_MS = 7000;
   const COPIED_MS = 1800;
   const CLOCK_MS = 15000;
+  // How long the server may keep serving a joke's counts from before a vote (JokeReadCache: 30 s), plus a margin.
+  const READ_CACHE_MS = 35000;
   const MINUS = '\u2212';
   const KEYS = { theme: 'lazydad.theme', lang: 'lazydad.lang', votes: 'lazydad.votes', rotation: 'lazydad.rotation' };
 
@@ -188,10 +190,11 @@
   // Keeps one object per joke, so every place that shows it updates together. Counts from the
   // server include only the votes it has counted, so re-apply any vote still in flight.
   // requestedAt: when the request that returned the joke started. A vote made since then is newer
-  // than its counts (the response may even arrive after the vote's own), so those are ignored.
+  // than its counts (the response may even arrive after the vote's own), so those are ignored. So are
+  // counts asked for within the server's read-cache lifetime after a vote: they may be from before it.
   function remember(joke, requestedAt) {
     const existing = state.jokes.get(joke.id);
-    if (existing && (lastVoteAt.get(joke.id) ?? 0) >= requestedAt) {
+    if (existing && (lastVoteAt.get(joke.id) ?? 0) >= requestedAt - READ_CACHE_MS) {
       joke.up = existing.up;
       joke.down = existing.down;
     } else {
@@ -732,6 +735,10 @@
     if (!el || !container.contains(el)) return null;
     if (el.matches('[data-rotation]')) return '[data-rotation]';
     if (el.matches('[data-share]')) return `[data-share="${el.dataset.share}"]`;
+    if (el.matches('[data-why]')) return `[data-why="${el.dataset.why}"]`;
+    if (el.matches('[data-copy-text]')) return `[data-copy-text="${el.dataset.copyText}"]`;
+    if (el.matches('[data-home]')) return '[data-home]';
+    if (el.matches('#ld-hero-text')) return '#ld-hero-text';
     if (el.matches('[data-joke-link]')) return `[data-joke-link="${el.dataset.jokeLink}"]${el.classList.contains('ld-round') ? '.ld-round' : ''}`;
     if (el.matches('[data-vote]')) return `[data-vote-for="${el.closest('[data-vote-for]').dataset.voteFor}"] [data-vote="${el.dataset.vote}"]`;
     // A spotlight tab was pressed, so focus follows the selected one; a Top 3 row keeps its place.
