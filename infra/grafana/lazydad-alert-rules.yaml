@@ -20,16 +20,18 @@ groups:
             ({service_name="{{ $labels.job }}"}) show the error.
 
       - alert: LazyDadNoJokeSaved
-        # Ticks run every 4 hours, on one app or the other (the scheduler lease): counted across both. 5 hours without
-        # a saved joke means one was missed. "or vector(0)": no data also alerts.
+        # Ticks run every 4 hours, on one app or the other (the scheduler lease): counted across both. A restart in the 2
+        # hours before a due time skips that tick (its startup tick already made the batch), so jokes can be 6 hours apart
+        # (a 5-hour window alerted after deploys, 2026-10-03). 7 hours without a saved joke means one was really missed.
+        # "or vector(0)": no data also alerts.
         expr: >-
-          (sum(increase(lazydad_jokes_total{job=~"lazydad-app|lazydad-app-swedencentral", outcome="saved"}[5h]))
+          (sum(increase(lazydad_jokes_total{job=~"lazydad-app|lazydad-app-swedencentral", outcome="saved"}[7h]))
           or vector(0)) < 1
         for: 10m
         labels:
           severity: critical
         annotations:
-          summary: No joke saved in production for 5 hours.
+          summary: No joke saved in production for 7 hours.
           description: >-
             Every model failed, or no tick ran (both apps are down, or their schedulers stopped). Check /status and
             the logs.
@@ -51,7 +53,8 @@ groups:
             (runbook section 10).
 
       - alert: LazyDadJokeFailed
-        # One alert per app and model: its joke failed (the model errored, or saving the joke did) or came back empty.
+        # One alert per app and model: its joke failed (the model errored on every try, or saving the joke did) or came back
+        # empty on every try (JokeGeneration:Attempts, 3).
         # Slow answers aren't failures.
         expr: >-
           sum by (job, model) (increase(lazydad_jokes_total{job=~"lazydad-app|lazydad-app-swedencentral",

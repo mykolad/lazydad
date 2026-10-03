@@ -16,6 +16,12 @@ public class JokeGenerationOptionsValidator : IValidateOptions<JokeGenerationOpt
         if (options.UniquenessSampleSize < 0)
             errors.Add($"{JokeGenerationOptions.SectionName}:UniquenessSampleSize must be >= 0.");
 
+        if (options.Attempts < 1)
+            errors.Add($"{JokeGenerationOptions.SectionName}:Attempts must be >= 1 (was {options.Attempts}).");
+
+        if (options.RetryDelaySeconds < 0)
+            errors.Add($"{JokeGenerationOptions.SectionName}:RetryDelaySeconds must be >= 0 (was {options.RetryDelaySeconds}).");
+
         for (var i = 0; i < options.Languages.Count; i++)
         {
             var language = options.Languages[i];
