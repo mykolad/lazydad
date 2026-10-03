@@ -36,7 +36,7 @@
   <p id="progress" aria-live="polite"></p>
   <div id="rounds"></div>
   <p><button type="button" id="reveal">Reveal the score</button></p>
-  <div id="score" aria-live="polite"></div>
+  <div id="score" aria-live="polite" tabindex="-1"></div>
 </main>
 <script>
   const ROUNDS = /*DATA*/[];
@@ -108,6 +108,13 @@
     }
     save();
     render();
+    // render() replaced the buttons: keep keyboard focus on the one just pressed, or, after the reveal (which disables
+    // every button), on the score.
+    if (revealed) {
+      document.getElementById('score').focus();
+    } else {
+      document.querySelector(`[data-round="${button.dataset.round}"][data-value="${button.dataset.value}"]`)?.focus();
+    }
   });
   render();
 </script>
