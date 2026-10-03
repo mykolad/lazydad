@@ -566,8 +566,14 @@
   }
 
   // Falls back to the container's first button when the control is gone (e.g. another joke now).
+  // Back to the same control after a re-render, or to the first one that can take focus: a control inside an inert
+  // element (a Top 3 entry that isn't shown, e.g. when a refresh moved the focused joke to another rank) can't.
   function restoreFocus(container, selector) {
-    if (selector) (container.querySelector(selector) ?? container.querySelector('button'))?.focus();
+    if (!selector) return;
+    const focusable = el => !el.closest('[inert]');
+    const target = [...container.querySelectorAll(selector)].find(focusable)
+      ?? [...container.querySelectorAll('button')].find(focusable);
+    target?.focus();
   }
 
   function selectSpot(index) {
