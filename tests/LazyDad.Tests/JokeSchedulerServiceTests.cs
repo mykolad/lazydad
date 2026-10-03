@@ -84,7 +84,8 @@ public sealed class JokeSchedulerServiceTests : IDisposable
 
     private JokeSchedulerService CreateScheduler(params LanguageOptions[] languages)
     {
-        var options = Options.Create(new JokeGenerationOptions { UniquenessSampleSize = 20, Languages = [.. languages] });
+        // Retries without waiting: a test's failing model is asked again at once.
+        var options = Options.Create(new JokeGenerationOptions { UniquenessSampleSize = 20, RetryDelaySeconds = 0, Languages = [.. languages] });
 
         var services = new ServiceCollection();
         services.AddLogging();
@@ -107,9 +108,11 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     /// <summary>
     /// Waits until every language's startup tick is done, so assertions never race the background loop. The scheduler
     /// moves the next due time into the future only after a tick's jokes, leaderboard and metrics are all recorded
-    /// (until then, the page keeps polling for the batch).
+    /// (until then, the page keeps polling for the batch). At start it records "due now", which since .NET 10
+    /// (ExecuteAsync runs on a background thread) can happen after this reads the clock: so wait for a due time at
+    /// least a minute ahead, which only a finished startup tick sets (its next tick is half a period away or more).
     /// </summary>
-    private Task StartupTicksDoneAsync() => NextTickAfterAsync(DateTime.UtcNow);
+    private Task StartupTicksDoneAsync() => NextTickAfterAsync(DateTime.UtcNow.AddMinutes(1));
 
     private void SetupModel(string model, Func<Task<ChatResponse>> reply)
     {
@@ -212,6 +215,59 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         // Recorded before the tick: the first measurement is a zero, and the tick then counts once.
         Assert.Equal(0, ticks.GetMeasurementSnapshot()[0].Value);
         Assert.Equal(["succeeded"], Measured(ticks, "outcome"));
+    }
+
+    [Fact]
+    public async Task Tick_WhenAModelFailsOnce_TriesAgain_AndSavesItsJoke()
+    {
+        var tries = 0;
+        SetupModel("flaky", () => ++tries == 1
+            ? Task.FromException<ChatResponse>(new InvalidOperationException("503 Service Unavailable"))
+            : Reply("Жарт з другої спроби"));
+        var scheduler = CreateScheduler(Ukrainian("flaky"));
+        using var jokes = Collect("lazydad.jokes");
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Equal(2, tries);
+        Assert.Equal("Жарт з другої спроби", Assert.Single(saved).Text);
+        // Only the outcome counts: a joke saved on a later try isn't a failure.
+        Assert.Equal(["flaky/saved"], Measured(jokes, "model", "outcome"));
+    }
+
+    [Fact]
+    public async Task Tick_WhenAModelAnswersEmptyTwice_SavesItsThirdAnswer()
+    {
+        var tries = 0;
+        SetupModel("thinking", () => Reply(++tries < 3 ? " " : "Нарешті жарт"));
+        var scheduler = CreateScheduler(Ukrainian("thinking"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Equal(3, tries);
+        Assert.Equal("Нарешті жарт", Assert.Single(saved).Text);
+    }
+
+    [Fact]
+    public async Task Tick_WhenAModelFailsEveryTry_GivesUpAfterThree_AndCountsOneFailure()
+    {
+        var tries = 0;
+        SetupModel("down", () => { tries++; return Task.FromException<ChatResponse>(new InvalidOperationException("down")); });
+        SetupModel("fast", () => Reply("Жарт"));
+        var scheduler = CreateScheduler(Ukrainian("down", "fast"));
+        using var jokes = Collect("lazydad.jokes");
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Equal(3, tries);
+        Assert.Equal("fast", Assert.Single(saved).Model);
+        Assert.Equal(["down/failed", "fast/saved"], Measured(jokes, "model", "outcome"));
     }
 
     [Fact]

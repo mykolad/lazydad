@@ -1384,7 +1384,7 @@ would look down and idle all the time.
   | Alert | Fires when | Severity |
   |---|---|---|
   | `LazyDadTickFailed` | a scheduler tick failed (15 minutes) | critical |
-  | `LazyDadNoJokeSaved` | no joke saved for 5 hours by either app (ticks run every 4, on one or the other); no data alerts too | critical |
+  | `LazyDadNoJokeSaved` | no joke saved for 7 hours by either app (ticks run every 4, on one or the other, and a restart can make the gap 6); no data alerts too | critical |
   | `LazyDadAppNotReporting` | an app sent no metrics for 10 minutes: down, stuck, or restarting over and over. Traffic Manager should already have left it out of `lazydad.fyi`; this makes sure you hear | critical |
   | `LazyDadJokeFailed` | a model's joke failed (the model errored, or saving it did) or came back empty (30 minutes), one alert per app and model; a slow model isn't a failure | warning |
   | `LazyDadLeaderboardFailed` | the Top 3 update failed (30 minutes) | warning |

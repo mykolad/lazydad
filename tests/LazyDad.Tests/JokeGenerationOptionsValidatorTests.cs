@@ -47,4 +47,19 @@ public class JokeGenerationOptionsValidatorTests
 
         Assert.True(new JokeGenerationOptionsValidator().Validate(null, options).Failed);
     }
+
+    [Theory]
+    [InlineData(0, 30, "JokeGeneration:Attempts must be >= 1")]
+    [InlineData(3, -1, "JokeGeneration:RetryDelaySeconds must be >= 0")]
+    public void Validate_BadRetrySettings_Fail(int attempts, int delaySeconds, string message)
+    {
+        var options = Options(4, true);
+        options.Attempts = attempts;
+        options.RetryDelaySeconds = delaySeconds;
+
+        var result = new JokeGenerationOptionsValidator().Validate(null, options);
+
+        Assert.True(result.Failed);
+        Assert.Contains(message, result.FailureMessage);
+    }
 }
