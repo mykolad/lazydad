@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using LazyDad.Api.Configuration;
 using LazyDad.Api.Services;
+using LazyDad.Data.Entities;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -20,7 +21,7 @@ public class HtmlGeneratorServiceTests
     };
 
     private static string Build(AppInfoOptions appInfo)
-        => HtmlGeneratorService.BuildHtml(new Dictionary<string, string> { ["Ukrainian"] = "uk" }, appInfo);
+        => HtmlGeneratorService.BuildHtml(new Dictionary<string, string> { ["Ukrainian"] = "uk" }, appInfo, HtmlGeneratorService.SitePage);
 
     [Fact]
     public void BuildHtml_IsTheShellForAppJs_WithVersionedAssets()
@@ -29,22 +30,22 @@ public class HtmlGeneratorServiceTests
 
         Assert.Contains("<title>LazyDad</title>", html);
         Assert.Contains("<html lang=\"uk\" data-theme=\"light\">", html);
-        Assert.Contains("<link rel=\"stylesheet\" href=\"app.css?v=e33d99a\">", html);
-        Assert.Contains("<script src=\"app.js?v=e33d99a\" defer></script>", html);
+        Assert.Contains("<link rel=\"stylesheet\" href=\"/app.css?v=e33d99a\">", html);
+        Assert.Contains("<script src=\"/app.js?v=e33d99a\" defer></script>", html);
         // Brand: favicons, manifest, and the logo in both theme variants.
         Assert.Contains("<link rel=\"icon\" href=\"/favicon.ico\" sizes=\"48x48\">", html);
         Assert.Contains("<link rel=\"icon\" href=\"/favicon.svg\" type=\"image/svg+xml\">", html);
         Assert.Contains("<link rel=\"apple-touch-icon\" href=\"/apple-touch-icon.png\">", html);
         Assert.Contains("<link rel=\"manifest\" href=\"/site.webmanifest\">", html);
-        Assert.Contains("src=\"logo.svg\"", html);
-        Assert.Contains("src=\"logo-dark.svg\"", html);
+        Assert.Contains("src=\"/logo.svg\"", html);
+        Assert.Contains("src=\"/logo-dark.svg\"", html);
         // One theme-color, which the bootstrap sets from the resolved theme (a manual choice too).
         Assert.Single(Regex.Matches(html, "name=\"theme-color\""));
         Assert.Contains("<meta name=\"theme-color\" content=\"#f5ead8\" id=\"ld-theme-color\">", html);
         Assert.Contains("getElementById('ld-theme-color')", html);
         // Every element app.js looks up by id is in the shell.
         foreach (var id in new[] { "ld-count", "ld-next", "ld-countdown", "ld-loading", "ld-loading-text", "ld-empty", "ld-empty-text",
-                     "ld-aside", "ld-spotlight", "ld-toplist", "ld-feed", "ld-list", "ld-sentinel", "ld-more", "ld-end", "ld-config" })
+                     "ld-aside", "ld-spotlight", "ld-toplist", "ld-page", "ld-live", "ld-feed", "ld-list", "ld-sentinel", "ld-more", "ld-end", "ld-config" })
             Assert.Contains($"id=\"{id}\"", html);
         // app.js replaces its text with the retryable error: a live region, so that's announced.
         Assert.Contains("id=\"ld-loading-text\" role=\"status\" aria-live=\"polite\"", html);
@@ -74,7 +75,7 @@ public class HtmlGeneratorServiceTests
     [Fact]
     public void BuildHtml_ConfigJson_CannotCloseTheScriptElement()
     {
-        var html = HtmlGeneratorService.BuildHtml(new Dictionary<string, string> { ["</script><b>"] = "x" }, PipelineBuild);
+        var html = HtmlGeneratorService.BuildHtml(new Dictionary<string, string> { ["</script><b>"] = "x" }, PipelineBuild, HtmlGeneratorService.SitePage);
 
         Assert.DoesNotContain("</script><b>", html);
     }
@@ -144,6 +145,37 @@ public class HtmlGeneratorServiceTests
     [Fact]
     public void VersionHtml_EscapesTheVersion()
         => Assert.Contains("v&lt;x&gt; (local build)", HtmlGeneratorService.VersionHtml(new AppInfoOptions { Version = "<x>" }));
+
+    [Fact]
+    public void BuildHtml_ForTheSite_HasPreviewTagsWithoutAnAddress()
+    {
+        var html = Build(PipelineBuild);
+
+        Assert.Contains("<title>LazyDad</title>", html);
+        Assert.Contains("<meta property=\"og:title\" content=\"LazyDad\">", html);
+        Assert.Contains($"<meta property=\"og:description\" content=\"{HtmlGeneratorService.SiteDescription}\">", html);
+        // index.html is written at startup, before any request says which host the site is on.
+        Assert.DoesNotContain("og:url", html);
+        Assert.DoesNotContain("rel=\"canonical\"", html);
+    }
+
+    [Fact]
+    public void BuildHtml_ForAJoke_PutsItInTheTitleAndPreviewTags_OnOneLine_Escaped()
+    {
+        var joke = new Joke { Id = 42, Text = "— Тату, <b>\"кава\"</b>?\n— Так & ні." };
+
+        var html = HtmlGeneratorService.BuildHtml(new Dictionary<string, string> { ["Ukrainian"] = "uk" }, PipelineBuild,
+            HtmlGeneratorService.JokePage(joke, "https://lazydad.fyi"));
+
+        const string text = "— Тату, &lt;b&gt;&quot;кава&quot;&lt;/b&gt;? — Так &amp; ні.";
+        Assert.Contains($"<title>{text} — LazyDad</title>", html);
+        Assert.Contains($"<meta property=\"og:title\" content=\"{text}\">", html);
+        Assert.Contains("<meta property=\"og:url\" content=\"https://lazydad.fyi/j/42\">", html);
+        Assert.Contains("<link rel=\"canonical\" href=\"https://lazydad.fyi/j/42\">", html);
+        Assert.Contains("<meta property=\"og:image\" content=\"https://lazydad.fyi/icon-512.png\">", html);
+        Assert.Contains("<meta name=\"twitter:card\" content=\"summary\">", html);
+        Assert.DoesNotContain("<b>", html);
+    }
 
     [Fact]
     public async Task RegenerateAsync_WritesIndexHtmlUnderWwwroot()

@@ -264,4 +264,49 @@ public sealed class JokesControllerTests : IDisposable
 
         Assert.IsType<NotFoundResult>(await CreateController().Vote(99, new VoteRequest(1, 0), CancellationToken.None));
     }
+
+    [Fact]
+    public async Task GetById_IsServedFromTheCache_ForItsLifetime()
+    {
+        jokeRepositoryMock.Setup(r => r.GetByIdAsync(7, It.IsAny<CancellationToken>())).ReturnsAsync(MakeJoke(7));
+
+        await CreateController().GetById(7, CancellationToken.None);
+        var second = await CreateController().GetById(7, CancellationToken.None);
+
+        Assert.Equal(7, Json(second).GetProperty("id").GetInt32());
+        jokeRepositoryMock.Verify(r => r.GetByIdAsync(7, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task GetSimilar_ReturnsTheJokesSharingTheMostWords_NeverTheJokeItself()
+    {
+        var joke = new Joke { Id = 1, Language = "Ukrainian", Text = "Чому вареник став програмістом? Бо любив тісто." };
+        List<Joke> all =
+        [
+            joke,
+            new() { Id = 2, Language = "Ukrainian", Text = "Чому кава стала вчителькою? Бо завжди бадьорила.", Up = 50 },
+            new() { Id = 3, Language = "Ukrainian", Text = "Чому вареники пішли в програмісти? Тісто кличе." },
+        ];
+        jokeRepositoryMock.Setup(r => r.GetByIdAsync(1, It.IsAny<CancellationToken>())).ReturnsAsync(joke);
+        jokeRepositoryMock.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(all);
+
+        var json = Json(await CreateController().GetSimilar(1, 4, CancellationToken.None));
+
+        // Joke 3 shares "варен", "прогр" and "тісто"; joke 2 nothing (but still fills the list, by its votes).
+        Assert.Equal([3, 2], json.EnumerateArray().Select(j => j.GetProperty("id").GetInt32()));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(JokesController.MaxSimilar + 1)]
+    public async Task GetSimilar_RejectsALimitOutOfRange(int limit)
+        => Assert.IsType<BadRequestObjectResult>(await CreateController().GetSimilar(1, limit, CancellationToken.None));
+
+    [Fact]
+    public async Task GetSimilar_ForAMissingJoke_ReturnsNotFound()
+    {
+        jokeRepositoryMock.Setup(r => r.GetByIdAsync(99, It.IsAny<CancellationToken>())).ReturnsAsync((Joke?)null);
+
+        Assert.IsType<NotFoundResult>(await CreateController().GetSimilar(99, 4, CancellationToken.None));
+    }
 }

@@ -1,4 +1,5 @@
 using LazyDad.Api.Services;
+using LazyDad.Data.Entities;
 using LazyDad.Data.Repositories;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -11,6 +12,7 @@ public class JokesController : ControllerBase
 {
     public const int MaxPageSize = 50;
     public const string VotePolicy = "votes";
+    public const int MaxSimilar = 12;
 
     private readonly IJokeRepository jokeRepository;
     private readonly SchedulerStatus schedulerStatus;
@@ -26,6 +28,11 @@ public class JokesController : ControllerBase
     // The cached reads resolve their repository from the cache's own scope (see JokeReadCache), not this request's.
     private static Task<int> CountJokes(IServiceProvider services, CancellationToken cancellationToken)
         => services.GetRequiredService<IJokeRepository>().CountAsync(cancellationToken);
+
+    // A joke's page reads its joke twice (/j/<id> for the link preview, then /jokes/<id>): one load serves both.
+    internal static Task<Joke?> GetJokeCached(JokeReadCache cache, int id, CancellationToken cancellationToken)
+        => cache.GetOrLoadAsync($"joke:{id}",
+            (services, token) => services.GetRequiredService<IJokeRepository>().GetByIdAsync(id, token), cancellationToken);
 
     [HttpGet]
     public async Task<IActionResult> GetAll(CancellationToken cancellationToken)
@@ -120,8 +127,24 @@ public class JokesController : ControllerBase
     [HttpGet("{id:int}")]
     public async Task<IActionResult> GetById(int id, CancellationToken cancellationToken)
     {
-        var joke = await jokeRepository.GetByIdAsync(id, cancellationToken);
+        var joke = await GetJokeCached(cache, id, cancellationToken);
         return joke is null ? NotFound() : Ok(joke);
+    }
+
+    /// <summary>"You might also like" on a joke's page: up to <c>limit</c> jokes like this one, most similar first (see JokeSimilarity).</summary>
+    [HttpGet("{id:int}/similar")]
+    public async Task<IActionResult> GetSimilar(int id, [FromQuery] int limit, CancellationToken cancellationToken)
+    {
+        if (limit < 1 || limit > MaxSimilar)
+            return BadRequest($"limit must be between 1 and {MaxSimilar}.");
+        var joke = await GetJokeCached(cache, id, cancellationToken);
+        if (joke is null)
+            return NotFound();
+        // Every joke with its stems, worked out once per load: every joke's page compares against the same list.
+        var index = await cache.GetOrLoadAsync("similarity",
+            async (services, token) => JokeSimilarity.Index(await services.GetRequiredService<IJokeRepository>().GetAllAsync(token)),
+            cancellationToken);
+        return Ok(JokeSimilarity.Similar(joke, index, limit));
     }
 
     [HttpGet("language/{language}")]
