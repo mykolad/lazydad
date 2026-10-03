@@ -71,7 +71,9 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   Within a tick, all of a language's `LlmModels` are called in parallel, each in its
   own DI scope (a `DbContext` must not be shared across concurrent calls); each joke is
   saved as soon as its model answers (in its own scope too), so a slow model delays only its own joke. `/status`
-  lists each saved joke right away; the judge runs once every model is done.
+  lists each saved joke right away; the judge runs once every model is done. A model that errors or answers empty is
+  asked again, up to `JokeGeneration:Attempts` (3) tries `RetryDelaySeconds` (30) apart; only the final outcome is
+  counted (`lazydad_jokes_total`), so a joke saved on a later try isn't a failure.
 - **Top-N leaderboard** (`TopJokes` config, `TopJokeService`, `TopJokes` table): after
   each tick a reasoning "judge" model (`TopJokes:Judge`, e.g. `gpt-6-sol`) sees the
   current top N plus the new jokes and returns the new ranking as a JSON-schema

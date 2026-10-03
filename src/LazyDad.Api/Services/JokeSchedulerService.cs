@@ -248,47 +248,70 @@ public class JokeSchedulerService : BackgroundService
         return joke;
     }
 
-    /// <summary>Generates one joke with one model. Returns <c>null</c> on failure so sibling models are unaffected.</summary>
+    /// <summary>
+    /// Generates one joke with one model, trying up to <see cref="JokeGenerationOptions.Attempts"/> times when the model
+    /// fails or answers empty. Returns <c>null</c> once every try failed, so sibling models are unaffected; only that
+    /// final outcome is counted (a joke saved on a later try counts as saved).
+    /// </summary>
     private async Task<Joke?> GenerateAsync(LanguageOptions language, LlmModelOptions model, CancellationToken stoppingToken)
     {
         // Own scope per model: parallel calls must not share a DbContext.
         using var scope = scopeFactory.CreateScope();
         var generationService = scope.ServiceProvider.GetRequiredService<JokeGenerationService>();
+        var attempts = options.Value.Attempts;
+        var delay = TimeSpan.FromSeconds(options.Value.RetryDelaySeconds);
 
-        try
+        for (var attempt = 1; ; attempt++)
         {
-            logger.LogInformation("Generating joke for '{Language}' using {Model}...", language.Language, model.Model);
-
-            var draft = await generationService.GenerateAsync(language, model, stoppingToken);
-
-            if (string.IsNullOrWhiteSpace(draft.Text))
+            try
             {
-                metrics.RecordJoke(language.Language, model.Model, "empty");
-                logger.LogWarning("LLM returned an empty response for '{Language}' ({Model}). Skipping.", language.Language, model.Model);
-                return null;
+                logger.LogInformation("Generating joke for '{Language}' using {Model} (try {Attempt} of {Attempts})...",
+                    language.Language, model.Model, attempt, attempts);
+
+                var draft = await generationService.GenerateAsync(language, model, stoppingToken);
+
+                if (!string.IsNullOrWhiteSpace(draft.Text))
+                {
+                    return new Joke
+                    {
+                        Language = language.Language,
+                        Model = model.Model,
+                        Text = draft.Text,
+                        Explanation = draft.Explanation,
+                        GeneratedAt = DateTime.UtcNow
+                    };
+                }
+
+                if (attempt == attempts)
+                {
+                    metrics.RecordJoke(language.Language, model.Model, "empty");
+                    logger.LogWarning("LLM returned an empty response for '{Language}' ({Model}) on every try. Skipping.",
+                        language.Language, model.Model);
+                    return null;
+                }
+                logger.LogWarning("LLM returned an empty response for '{Language}' ({Model}); trying again in {Delay} s.",
+                    language.Language, model.Model, delay.TotalSeconds);
+            }
+            // Only shutdown propagates. A provider timeout is also an OperationCanceledException;
+            // rethrowing it would fault Task.WhenAll and discard the sibling models' jokes.
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                if (attempt == attempts)
+                {
+                    metrics.RecordJoke(language.Language, model.Model, "failed");
+                    logger.LogError(ex, "Failed to generate joke for '{Language}' ({Model}) on every try. Provider response: {ProviderResponse}",
+                        language.Language, model.Model, ProviderResponse(ex));
+                    return null;
+                }
+                logger.LogWarning(ex, "Failed to generate joke for '{Language}' ({Model}); trying again in {Delay} s. Provider response: {ProviderResponse}",
+                    language.Language, model.Model, delay.TotalSeconds, ProviderResponse(ex));
             }
 
-            return new Joke
-            {
-                Language = language.Language,
-                Model = model.Model,
-                Text = draft.Text,
-                Explanation = draft.Explanation,
-                GeneratedAt = DateTime.UtcNow
-            };
-        }
-        // Only shutdown propagates. A provider timeout is also an OperationCanceledException;
-        // rethrowing it would fault Task.WhenAll and discard the sibling models' jokes.
-        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            metrics.RecordJoke(language.Language, model.Model, "failed");
-            logger.LogError(ex, "Failed to generate joke for '{Language}' ({Model}). Provider response: {ProviderResponse}",
-                language.Language, model.Model, ProviderResponse(ex));
-            return null;
+            await Task.Delay(delay, stoppingToken);
         }
     }
 
