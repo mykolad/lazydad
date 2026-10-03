@@ -32,7 +32,8 @@ const string EmbeddingsUrl = "https://lazydad-openai-resource.cognitiveservices.
 const int EmbeddingDimensions = 512;
 const int SampleSize = 25;
 const int TopK = 3;
-// How much the kind of wordplay counts next to the topic in Jev's profile.
+// How much the kind of wordplay counts next to the topic in Jev's profile: its coordinates are scaled by the square root,
+// so this is the weight of its terms in the cosine (dot product and norms).
 const double WordplayWeight = 0.5;
 
 var outDir = Path.Combine(Path.GetDirectoryName(Path.GetFullPath("experiments/similarity/Similarity.cs"))!, "out");
@@ -143,9 +144,10 @@ if (toEmbed.Count > 0)
         var body = JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
         foreach (var item in body["data"]!.AsArray())
             embeddings[batch[item!["index"]!.GetValue<int>()].Id] = item["embedding"]!.AsArray().Select(v => v!.GetValue<float>()).ToArray();
+        // Saved after every batch, so a later failure keeps what's already paid for.
+        File.WriteAllText(embPath, JsonSerializer.Serialize(embeddings, json));
         Console.WriteLine($"Embeddings: {embeddings.Count} of {jokes.Count}");
     }
-    File.WriteAllText(embPath, JsonSerializer.Serialize(embeddings, json));
 }
 
 // 4. Each method's top 3 for every joke.
@@ -174,7 +176,7 @@ var rounds = sample.Select(joke =>
         overlap = a.Intersect(b).Count(),
     };
 }).ToList();
-var data = JsonSerializer.Serialize(rounds, new JsonSerializerOptions { Encoder = JavaScriptEncoder.Default });
+var data = JsonSerializer.Serialize(rounds, new JsonSerializerOptions(JsonSerializerDefaults.Web) { Encoder = JavaScriptEncoder.Default });
 var page = File.ReadAllText(Path.Combine(Path.GetDirectoryName(Path.GetFullPath("experiments/similarity/Similarity.cs"))!, "compare.html"))
     .Replace("/*DATA*/[]", data);
 File.WriteAllText(Path.Combine(outDir, "compare.html"), page);
@@ -235,7 +237,7 @@ static async Task<HttpResponseMessage> SendWithRetriesAsync(HttpClient http, Htt
 
 static double[] JevVector(JevAnswer a, Dictionary<string, string> topics, Dictionary<string, string> wordplay)
     => topics.Keys.Select(k => a.TopicProbabilities.GetValueOrDefault(k))
-        .Concat(wordplay.Keys.Select(k => WordplayWeight * a.WordplayProbabilities.GetValueOrDefault(k))).ToArray();
+        .Concat(wordplay.Keys.Select(k => Math.Sqrt(WordplayWeight) * a.WordplayProbabilities.GetValueOrDefault(k))).ToArray();
 
 static double Cosine(double[] a, double[] b)
 {

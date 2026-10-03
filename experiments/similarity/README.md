@@ -6,7 +6,7 @@ jokes. Nothing in the app or the database changes.
 | | A: Jev | B: embeddings |
 |---|---|---|
 | What | [Jev](https://jevtypesafeai.com/) gives each joke a probability for every **topic** (about 20) and every **kind of wordplay** (6), in one `/v1/decide` call with two *choice* questions | `text-embedding-3-small` on `lazydad-openai-resource` gives each joke a vector (512 dimensions) |
-| Similar | close probability profiles (cosine; wordplay counts half as much as topic) | close vectors (cosine) |
+| Similar | close probability profiles (cosine; wordplay terms weigh half as much as topic in the cosine) | close vectors (cosine) |
 | Cost | about 350 input tokens per joke, about $0.20 for 1,200 jokes (your Jev credits) | well under a cent |
 
 Both see the same input: the joke and, when it has one, its "why it's funny".
