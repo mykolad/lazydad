@@ -818,12 +818,13 @@ apps once they're behind Cloudflare), and removes it afterwards. If your home IP
 joke's topic and kind of wordplay, asked once when it's saved), with embeddings (section 5's `text-embedding-3-small`)
 as the fallback. Jev is the only service here with an API key: create one in Jev's dashboard for production and, if
 you like, a second for staging (the same key works, but a separate one keeps staging's spending and any leak apart).
-Each goes into Key Vault from a file, so it never shows on screen or in the shell's history, and each app reads only
-its own, like the Grafana tokens (section 11). Without a key, the app profiles with embeddings only.
+Each is typed at a hidden prompt and goes straight into Key Vault, so it never shows on screen, in a file or in the
+shell's history, and each app reads only its own, like the Grafana tokens (section 11). Without a key, the app profiles with embeddings only.
 
 ```bash
-az keyvault secret set --vault-name lazydad-kv -n JevApiKey --file "$HOME/.lazydad/jev-key.txt" -o none
-az keyvault secret set --vault-name lazydad-kv -n JevApiKeyStaging --file "$HOME/.lazydad/jev-key-staging.txt" -o none
+read -rsp "Jev key for production: " KEY && echo && az keyvault secret set --vault-name lazydad-kv -n JevApiKey --value "$KEY" -o none
+read -rsp "Jev key for staging: " KEY && echo && az keyvault secret set --vault-name lazydad-kv -n JevApiKeyStaging --value "$KEY" -o none
+unset KEY
 KV_ID=$(az keyvault show -n lazydad-kv --query id -o tsv)
 az role assignment create --assignee-object-id "$(az identity show -g $RG -n lazydad-production --query principalId -o tsv)" \
   --assignee-principal-type ServicePrincipal --role "Key Vault Secrets User" --scope "$KV_ID/secrets/JevApiKey" -o none
@@ -843,8 +844,11 @@ az containerapp update -g $RG -n $APP --set-env-vars Similarity__Jev__ApiKey=sec
 <details><summary>PowerShell 7</summary>
 
 ```powershell
-az keyvault secret set --vault-name lazydad-kv -n JevApiKey --file "$HOME\.lazydad\jev-key.txt" -o none
-az keyvault secret set --vault-name lazydad-kv -n JevApiKeyStaging --file "$HOME\.lazydad\jev-key-staging.txt" -o none
+$key = Read-Host -AsSecureString 'Jev key for production'
+az keyvault secret set --vault-name lazydad-kv -n JevApiKey --value (ConvertFrom-SecureString $key -AsPlainText) -o none
+$key = Read-Host -AsSecureString 'Jev key for staging'
+az keyvault secret set --vault-name lazydad-kv -n JevApiKeyStaging --value (ConvertFrom-SecureString $key -AsPlainText) -o none
+Remove-Variable key
 $KV_ID = az keyvault show -n lazydad-kv --query id -o tsv
 az role assignment create --assignee-object-id (az identity show -g $RG -n lazydad-production --query principalId -o tsv) `
   --assignee-principal-type ServicePrincipal --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/JevApiKey" -o none
