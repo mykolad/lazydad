@@ -34,7 +34,7 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   is responsible for persisting and for updating the leaderboard. Keeps responsibilities
   small and scoped. The model answers with the joke, a `---` line, and one English sentence on why it's funny
   (`JokeDraft`; `Jokes.Explanation`, nullable, 500 characters): no extra call. An answer without the separator is all
-  joke, with no explanation. The page hides the explanation behind a lightbulb on each feed row.
+  joke, with no explanation. The page hides the explanation behind a lightbulb on each feed row and on a joke's page.
 - `JokeSchedulerService` is a singleton `BackgroundService`; it uses
   `IServiceScopeFactory` to resolve scoped services (`JokeGenerationService`,
   `IJokeRepository`, `TopJokeService`) per operation. It records each language's next tick
@@ -42,17 +42,25 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
 - **The page** (design handoff "direction 2b"): `HtmlGeneratorService` writes `wwwroot/index.html`
   once, before the server listens. It holds only what depends on the build: the header, the version
   link, the loading skeleton, a pre-paint script that sets `data-theme` (no flash of the wrong theme),
-  and a JSON config (language codes). `wwwroot/app.js` (plain JS, no build step) renders everything
+  and a JSON config (language codes). Its asset URLs are absolute, since the same shell also serves `/j/<id>`.
+  `wwwroot/app.js` (plain JS, no build step) renders everything
   live: Top 3 spotlight (rotates every 7 s, paused on hover/focus or reduced motion), the "All jokes"
-  feed (infinite scroll, pages of 20, sort Newest / Top voted), votes, copy/share, the countdown,
-  UA/EN interface (jokes stay Ukrainian), and light/dark/system theme. Preferences and the reader's
+  feed (infinite scroll, pages of 20, sort Newest / Top voted), votes, link sharing, the lightbulbs ("why it's funny"),
+  the countdown, UA/EN interface (jokes stay Ukrainian), and light/dark/system theme. Preferences and the reader's
   votes live in `localStorage`. `wwwroot/app.css` has the Organic design tokens (dark = reversed ramps).
   Brand files (sloth logo per theme, favicons, `site.webmanifest`) are static files in `wwwroot`.
   Design spec and deviations: `docs/design/redesign-2026-09.md`.
+- **A joke's page** (`/j/<id>`, what every share button shares): `JokePageController` serves the same shell per request,
+  with the joke in `<title>` and the link-preview tags (Open Graph, `canonical`) that messengers read without running
+  `app.js` (404 and the plain shell for an unknown joke). `app.js` routes with the History API: a joke opened from the
+  list is shown in place, and Back or "All jokes" returns to the list's scroll position. Below the joke, "You might also
+  like": `JokeSimilarity`, for now the jokes sharing the most words (the experiment in `experiments/similarity` compares
+  Jev and embeddings for a better method).
 - **API for the page:** `GET /jokes/feed?sort=new|top&limit=(≤ 50)[&after=<next>]` → `{total, items, next}` (keyset cursor, so new jokes don't shift pages);
-  `GET /jokes/summary` → `{count, nextBatchAt}`; `POST /jokes/{id}/vote {value, previous}` → `{up, down}`.
-- **Read cache** (`JokeReadCache`, `ReadCache:Seconds`, 30 by default, 0 = off): the joke count, the Top 3 and each
-  feed page (by sort, cursor and size) are kept in memory per replica (at most 20,000 rows), since every visitor reads
+  `GET /jokes/summary` → `{count, nextBatchAt}`; `POST /jokes/{id}/vote {value, previous}` → `{up, down}`;
+  `GET /jokes/{id}` (cached like the feed); `GET /jokes/{id}/similar?limit=(≤ 12)` → the most similar jokes.
+- **Read cache** (`JokeReadCache`, `ReadCache:Seconds`, 30 by default, 0 = off): the joke count, the Top 3, each joke by id, the
+  similarity index and each feed page (by sort, cursor and size) are kept in memory per replica (at most 20,000 rows), since every visitor reads
   the same ones and the load test found the database to be the first limit (`docs/performance.md`, the history of
   load tests and optimizations). Votes aren't cached; other visitors see a vote's counts when their copy expires. The
   scheduler drops its replica's copies when it saves a joke or updates the Top 3; the other region's replica catches up
@@ -303,7 +311,7 @@ that the new revision itself saved a joke in every enabled language, from any of
 joke on `/status` as soon as it's saved; DB rows alone could come from the draining revision), that those jokes are in
 `/jokes`, that
 the leaderboard is populated with valid ranks, that `app.js`/`app.css`, `/jokes/feed` and `/jokes/summary`
-are served, and that the vote endpoint answers (with a no-op vote, so it never changes the counts).
+are served, that a joke's page (`/j/<id>`) carries its link-preview tags and `/jokes/<id>/similar` answers, and that the vote endpoint answers (with a no-op vote, so it never changes the counts).
 To run them against staging locally:
 
 ```
