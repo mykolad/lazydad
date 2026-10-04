@@ -129,6 +129,7 @@ public class JokeSchedulerService : BackgroundService
                 saved.Select(j => new GeneratedJoke(j.Id, j.Model)).ToList(), leaderboard, null));
             metrics.RecordTick(language.Language, "succeeded");
             metrics.RecordLeaderboard(language.Language, leaderboard);
+            await ProfileJokesAsync(stoppingToken);
             logger.LogDebug("Joke tick for '{Language}' completed.", language.Language);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -215,6 +216,29 @@ public class JokeSchedulerService : BackgroundService
         }
 
         return (saved, leaderboard);
+    }
+
+    /// <summary>
+    /// Profiles the jokes "you might also like" ranks by (JokeProfiler): this tick's jokes first, then a batch of older
+    /// ones without a profile. Only the replica holding the tick's lease gets here, so replicas don't profile the same
+    /// jokes twice. Similar jokes are optional, so nothing here fails the tick: a failure waits for the next one.
+    /// </summary>
+    private async Task ProfileJokesAsync(CancellationToken stoppingToken)
+    {
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            if (await scope.ServiceProvider.GetRequiredService<IJokeProfiler>().ProfileAsync(stoppingToken) > 0)
+                readCache.Invalidate();
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Profiling jokes for similar jokes failed; the next tick tries again.");
+        }
     }
 
     /// <summary>

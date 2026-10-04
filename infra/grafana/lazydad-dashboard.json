@@ -1,7 +1,7 @@
 {
   "title": "LazyDad",
   "uid": "lazydad-overview",
-  "description": "Requests, jokes, LLM calls, resources, database and logs of the LazyDad apps picked in the App selector: production's two by default, added up; resources and ticks per app. Import it as described in infra/deployment-setup.md, section 11.",
+  "description": "Requests, jokes, similar jokes (Jev), LLM calls, resources, database and logs of the LazyDad apps picked in the App selector: production's two by default, added up; resources and ticks per app. Import it as described in infra/deployment-setup.md, section 11.",
   "tags": ["lazydad"],
   "timezone": "browser",
   "editable": true,
@@ -163,9 +163,62 @@
         "expr": "round(sum by (outcome) (sum_over_time(((lazydad_leaderboard_updates_total{job=~\"$job\"} - lazydad_leaderboard_updates_total{job=~\"$job\"} offset 1m) >= 0 or lazydad_leaderboard_updates_total{job=~\"$job\"})[$__interval:1m])))" }]
     },
 
-    { "type": "row", "title": "LLM calls (per hour)", "id": 30, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 } },
+    { "type": "row", "title": "Similar jokes (per hour)", "id": 70, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 } },
     {
-      "type": "timeseries", "title": "Call duration p50 and p95, by model", "id": 31, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 }, "interval": "1h",
+      "type": "timeseries", "title": "\"You might also like\", by method", "id": 71, "gridPos": { "h": 8, "w": 6, "x": 0, "y": 32 }, "interval": "1h",
+      "description": "Which method ranked each joke page's suggestions: jev (the main one), embedding (the fallback, for a joke Jev couldn't profile) or words (no profile yet, e.g. a joke saved moments ago).",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1, "stacking": { "mode": "normal" } } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "jev" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] },
+          { "matcher": { "id": "byName", "options": "embedding" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] },
+          { "matcher": { "id": "byName", "options": "words" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "purple" } }] }] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{method}}",
+        "expr": "round(sum by (method) (sum_over_time(((lazydad_similar_requests_total{job=~\"$job\"} - lazydad_similar_requests_total{job=~\"$job\"} offset 1m) >= 0 or lazydad_similar_requests_total{job=~\"$job\"})[$__interval:1m])))" }]
+    },
+    {
+      "type": "timeseries", "title": "Jev requests, by outcome", "id": 72, "gridPos": { "h": 8, "w": 6, "x": 6, "y": 32 }, "interval": "1h",
+      "description": "Each joke goes to Jev once, when its tick saves it (and older jokes once, through the backfill). out_of_credits: Jev answered 402.",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1, "stacking": { "mode": "normal" } } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "succeeded" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] },
+          { "matcher": { "id": "byName", "options": "failed" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
+          { "matcher": { "id": "byName", "options": "out_of_credits" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "dark-red" } }] }] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{outcome}}",
+        "expr": "round(sum by (outcome) (sum_over_time(((lazydad_jev_requests_total{job=~\"$job\"} - lazydad_jev_requests_total{job=~\"$job\"} offset 1m) >= 0 or lazydad_jev_requests_total{job=~\"$job\"})[$__interval:1m])))" }]
+    },
+    {
+      "type": "timeseries", "title": "Joke profiles, by kind and outcome", "id": 73, "gridPos": { "h": 8, "w": 6, "x": 12, "y": 32 }, "interval": "1h",
+      "description": "Profiles saved for similar jokes (jev, embedding), and failed attempts, which the next tick retries.",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1, "stacking": { "mode": "normal" } } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "jev failed" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
+          { "matcher": { "id": "byName", "options": "embedding failed" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "dark-red" } }] }] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{kind}} {{outcome}}",
+        "expr": "round(sum by (kind, outcome) (sum_over_time(((lazydad_joke_profiles_total{job=~\"$job\"} - lazydad_joke_profiles_total{job=~\"$job\"} offset 1m) >= 0 or lazydad_joke_profiles_total{job=~\"$job\"})[$__interval:1m])))" }]
+    },
+    {
+      "type": "timeseries", "title": "Jev credits left and spend", "id": 74, "gridPos": { "h": 8, "w": 6, "x": 18, "y": 32 },
+      "description": "The credits left, as Jev's last answer reported them (LazyDadJevCreditsLow alerts under $1), and what Jev charged per hour.",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 4, "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "spanNulls": true } },
+        "overrides": [{ "matcher": { "id": "byName", "options": "spent per hour" }, "properties": [
+          { "id": "custom.drawStyle", "value": "bars" }, { "id": "custom.fillOpacity", "value": 60 }, { "id": "custom.axisPlacement", "value": "right" }] }] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "credits left", "expr": "min(lazydad_jev_credits{job=~\"$job\"})" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "spent per hour", "interval": "1h",
+          "expr": "sum(sum_over_time(((lazydad_jev_cost_total{job=~\"$job\"} - lazydad_jev_cost_total{job=~\"$job\"} offset 1m) >= 0 or lazydad_jev_cost_total{job=~\"$job\"})[$__interval:1m]))" }]
+    },
+
+    { "type": "row", "title": "LLM calls (per hour)", "id": 30, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 } },
+    {
+      "type": "timeseries", "title": "Call duration p50 and p95, by model", "id": 31, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 41 }, "interval": "1h",
       "description": "Per hour with calls; the judge's calls are the gpt-6-sol ones.",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "points", "pointSize": 7, "showPoints": "always" } }, "overrides": [] },
@@ -178,7 +231,7 @@
       ]
     },
     {
-      "type": "timeseries", "title": "Tokens, by model and type", "id": 32, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 }, "interval": "1h",
+      "type": "timeseries", "title": "Tokens, by model and type", "id": 32, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 41 }, "interval": "1h",
       "description": "input and output tokens per hour. Thinking models (Kimi-K2.5) count their reasoning as output.",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1, "stacking": { "mode": "normal" } } }, "overrides": [] },
@@ -187,9 +240,9 @@
         "expr": "round(sum by (gen_ai_request_model, gen_ai_token_type) (sum_over_time(((gen_ai_client_token_usage_sum{job=~\"$job\"} - gen_ai_client_token_usage_sum{job=~\"$job\"} offset 1m) >= 0 or gen_ai_client_token_usage_sum{job=~\"$job\"})[$__interval:1m])))" }]
     },
 
-    { "type": "row", "title": "Resources", "id": 40, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 } },
+    { "type": "row", "title": "Resources", "id": 40, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 49 } },
     {
-      "type": "timeseries", "title": "CPU (cores)", "id": 41, "gridPos": { "h": 8, "w": 8, "x": 0, "y": 41 },
+      "type": "timeseries", "title": "CPU (cores)", "id": 41, "gridPos": { "h": 8, "w": 8, "x": 0, "y": 50 },
       "description": "CPU time each app process used per second. Each container has 0.25 vCPU (the dashed line).",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 3, "min": 0, "color": { "mode": "palette-classic" },
@@ -200,7 +253,7 @@
         "expr": "sum by (job, cpu_mode) (rate(dotnet_process_cpu_time_seconds_total{job=~\"$job\"}[$__rate_interval]))" }]
     },
     {
-      "type": "timeseries", "title": "Memory", "id": 42, "gridPos": { "h": 8, "w": 8, "x": 8, "y": 41 },
+      "type": "timeseries", "title": "Memory", "id": 42, "gridPos": { "h": 8, "w": 8, "x": 8, "y": 50 },
       "description": "Each app's working set (what the container counts) and managed heap after the last garbage collection. Each container has 0.5 GiB (the dashed line).",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "bytes", "min": 0, "color": { "mode": "palette-classic" },
@@ -215,7 +268,7 @@
       ]
     },
     {
-      "type": "timeseries", "title": "Exceptions and garbage collections", "id": 43, "gridPos": { "h": 8, "w": 8, "x": 16, "y": 41 },
+      "type": "timeseries", "title": "Exceptions and garbage collections", "id": 43, "gridPos": { "h": 8, "w": 8, "x": 16, "y": 50 },
       "description": "Exceptions thrown per minute by type, handled ones included: CredentialUnavailableException is DefaultAzureCredential trying its sign-in options in turn, and the socket, IO and canceled ones are mostly connections closing. A new type, or many more of one, is worth a look. Plus garbage collections per minute.",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 1, "min": 0, "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 0 } }, "overrides": [] },
@@ -228,9 +281,9 @@
       ]
     },
 
-    { "type": "row", "title": "Database and outbound calls", "id": 50, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 49 } },
+    { "type": "row", "title": "Database and outbound calls", "id": 50, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 58 } },
     {
-      "type": "timeseries", "title": "SQL commands: per minute and p95 duration", "id": 51, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 50 },
+      "type": "timeseries", "title": "SQL commands: per minute and p95 duration", "id": 51, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 59 },
       "description": "Gaps in the duration are times without SQL commands (the scheduler and visitors cause them).",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "short", "min": 0, "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 0, "spanNulls": false, "showPoints": "auto" } },
@@ -244,7 +297,7 @@
       ]
     },
     {
-      "type": "timeseries", "title": "Outbound HTTP calls per minute, by host", "id": 52, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 50 },
+      "type": "timeseries", "title": "Outbound HTTP calls per minute, by host", "id": 52, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 59 },
       "description": "The app's calls out: the AI endpoint, Grafana (telemetry), and localhost, which is Container Apps' managed identity endpoint (the app's sign-in tokens).",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 1, "min": 0, "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "stacking": { "mode": "normal" } } }, "overrides": [] },
@@ -253,16 +306,16 @@
         "expr": "sum by (server_address) (rate(http_client_request_duration_seconds_count{job=~\"$job\"}[$__rate_interval])) * 60" }]
     },
 
-    { "type": "row", "title": "Logs", "id": 60, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 58 } },
+    { "type": "row", "title": "Logs", "id": 60, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 67 } },
     {
-      "type": "logs", "title": "Warnings and errors", "id": 61, "gridPos": { "h": 10, "w": 24, "x": 0, "y": 59 },
+      "type": "logs", "title": "Warnings and errors", "id": 61, "gridPos": { "h": 10, "w": 24, "x": 0, "y": 68 },
       "datasource": { "type": "loki", "uid": "${loki}" },
       "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true, "dedupStrategy": "none" },
       "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "${loki}" },
         "expr": "{service_name=~\"$job\"} | severity_text=~\"(?i)warn.*|error|critical|fatal\" | line_format \"{{.service_name}}: {{__line__}}\"" }]
     },
     {
-      "type": "logs", "title": "All logs", "id": 62, "gridPos": { "h": 10, "w": 24, "x": 0, "y": 69 },
+      "type": "logs", "title": "All logs", "id": 62, "gridPos": { "h": 10, "w": 24, "x": 0, "y": 78 },
       "datasource": { "type": "loki", "uid": "${loki}" },
       "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true, "dedupStrategy": "none" },
       "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "${loki}" }, "expr": "{service_name=~\"$job\"} | line_format \"{{.service_name}}: {{__line__}}\"" }]

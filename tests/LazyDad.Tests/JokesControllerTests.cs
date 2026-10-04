@@ -1,11 +1,16 @@
+using System.Diagnostics.Metrics;
 using System.Text.Json;
+using LazyDad.Api.Configuration;
 using LazyDad.Api.Controllers;
 using LazyDad.Api.Services;
+using LazyDad.Api.Telemetry;
 using LazyDad.Data.Entities;
 using LazyDad.Data.Repositories;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.Metrics.Testing;
+using Microsoft.Extensions.Options;
 using Moq;
 
 namespace LazyDad.Tests;
@@ -14,22 +19,31 @@ public sealed class JokesControllerTests : IDisposable
 {
     private readonly Mock<IJokeRepository> jokeRepositoryMock = new();
     private readonly Mock<ITopJokeRepository> topJokeRepositoryMock = new();
+    private readonly Mock<IJokeProfileRepository> profileRepositoryMock = new();
+    private readonly SimilarityOptions similarityOptions = new();
 
     private readonly SchedulerStatus schedulerStatus = new();
     private readonly ServiceProvider services;
     // The default lifetime (30 s): a test's second read comes from the cache. Its loads resolve the mocks from their scopes.
     private readonly JokeReadCache cache;
+    private readonly SimilarityMetrics similarityMetrics;
 
     public JokesControllerTests()
     {
         services = new ServiceCollection()
             .AddSingleton(jokeRepositoryMock.Object)
             .AddSingleton(topJokeRepositoryMock.Object)
+            .AddSingleton(profileRepositoryMock.Object)
+            .AddMetrics()
             .BuildServiceProvider();
+        // No stored profiles unless a test adds some.
+        profileRepositoryMock.Setup(r => r.GetAllAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        similarityMetrics = new SimilarityMetrics(services.GetRequiredService<IMeterFactory>());
         cache = new JokeReadCache(new ConfigurationBuilder().Build(), services.GetRequiredService<IServiceScopeFactory>());
     }
 
-    private JokesController CreateController() => new(jokeRepositoryMock.Object, schedulerStatus, cache);
+    private JokesController CreateController()
+        => new(jokeRepositoryMock.Object, schedulerStatus, cache, Options.Create(similarityOptions), similarityMetrics);
 
     public void Dispose()
     {
@@ -294,6 +308,31 @@ public sealed class JokesControllerTests : IDisposable
 
         // Joke 3 shares "варен", "прогр" and "тісто"; joke 2 nothing (but still fills the list, by its votes).
         Assert.Equal([3, 2], json.EnumerateArray().Select(j => j.GetProperty("id").GetInt32()));
+    }
+
+    [Fact]
+    public async Task GetSimilar_RanksByTheStoredJevProfiles_AndCountsTheMethod()
+    {
+        var joke = MakeJoke(1);
+        jokeRepositoryMock.Setup(r => r.GetByIdAsync(1, It.IsAny<CancellationToken>())).ReturnsAsync(joke);
+        jokeRepositoryMock.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([joke, MakeJoke(2), MakeJoke(3)]);
+        var size = JevQuestions.Topics.Count + JevQuestions.Wordplay.Count;
+        float[] Profile(int topic) { var p = new float[size]; p[topic] = 1; return p; }
+        profileRepositoryMock
+            .Setup(r => r.GetAllAsync(JokeProfile.JevKind, JokeProfiler.JevVersion(similarityOptions), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new JokeProfile { JokeId = 1, Vector = JokeProfiler.ToBytes(Profile(0)) },
+                new JokeProfile { JokeId = 2, Vector = JokeProfiler.ToBytes(Profile(1)) },
+                new JokeProfile { JokeId = 3, Vector = JokeProfiler.ToBytes(Profile(0)) },
+            ]);
+        using var methods = new MetricCollector<long>(services.GetRequiredService<IMeterFactory>(), LazyDadTelemetry.Name, "lazydad.similar.requests");
+
+        var json = Json(await CreateController().GetSimilar(1, 2, CancellationToken.None));
+
+        Assert.Equal([3, 2], json.EnumerateArray().Select(j => j.GetProperty("id").GetInt32()));
+        var counted = Assert.Single(methods.GetMeasurementSnapshot(), m => m.Value == 1);
+        Assert.Equal("jev", counted.Tags["method"]);
     }
 
     [Theory]

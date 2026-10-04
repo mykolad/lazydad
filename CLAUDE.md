@@ -54,8 +54,19 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   with the joke in `<title>` and the link-preview tags (Open Graph, `canonical`) that messengers read without running
   `app.js` (404 and the plain shell for an unknown joke). `app.js` routes with the History API: a joke opened from the
   list is shown in place, and Back or "All jokes" returns to the list's scroll position. Below the joke, "You might also
-  like": `JokeSimilarity`, for now the jokes sharing the most words (the experiment in `experiments/similarity` compares
-  Jev and embeddings for a better method).
+  like" (next point).
+- **Similar jokes** (`/jokes/{id}/similar`): ranked from stored profiles (`JokeProfiles` table, one row per joke and
+  kind, with the version that made it), never by a call at request time. `JokeProfiler` asks for each joke's profile
+  once, after its tick (the tick's own jokes, then up to `Similarity:BatchSize` older ones without one, so the backfill
+  is gradual): **Jev** (`JevClient`, jevtypesafeai.com, the pinned `Similarity:Jev:Model`; the topic and the kind of
+  wordplay as probabilities, the questions in `JevQuestions`) and an **embedding** (`text-embedding-3-small`, 512
+  dimensions, through `LlmClientFactory`). `JokeSimilarity` ranks by Jev (cosine, wordplay at half weight), falls back
+  to embeddings for a joke without a Jev profile, and to shared words without either. Jev won the blind test in
+  `experiments/similarity` (#63): its suggestions share the joke's style rather than its subject. Only the joke and its
+  explanation go to Jev. The key is a Key Vault reference per app (`JevApiKey`, `JevApiKeyStaging`; runbook section 7,
+  step 5); without one, Jev is off. A failed profile never fails the tick: the next one retries. `SimilarityMetrics`
+  counts Jev requests (and the cost and credits Jev reports), profiles, and which method ranked each request.
+  Changing a Jev question or option means a new `JevQuestions.QuestionSet` (every joke is profiled again).
 - **API for the page:** `GET /jokes/feed?sort=new|top&limit=(≤ 50)[&after=<next>]` → `{total, items, next}` (keyset cursor, so new jokes don't shift pages);
   `GET /jokes/summary` → `{count, nextBatchAt}`; `POST /jokes/{id}/vote {value, previous}` → `{up, down}`;
   `GET /jokes/{id}` (cached like the feed); `GET /jokes/{id}/similar?limit=(≤ 12)` → the most similar jokes.

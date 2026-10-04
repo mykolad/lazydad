@@ -88,3 +88,30 @@ groups:
         annotations:
           summary: '{{ $labels.job }} answered more than 2 requests with a server error in 15 minutes.'
           description: The dashboard's "Responses per second, by status code" panel (for that app) and the logs show which.
+
+      - alert: LazyDadJevCreditsLow
+        # Jev reports the balance with every answer (lazydad_jev_credits, the last one an app saw). A tick profiles its
+        # jokes about every 4 hours, ~$0.0002 each, so $1 is months of runway: time to top up before suggestions fall
+        # back to embeddings.
+        expr: min(lazydad_jev_credits{job=~"lazydad-app|lazydad-app-swedencentral"}) < 1
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Jev has less than $1 of credits left ({{ $value | printf "%.2f" }}).'
+          description: >-
+            Top up at jevtypesafeai.com. Once they run out, new jokes get no Jev profile, and their "You might also
+            like" falls back to embeddings (the dashboard's "Similar jokes" row shows which method ranked them).
+
+      - alert: LazyDadProfileFailed
+        # One alert per app and kind: Jev (out of credits, down, or the key is wrong) or the embedding model couldn't
+        # profile a joke. The joke is still shown; its similar jokes use the other method until the next tick retries.
+        expr: >-
+          sum by (job, kind) (increase(lazydad_joke_profiles_total{job=~"lazydad-app|lazydad-app-swedencentral",
+          outcome="failed"}[30m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Profiling jokes with {{ $labels.kind }} failed on {{ $labels.job }}.'
+          description: >-
+            The log line "Jev couldn't profile joke" or "The embedding model couldn't profile" has the error (for Jev,
+            its answer: 402 is out of credits, 401 a wrong key). The next tick tries again.

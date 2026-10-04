@@ -47,6 +47,13 @@ builder.Services.Configure<Dictionary<string, LlmProviderOptions>>(
 builder.Services.AddScoped<IJokeRepository, JokeRepository>();
 builder.Services.AddScoped<ITopJokeRepository, TopJokeRepository>();
 builder.Services.AddScoped<ISchedulerLockRepository, SchedulerLockRepository>();
+builder.Services.AddScoped<IJokeProfileRepository, JokeProfileRepository>();
+
+// "You might also like": Jev profiles, embeddings as the fallback (see JokeProfiler, JokeSimilarity).
+builder.Services.Configure<SimilarityOptions>(builder.Configuration.GetSection(SimilarityOptions.SectionName));
+builder.Services.AddSingleton<SimilarityMetrics>();
+builder.Services.AddHttpClient<IJevClient, JevClient>(http => http.Timeout = TimeSpan.FromSeconds(30));
+builder.Services.AddScoped<IJokeProfiler, JokeProfiler>();
 
 builder.Services.AddSingleton<ILlmClientFactory, LlmClientFactory>();
 builder.Services.AddScoped<JokeGenerationService>();
@@ -62,6 +69,8 @@ var wwwrootPath = Path.Combine(builder.Environment.ContentRootPath, "wwwroot");
 Directory.CreateDirectory(wwwrootPath);
 
 var app = builder.Build();
+// Created now, so its series start at 0 before anything counts (see SimilarityMetrics).
+app.Services.GetRequiredService<SimilarityMetrics>();
 
 // Pass an explicit PhysicalFileProvider so the middleware is not affected by
 // the stale internal WebRootFileProvider (which is snapshotted before wwwroot exists).

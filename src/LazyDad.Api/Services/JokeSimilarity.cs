@@ -3,16 +3,27 @@ using LazyDad.Data.Entities;
 namespace LazyDad.Api.Services;
 
 /// <summary>
-/// "You might also like" on a joke's page: the jokes in its language that share the most words with it.
-/// A stand-in until the similarity experiment (experiments/similarity) picks a method: words are compared by their first
-/// five letters (a rough stem: "вареник" and "вареники" match), the template words every joke repeats ("Чому … став …?
-/// Бо завжди …") don't count, and ties go to the better-voted, then the newer joke. With nothing in common, the
-/// best-voted jokes fill the list, so it's never empty.
+/// "You might also like" on a joke's page, ranked from the stored profiles (JokeProfiler), with no calls at request time:
+/// <list type="number">
+/// <item><b>Jev</b> (the main method, the winner of the similarity experiment's blind test): the cosine of the jokes'
+/// topic and wordplay probabilities, wordplay at half weight. It finds jokes in the same style rather than about the same
+/// thing.</item>
+/// <item><b>Embeddings</b>, when the joke has no Jev profile (Jev out of credits or down when it was saved).</item>
+/// <item><b>Shared words</b>, when it has neither yet (a joke saved moments ago, before its tick profiled it): words
+/// compared by their first five letters ("вареник" and "вареники" match), without the template words every joke repeats
+/// ("Чому … став …? Бо завжди …").</item>
+/// </list>
+/// Only jokes with the chosen method's profile compete; ties go to the better-voted, then the newer joke. Shared words
+/// fill whatever is left, and with nothing in common, the best-voted jokes do, so the list is never short.
+/// Comparing one joke with all of them is N small dot products per request (and requests share the cached index).
 /// </summary>
 public static class JokeSimilarity
 {
     private const int StemLength = 5;
     private const int MinWordLength = 4;
+    // The weight of the wordplay terms next to the topic ones in the Jev cosine (dot product and norms). Their
+    // coordinates are scaled by its square root, as in the experiment.
+    private const double WordplayWeight = 0.5;
 
     // Stems (first five letters) of words that say nothing about a joke's topic: the jokes' own template, pronouns,
     // auxiliaries and fillers. Words shorter than four letters are skipped anyway.
@@ -27,25 +38,79 @@ public static class JokeSimilarity
         "хоче", "хотів", "хотіл", "думав", "думає", "знову", "тепер", "навіщ", "адже", "щоби", "хоча", "аніж", "нього", "неї",
     ];
 
-    /// <summary>A joke with its stems, computed once per load of the index.</summary>
-    public sealed record Entry(Joke Joke, IReadOnlySet<string> Stems);
+    public const string JevMethod = "jev";
+    public const string EmbeddingMethod = "embedding";
+    public const string WordsMethod = "words";
 
-    public static List<Entry> Index(IEnumerable<Joke> jokes) => jokes.Select(j => new Entry(j, Stems(j.Text))).ToList();
+    /// <summary>A joke with its stems and whichever profiles it has, worked out once per load of the index.</summary>
+    public sealed record Entry(Joke Joke, IReadOnlySet<string> Stems, float[]? Jev, float[]? Embedding);
+
+    /// <summary>The suggestions, and the method that ranked them (for the metrics).</summary>
+    public sealed record Result(List<Joke> Jokes, string Method);
+
+    /// <param name="jev">Jev profiles by joke id, in <see cref="JevQuestions"/> order (topics, then wordplay).</param>
+    /// <param name="embeddings">Embeddings by joke id.</param>
+    public static List<Entry> Index(IEnumerable<Joke> jokes, IReadOnlyDictionary<int, float[]> jev, IReadOnlyDictionary<int, float[]> embeddings)
+        => jokes.Select(j => new Entry(j, Stems(j.Text),
+                jev.TryGetValue(j.Id, out var profile) ? WeighWordplay(profile) : null,
+                embeddings.GetValueOrDefault(j.Id)))
+            .ToList();
 
     /// <summary>Up to <paramref name="limit"/> jokes like <paramref name="joke"/>, most similar first; never the joke itself.</summary>
-    public static List<Joke> Similar(Joke joke, IReadOnlyList<Entry> index, int limit)
+    public static Result Similar(Joke joke, IReadOnlyList<Entry> index, int limit)
     {
-        var stems = Stems(joke.Text);
-        return index
+        var target = index.FirstOrDefault(e => e.Joke.Id == joke.Id) ?? new Entry(joke, Stems(joke.Text), null, null);
+        var candidates = index
             .Where(e => e.Joke.Id != joke.Id && string.Equals(e.Joke.Language, joke.Language, StringComparison.OrdinalIgnoreCase))
-            .Select(e => (e.Joke, Score: Overlap(stems, e.Stems)))
+            .ToList();
+
+        // The best method both this joke and some others have a profile for.
+        var (method, score) =
+            target.Jev is { } jev && candidates.Any(c => c.Jev is not null)
+                ? (JevMethod, (Func<Entry, double?>)(c => c.Jev is { } other ? Cosine(jev, other) : null))
+                : target.Embedding is { } embedding && candidates.Any(c => c.Embedding is not null)
+                    ? (EmbeddingMethod, c => c.Embedding is { } other ? Cosine(embedding, other) : null)
+                    : (WordsMethod, (Func<Entry, double?>)(c => Overlap(target.Stems, c.Stems)));
+
+        var ranked = Rank(candidates, score).Take(limit).ToList();
+        if (ranked.Count < limit && method != WordsMethod)
+        {
+            // Jokes without that profile yet (the backfill hasn't reached them) fill the rest by shared words.
+            var taken = ranked.Select(j => j.Id).ToHashSet();
+            ranked.AddRange(Rank(candidates.Where(c => !taken.Contains(c.Joke.Id)), c => Overlap(target.Stems, c.Stems)).Take(limit - ranked.Count));
+        }
+        return new Result(ranked, method);
+    }
+
+    private static IEnumerable<Joke> Rank(IEnumerable<Entry> candidates, Func<Entry, double?> score)
+        => candidates
+            .Select(e => (e.Joke, Score: score(e)))
+            .Where(x => x.Score is not null)
             .OrderByDescending(x => x.Score)
             .ThenByDescending(x => x.Joke.Up - x.Joke.Down)
             .ThenByDescending(x => x.Joke.GeneratedAt)
             .ThenByDescending(x => x.Joke.Id)
-            .Take(limit)
-            .Select(x => x.Joke)
-            .ToList();
+            .Select(x => x.Joke);
+
+    private static float[] WeighWordplay(float[] profile)
+    {
+        var weighted = (float[])profile.Clone();
+        var scale = (float)Math.Sqrt(WordplayWeight);
+        for (var i = JevQuestions.Topics.Count; i < weighted.Length; i++)
+            weighted[i] *= scale;
+        return weighted;
+    }
+
+    private static double Cosine(float[] a, float[] b)
+    {
+        double dot = 0, na = 0, nb = 0;
+        for (var i = 0; i < Math.Min(a.Length, b.Length); i++)
+        {
+            dot += a[i] * b[i];
+            na += a[i] * a[i];
+            nb += b[i] * b[i];
+        }
+        return na == 0 || nb == 0 ? 0 : dot / Math.Sqrt(na * nb);
     }
 
     internal static HashSet<string> Stems(string text)

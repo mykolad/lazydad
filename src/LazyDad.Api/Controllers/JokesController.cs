@@ -1,8 +1,11 @@
+using LazyDad.Api.Configuration;
 using LazyDad.Api.Services;
+using LazyDad.Api.Telemetry;
 using LazyDad.Data.Entities;
 using LazyDad.Data.Repositories;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Options;
 
 namespace LazyDad.Api.Controllers;
 
@@ -17,12 +20,21 @@ public class JokesController : ControllerBase
     private readonly IJokeRepository jokeRepository;
     private readonly SchedulerStatus schedulerStatus;
     private readonly JokeReadCache cache;
+    private readonly IOptions<SimilarityOptions> similarityOptions;
+    private readonly SimilarityMetrics similarityMetrics;
 
-    public JokesController(IJokeRepository jokeRepository, SchedulerStatus schedulerStatus, JokeReadCache cache)
+    public JokesController(
+        IJokeRepository jokeRepository,
+        SchedulerStatus schedulerStatus,
+        JokeReadCache cache,
+        IOptions<SimilarityOptions> similarityOptions,
+        SimilarityMetrics similarityMetrics)
     {
         this.jokeRepository = jokeRepository;
         this.schedulerStatus = schedulerStatus;
         this.cache = cache;
+        this.similarityOptions = similarityOptions;
+        this.similarityMetrics = similarityMetrics;
     }
 
     // The cached reads resolve their repository from the cache's own scope (see JokeReadCache), not this request's.
@@ -140,11 +152,24 @@ public class JokesController : ControllerBase
         var joke = await GetJokeCached(cache, id, cancellationToken);
         if (joke is null)
             return NotFound();
-        // Every joke with its stems, worked out once per load: every joke's page compares against the same list.
-        var index = await cache.GetOrLoadAsync("similarity",
-            async (services, token) => JokeSimilarity.Index(await services.GetRequiredService<IJokeRepository>().GetAllAsync(token)),
-            cancellationToken);
-        return Ok(JokeSimilarity.Similar(joke, index, limit));
+        // Every joke with its stems and stored profiles, loaded once per cache lifetime: every joke's page compares
+        // against the same list, and nothing is called per request.
+        var index = await cache.GetOrLoadAsync("similarity", LoadSimilarityIndex, cancellationToken);
+        var result = JokeSimilarity.Similar(joke, index, limit);
+        similarityMetrics.RecordSimilar(result.Method);
+        return Ok(result.Jokes);
+    }
+
+    private async Task<List<JokeSimilarity.Entry>> LoadSimilarityIndex(IServiceProvider services, CancellationToken cancellationToken)
+    {
+        var jokes = await services.GetRequiredService<IJokeRepository>().GetAllAsync(cancellationToken);
+        var profiles = services.GetRequiredService<IJokeProfileRepository>();
+        var settings = similarityOptions.Value;
+        var jev = await profiles.GetAllAsync(JokeProfile.JevKind, JokeProfiler.JevVersion(settings), cancellationToken);
+        var embeddings = await profiles.GetAllAsync(JokeProfile.EmbeddingKind, JokeProfiler.EmbeddingVersion(settings), cancellationToken);
+        return JokeSimilarity.Index(jokes,
+            jev.ToDictionary(p => p.JokeId, p => JokeProfiler.FromBytes(p.Vector)),
+            embeddings.ToDictionary(p => p.JokeId, p => JokeProfiler.FromBytes(p.Vector)));
     }
 
     [HttpGet("language/{language}")]

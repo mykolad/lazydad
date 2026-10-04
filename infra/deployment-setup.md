@@ -36,7 +36,7 @@ What it all looks like at the end:
 | Container Apps environment | `lazydad-cae` | West Europe | Consumption |
 | Container Apps environment | `lazydad-cae-swedencentral` | Sweden Central | Consumption |
 | Container registry | `lazydadacr` | West Europe | Basic, admin user off, repository permissions; `lazydad-preview` (builds, staging) and `lazydad` (production) |
-| Key Vault | `lazydad-kv` | West Europe | RBAC, soft delete 90 days, no purge protection; the Grafana tokens and the origin certificate |
+| Key Vault | `lazydad-kv` | West Europe | RBAC, soft delete 90 days, no purge protection; the Grafana tokens, the Jev keys and the origin certificate |
 | SQL server | `lazydad-sql-swedencentral` | Sweden Central | Entra-only authentication, TLS 1.2 |
 | Database | `lazydad-db` | | Basic (5 DTU, 2 GB); geo-redundant backups, long-term 7 weeks / 12 months; delete lock |
 | Database | `lazydad-db-staging` | | serverless, free offer |
@@ -49,8 +49,8 @@ What it all looks like at the end:
 
 | Identity | Kind | Signs in as it | Roles |
 |---|---|---|---|
-| `lazydad-production` | user-assigned | both prod apps; both prod environments, to read the certificate | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeaders` and `lazydad-fyi-origin`; read/write in `lazydad-db` |
-| `lazydad-app-staging` | system-assigned | the staging app | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeadersStaging`; read/write in `lazydad-db-staging` |
+| `lazydad-production` | user-assigned | both prod apps; both prod environments, to read the certificate | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeaders`, `JevApiKey` and `lazydad-fyi-origin`; read/write in `lazydad-db` |
+| `lazydad-app-staging` | system-assigned | the staging app | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeadersStaging` and `JevApiKeyStaging`; read/write in `lazydad-db-staging` |
 | `lazydad-acr-pull` | user-assigned | all three apps, to pull images | `Container Registry Repository Reader` (all repositories) |
 | `lazydad-github-cd` | user-assigned | GitHub's `production` environment | `Container Registry Repository Writer` on `lazydad`, `Reader` on `lazydad-preview`, `Reader` on the registry; `Contributor` on both prod apps; `LazyDad Deployer`; `LazyDad Service Tag Reader`; migrations in `lazydad-db` |
 | `lazydad-github-staging` | user-assigned | GitHub's `staging` environment (branch previews too) | `Container Registry Repository Writer` on `lazydad-preview` only, `Reader` on the registry; `Contributor` on `lazydad-app-staging`; `LazyDad Deployer`; migrations in `lazydad-db-staging` |
@@ -254,7 +254,7 @@ unique data. Section 12 shows how to preview a purge, and how to roll back by ha
 
 ## 3. Key Vault
 
-It holds only what really is a secret: the Grafana Cloud write tokens (section 11) and the origin certificate for
+It holds only what really is a secret: the Grafana Cloud write tokens (section 11), the Jev keys (section 7, step 5) and the origin certificate for
 `lazydad.fyi` with its private key (section 10). The AI endpoint and the database connection strings contain no
 credentials, so they're plain app settings. Access goes through Azure roles (RBAC), per secret where it matters: each
 app can read only its own token, and only production's identity reads the certificate.
@@ -402,6 +402,7 @@ deploy_model() {
 deploy_model Kimi-K2.5  MoonshotAI 1          1    # joke writer
 deploy_model gpt-6-luna OpenAI     2026-09-22 10   # joke writer
 deploy_model gpt-6-sol  OpenAI     2026-09-22 10   # the leaderboard's judge
+deploy_model text-embedding-3-small OpenAI 1 50  # similar jokes' fallback (section 7, step 5)
 
 # Your own inference rights, for local runs:
 az role assignment create --assignee "$(az ad signed-in-user show --query id -o tsv)" --role "Foundry User" \
@@ -424,6 +425,7 @@ function Add-ModelDeployment($Name, $Format, $Version, $Capacity) {
 Add-ModelDeployment Kimi-K2.5  MoonshotAI '1'          1    # joke writer
 Add-ModelDeployment gpt-6-luna OpenAI     '2026-09-22' 10   # joke writer
 Add-ModelDeployment gpt-6-sol  OpenAI     '2026-09-22' 10   # the leaderboard's judge
+Add-ModelDeployment text-embedding-3-small OpenAI '1' 50  # similar jokes' fallback (section 7, step 5)
 
 # Your own inference rights, for local runs:
 az role assignment create --assignee (az ad signed-in-user show --query id -o tsv) --role 'Foundry User' `
@@ -811,6 +813,59 @@ az containerapp ingress access-restriction set -g $RG -n lazydad-app-staging `
 Deploy Environment lets its runner through for the smoke tests, for any app with Allow rules (staging, and the prod
 apps once they're behind Cloudflare), and removes it afterwards. If your home IP changes, run the command again: it updates the
 `home` rule (and do the same for the SQL server's `AllowLocalDev` rule).
+
+**5. Similar jokes: the Jev keys.** "You might also like" ranks jokes by their Jev profiles (jevtypesafeai.com: each
+joke's topic and kind of wordplay, asked once when it's saved), with embeddings (section 5's `text-embedding-3-small`)
+as the fallback. Jev is the only service here with an API key: create one in Jev's dashboard for production and, if
+you like, a second for staging (the same key works, but a separate one keeps staging's spending and any leak apart).
+Each goes into Key Vault from a file, so it never shows on screen or in the shell's history, and each app reads only
+its own, like the Grafana tokens (section 11). Without a key, the app profiles with embeddings only.
+
+```bash
+az keyvault secret set --vault-name lazydad-kv -n JevApiKey --file "$HOME/.lazydad/jev-key.txt" -o none
+az keyvault secret set --vault-name lazydad-kv -n JevApiKeyStaging --file "$HOME/.lazydad/jev-key-staging.txt" -o none
+KV_ID=$(az keyvault show -n lazydad-kv --query id -o tsv)
+az role assignment create --assignee-object-id "$(az identity show -g $RG -n lazydad-production --query principalId -o tsv)" \
+  --assignee-principal-type ServicePrincipal --role "Key Vault Secrets User" --scope "$KV_ID/secrets/JevApiKey" -o none
+az role assignment create --assignee-object-id "$(az containerapp show -g $RG -n lazydad-app-staging --query identity.principalId -o tsv)" \
+  --assignee-principal-type ServicePrincipal --role "Key Vault Secrets User" --scope "$KV_ID/secrets/JevApiKeyStaging" -o none
+
+# A few minutes later (the role assignments take a while), each app's setting: staging first. Each change makes a new
+# revision, and a new production revision runs an extra batch (its startup tick).
+APP=lazydad-app-staging; SECRET=JevApiKeyStaging; IDENTITY=system
+# then: APP=lazydad-app; SECRET=JevApiKey; IDENTITY=$(az identity show -g $RG -n lazydad-production --query id -o tsv)
+# and:  APP=lazydad-app-swedencentral, the same otherwise
+az containerapp secret set -g $RG -n $APP \
+  --secrets "jev-api-key=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/$SECRET,identityref:$IDENTITY" -o none
+az containerapp update -g $RG -n $APP --set-env-vars Similarity__Jev__ApiKey=secretref:jev-api-key -o none
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+az keyvault secret set --vault-name lazydad-kv -n JevApiKey --file "$HOME\.lazydad\jev-key.txt" -o none
+az keyvault secret set --vault-name lazydad-kv -n JevApiKeyStaging --file "$HOME\.lazydad\jev-key-staging.txt" -o none
+$KV_ID = az keyvault show -n lazydad-kv --query id -o tsv
+az role assignment create --assignee-object-id (az identity show -g $RG -n lazydad-production --query principalId -o tsv) `
+  --assignee-principal-type ServicePrincipal --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/JevApiKey" -o none
+az role assignment create --assignee-object-id (az containerapp show -g $RG -n lazydad-app-staging --query identity.principalId -o tsv) `
+  --assignee-principal-type ServicePrincipal --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/JevApiKeyStaging" -o none
+
+# A few minutes later, each app's setting: staging first (a new production revision runs an extra batch).
+$APP = 'lazydad-app-staging'; $SECRET = 'JevApiKeyStaging'; $IDENTITY = 'system'
+# then: $APP = 'lazydad-app'; $SECRET = 'JevApiKey'; $IDENTITY = az identity show -g $RG -n lazydad-production --query id -o tsv
+# and:  $APP = 'lazydad-app-swedencentral', the same otherwise
+az containerapp secret set -g $RG -n $APP `
+  --secrets "jev-api-key=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/$SECRET,identityref:$IDENTITY" -o none
+az containerapp update -g $RG -n $APP --set-env-vars Similarity__Jev__ApiKey=secretref:jev-api-key -o none
+```
+
+</details>
+
+The next tick profiles its own jokes, then up to `Similarity:BatchSize` (60) older ones a tick, until every joke has
+both profiles; each is asked once (about $0.0002 a joke with Jev, a fraction of that for its embedding). The
+dashboard's "Similar jokes" row shows the requests, the credits left and which method ranked the suggestions; the
+alerts `LazyDadJevCreditsLow` and `LazyDadProfileFailed` (section 11) say when to top up or look.
 
 ## 8. Database users
 
@@ -1392,6 +1447,8 @@ would look down and idle all the time.
   | `LazyDadJokeFailed` | a model's joke failed (the model errored, or saving it did) or came back empty (30 minutes), one alert per app and model; a slow model isn't a failure | warning |
   | `LazyDadLeaderboardFailed` | the Top 3 update failed (30 minutes) | warning |
   | `LazyDadServerErrors` | more than 2 server errors (5xx) in 15 minutes, not counting `/healthz` | warning |
+| `LazyDadJevCreditsLow` | Jev reports less than $1 of credits left (top up before similar jokes fall back to embeddings) | warning |
+| `LazyDadProfileFailed` | Jev or the embedding model couldn't profile a joke for similar jokes (30 minutes), one alert per app and kind; the next tick retries | warning |
 
   Import them once: *Alerting → Alert rules → More → Import to Grafana-managed rules*, import source **YAML file**,
   the file, the stack's `…-prom` data source, a folder (e.g. `LazyDad`), then *Import*. Grafana converts them to its own
