@@ -1376,7 +1376,10 @@ properties.template.containers[0].env`). To switch telemetry off again:
 would look down and idle all the time.
 
 - *Testing & synthetics → Synthetics → Add check → HTTP*: `https://lazydad.fyi/healthz`, every 5 minutes from 2–3
-  probes (well inside the free tier's executions), with its built-in alert when the check fails.
+  probes (well inside the free tier's executions), with its built-in alert when the check fails. Set the
+  **timeout to 10 seconds** (the default is 3): the alert fires on 2 failed runs in 15 minutes from any probe, and one
+  probe's lossy network can spend 2 seconds just connecting to Cloudflare (Spain, 2026-10-04, while the other probes
+  got answers in under 100 ms). A real outage still fails every probe.
 - *Alerting → Contact points*: your email, and *Notification policies*: the default policy sends to it.
 - The alert rules are in `infra/grafana/lazydad-alert-rules.yaml` (the Prometheus rule-file format), evaluated every 5
   minutes, for both prod apps (one alert per app, except `LazyDadNoJokeSaved`):
