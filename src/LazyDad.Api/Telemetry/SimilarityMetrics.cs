@@ -18,18 +18,35 @@ public sealed class SimilarityMetrics
     private readonly Counter<double> jevCost;
     private readonly Counter<long> profiles;
     private readonly Counter<long> similarRequests;
-    // The balance Jev reported last; no measurement until a request has reported one.
-    private double? jevCredits;
+    /// <summary>
+    /// How long a reported balance stays current. Only the replica that profiles (it holds the lease) hears a new
+    /// balance, once a tick (every 4 hours), so an older reading would otherwise linger on the other replica, e.g. a
+    /// low one after a top-up. The alert and dashboard take the highest current reading.
+    /// </summary>
+    public static readonly TimeSpan CreditsFreshFor = TimeSpan.FromHours(6);
+
+    private readonly TimeProvider time;
+    // The balance Jev reported last, and when; no measurement until a request has reported one, or once it's stale.
+    private (double Usd, DateTimeOffset At)? jevCredits;
 
     public SimilarityMetrics(IMeterFactory meterFactory)
+        : this(meterFactory, TimeProvider.System)
     {
+    }
+
+    /// <summary>For tests: a fake clock.</summary>
+    internal SimilarityMetrics(IMeterFactory meterFactory, TimeProvider time)
+    {
+        this.time = time;
         var meter = meterFactory.Create(LazyDadTelemetry.Name);
         jevRequests = meter.CreateCounter<long>("lazydad.jev.requests", "{request}",
             "Jev requests by outcome: succeeded, failed, or out_of_credits (402).");
         // "{USD}", not "USD": an annotation keeps the unit out of the Prometheus names (lazydad_jev_cost_total, lazydad_jev_credits).
         jevCost = meter.CreateCounter<double>("lazydad.jev.cost", "{USD}", "What Jev charged, in US dollars, as it reports per request.");
         meter.CreateObservableGauge<double>("lazydad.jev.credits",
-            () => jevCredits is { } credits ? [new Measurement<double>(credits)] : Array.Empty<Measurement<double>>(),
+            () => jevCredits is { } credits && time.GetUtcNow() - credits.At < CreditsFreshFor
+                ? [new Measurement<double>(credits.Usd)]
+                : Array.Empty<Measurement<double>>(),
             "{USD}", "Jev credits left, in US dollars, as the last request reported.");
         profiles = meter.CreateCounter<long>("lazydad.joke.profiles", "{profile}",
             "Joke profiles for similar jokes, by kind (jev, embedding) and outcome (saved, failed).");
@@ -50,7 +67,7 @@ public sealed class SimilarityMetrics
 
     public void RecordJevCost(double usd) => jevCost.Add(usd);
 
-    public void RecordJevCredits(double usd) => jevCredits = usd;
+    public void RecordJevCredits(double usd) => jevCredits = (usd, time.GetUtcNow());
 
     public void RecordProfile(string kind, string outcome) => profiles.Add(1, new("kind", kind), new("outcome", outcome));
 

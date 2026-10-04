@@ -1,11 +1,15 @@
 using LazyDad.Api.Configuration;
+using Microsoft.Extensions.Options;
 
 namespace LazyDad.Tests;
 
 public class SimilarityOptionsValidatorTests
 {
     private static string[] Errors(SimilarityOptions options)
-        => new SimilarityOptionsValidator().Validate(null, options).Failures?.ToArray() ?? [];
+        => Errors(options, new() { ["AzureOpenAI"] = new LlmProviderOptions() });
+
+    private static string[] Errors(SimilarityOptions options, Dictionary<string, LlmProviderOptions> providers)
+        => new SimilarityOptionsValidator(Options.Create(providers)).Validate(null, options).Failures?.ToArray() ?? [];
 
     [Fact]
     public void Validate_TheDefaultsWithAKey_Pass()
@@ -37,9 +41,16 @@ public class SimilarityOptionsValidatorTests
     public void Validate_WithEmbeddingsOn_RejectsDimensionsOutOfRange(int dimensions)
         => Assert.Contains(Errors(new SimilarityOptions { Embeddings = { Dimensions = dimensions } }), e => e.Contains("Dimensions"));
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("AzureOpenAi")]
+    public void Validate_WithEmbeddingsOn_NeedsAConfiguredProvider(string provider)
+        => Assert.Contains(Errors(new SimilarityOptions { Embeddings = { Provider = provider } }), e => e.Contains("Embeddings:Provider"));
+
     [Fact]
-    public void Validate_WithEmbeddingsOn_NeedsAProvider()
-        => Assert.Contains(Errors(new SimilarityOptions { Embeddings = { Provider = "" } }), e => e.Contains("Embeddings:Provider"));
+    public void Validate_WithEmbeddingsOn_NeedsAProviderThatSupportsThem()
+        => Assert.Contains(Errors(new SimilarityOptions { Embeddings = { Provider = "Other" } }, new() { ["Other"] = new LlmProviderOptions() }),
+            e => e.Contains("Embeddings:Provider"));
 
     [Fact]
     public void Validate_WithEmbeddingsOff_IgnoresTheirSettings()

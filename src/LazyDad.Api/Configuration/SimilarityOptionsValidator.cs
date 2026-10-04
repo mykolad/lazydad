@@ -9,6 +9,16 @@ namespace LazyDad.Api.Configuration;
 /// </summary>
 public class SimilarityOptionsValidator : IValidateOptions<SimilarityOptions>
 {
+    // The providers LlmClientFactory can make an embedding generator for.
+    private static readonly string[] SupportedProviders = ["AzureOpenAI"];
+
+    private readonly IOptions<Dictionary<string, LlmProviderOptions>> providers;
+
+    public SimilarityOptionsValidator(IOptions<Dictionary<string, LlmProviderOptions>> providers)
+    {
+        this.providers = providers;
+    }
+
     // text-embedding-3-small has 1536 dimensions, -large 3072; a profile must also fit the table's varbinary(8000).
     public const int MaxDimensions = 2000;
     public const int MaxBatchSize = 1000;
@@ -31,8 +41,10 @@ public class SimilarityOptionsValidator : IValidateOptions<SimilarityOptions>
 
         if (options.Embeddings.Enabled)
         {
-            if (string.IsNullOrWhiteSpace(options.Embeddings.Provider))
-                errors.Add($"{section}:Embeddings:Provider must name one of LlmProviders.");
+            var provider = options.Embeddings.Provider;
+            if (!providers.Value.ContainsKey(provider) || !SupportedProviders.Contains(provider))
+                errors.Add($"{section}:Embeddings:Provider must be a configured LlmProviders entry that supports embeddings " +
+                    $"({string.Join(", ", SupportedProviders)}); was '{provider}'.");
             if (options.Embeddings.Dimensions is < 1 or > MaxDimensions)
                 errors.Add($"{section}:Embeddings:Dimensions must be between 1 and {MaxDimensions} (was {options.Embeddings.Dimensions}).");
         }

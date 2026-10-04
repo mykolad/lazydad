@@ -90,10 +90,11 @@ groups:
           description: The dashboard's "Responses per second, by status code" panel (for that app) and the logs show which.
 
       - alert: LazyDadJevCreditsLow
-        # Jev reports the balance with every answer (lazydad_jev_credits, the last one an app saw). A tick profiles its
-        # jokes about every 4 hours, ~$0.0002 each, so $1 is months of runway: time to top up before suggestions fall
-        # back to embeddings.
-        expr: min(lazydad_jev_credits{job=~"lazydad-app|lazydad-app-swedencentral"}) < 1
+        # Jev reports the balance with every answer (lazydad_jev_credits: the last one an app saw, for 6 hours). Only the
+        # replica that profiles hears it, so max() takes the freshest: after a top-up, the other one's older, lower
+        # reading doesn't keep this firing. A tick profiles its jokes every 4 hours, ~$0.0002 each, so $1 is months of
+        # runway: time to top up before suggestions fall back to embeddings.
+        expr: max(lazydad_jev_credits{job=~"lazydad-app|lazydad-app-swedencentral"}) < 1
         labels:
           severity: warning
         annotations:

@@ -204,14 +204,14 @@
     },
     {
       "type": "timeseries", "title": "Jev credits left and spend", "id": 74, "gridPos": { "h": 8, "w": 6, "x": 18, "y": 32 },
-      "description": "The credits left, as Jev's last answer reported them (LazyDadJevCreditsLow alerts under $1), and what Jev charged per hour.",
+      "description": "The credits left, as Jev's last answer reported them (the freshest reading of the last 6 hours; LazyDadJevCreditsLow alerts under $1), and what Jev charged per hour.",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 4, "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "spanNulls": true } },
         "overrides": [{ "matcher": { "id": "byName", "options": "spent per hour" }, "properties": [
           { "id": "custom.drawStyle", "value": "bars" }, { "id": "custom.fillOpacity", "value": 60 }, { "id": "custom.axisPlacement", "value": "right" }] }] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "credits left", "expr": "min(lazydad_jev_credits{job=~\"$job\"})" },
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "credits left", "expr": "max(lazydad_jev_credits{job=~\"$job\"})" },
         { "refId": "B", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "spent per hour", "interval": "1h",
           "expr": "sum(sum_over_time(((lazydad_jev_cost_total{job=~\"$job\"} - lazydad_jev_cost_total{job=~\"$job\"} offset 1m) >= 0 or lazydad_jev_cost_total{job=~\"$job\"})[$__interval:1m]))" }]
     },
