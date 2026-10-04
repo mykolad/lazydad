@@ -20,7 +20,7 @@ public sealed class JokesControllerTests : IDisposable
     private readonly Mock<IJokeRepository> jokeRepositoryMock = new();
     private readonly Mock<ITopJokeRepository> topJokeRepositoryMock = new();
     private readonly Mock<IJokeProfileRepository> profileRepositoryMock = new();
-    private readonly SimilarityOptions similarityOptions = new();
+    private readonly SimilarityOptions similarityOptions = new() { Jev = { ApiKey = "key" } };
 
     private readonly SchedulerStatus schedulerStatus = new();
     private readonly ServiceProvider services;
@@ -347,5 +347,19 @@ public sealed class JokesControllerTests : IDisposable
         jokeRepositoryMock.Setup(r => r.GetByIdAsync(99, It.IsAny<CancellationToken>())).ReturnsAsync((Joke?)null);
 
         Assert.IsType<NotFoundResult>(await CreateController().GetSimilar(99, 4, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task GetSimilar_WithJevSwitchedOff_IgnoresStoredJevProfiles()
+    {
+        similarityOptions.Jev.ApiKey = "";
+        jokeRepositoryMock.Setup(r => r.GetByIdAsync(1, It.IsAny<CancellationToken>())).ReturnsAsync(MakeJoke(1));
+        jokeRepositoryMock.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([MakeJoke(1), MakeJoke(2)]);
+        using var methods = new MetricCollector<long>(services.GetRequiredService<IMeterFactory>(), LazyDadTelemetry.Name, "lazydad.similar.requests");
+
+        await CreateController().GetSimilar(1, 4, CancellationToken.None);
+
+        profileRepositoryMock.Verify(r => r.GetAllAsync(JokeProfile.JevKind, It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.NotEqual("jev", Assert.Single(methods.GetMeasurementSnapshot(), m => m.Value == 1).Tags["method"]);
     }
 }

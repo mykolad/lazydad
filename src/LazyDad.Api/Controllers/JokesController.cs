@@ -165,8 +165,13 @@ public class JokesController : ControllerBase
         var jokes = await services.GetRequiredService<IJokeRepository>().GetAllAsync(cancellationToken);
         var profiles = services.GetRequiredService<IJokeProfileRepository>();
         var settings = similarityOptions.Value;
-        var jev = await profiles.GetAllAsync(JokeProfile.JevKind, JokeProfiler.JevVersion(settings), cancellationToken);
-        var embeddings = await profiles.GetAllAsync(JokeProfile.EmbeddingKind, JokeProfiler.EmbeddingVersion(settings), cancellationToken);
+        // A method that's off (no Jev key, no embedding deployment) isn't used for ranking either, even with profiles stored.
+        var jev = settings.Jev.Enabled
+            ? await profiles.GetAllAsync(JokeProfile.JevKind, JokeProfiler.JevVersion(settings), cancellationToken)
+            : [];
+        var embeddings = settings.Embeddings.Enabled
+            ? await profiles.GetAllAsync(JokeProfile.EmbeddingKind, JokeProfiler.EmbeddingVersion(settings), cancellationToken)
+            : [];
         return JokeSimilarity.Index(jokes,
             jev.ToDictionary(p => p.JokeId, p => JokeProfiler.FromBytes(p.Vector)),
             embeddings.ToDictionary(p => p.JokeId, p => JokeProfiler.FromBytes(p.Vector)));

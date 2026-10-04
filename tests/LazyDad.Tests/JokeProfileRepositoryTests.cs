@@ -1,6 +1,7 @@
 using LazyDad.Data;
 using LazyDad.Data.Entities;
 using LazyDad.Data.Repositories;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace LazyDad.Tests;
 
@@ -85,5 +86,36 @@ public sealed class JokeProfileRepositoryTests : IDisposable
 
         await using var verify = CreateContext();
         Assert.Empty(await new JokeProfileRepository(verify).GetAllAsync(JokeProfile.JevKind, "v1", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task SaveAsync_WhenAnotherReplicaInsertsTheSameProfileFirst_WritesOverIt()
+    {
+        // Just before this context inserts, another one (another replica) inserts the same joke's profile.
+        var conflict = new InsertFirst(() => database.CreateContext(), Profile(JokeId(1), JokeProfile.JevKind, "v1", [7]));
+        await using (var context = database.CreateContext([conflict]))
+            await new JokeProfileRepository(context).SaveAsync(Profile(JokeId(1), JokeProfile.JevKind, "v1", [1, 2]), CancellationToken.None);
+
+        await using var verify = CreateContext();
+        Assert.True(conflict.Inserted);
+        Assert.Equal([1, 2], Assert.Single(await new JokeProfileRepository(verify).GetAllAsync(JokeProfile.JevKind, "v1", CancellationToken.None)).Vector);
+    }
+
+    private sealed class InsertFirst(Func<LazyDadDbContext> otherContext, JokeProfile profile) : SaveChangesInterceptor
+    {
+        public bool Inserted { get; private set; }
+
+        public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            if (!Inserted)
+            {
+                Inserted = true;
+                await using var other = otherContext();
+                other.JokeProfiles.Add(profile);
+                await other.SaveChangesAsync(cancellationToken);
+            }
+            return result;
+        }
     }
 }

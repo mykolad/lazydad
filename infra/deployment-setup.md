@@ -862,8 +862,8 @@ az containerapp update -g $RG -n $APP --set-env-vars Similarity__Jev__ApiKey=sec
 
 </details>
 
-The next tick profiles its own jokes, then up to `Similarity:BatchSize` (60) older ones a tick, until every joke has
-both profiles; each is asked once (about $0.0002 a joke with Jev, a fraction of that for its embedding). The
+The next tick profiles its own jokes, then older ones, up to `Similarity:BatchSize` (200) a tick, until every joke has
+both profiles (about a day for 1,200 jokes); each is asked once (about $0.0002 a joke with Jev, a fraction of that for its embedding). The
 dashboard's "Similar jokes" row shows the requests, the credits left and which method ranked the suggestions; the
 alerts `LazyDadJevCreditsLow` and `LazyDadProfileFailed` (section 11) say when to top up or look.
 

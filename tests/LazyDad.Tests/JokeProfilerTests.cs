@@ -16,6 +16,7 @@ namespace LazyDad.Tests;
 public sealed class JokeProfilerTests : IDisposable
 {
     private readonly Mock<IJokeProfileRepository> profilesMock = new();
+    private readonly Mock<ISchedulerLockRepository> locksMock = new();
     private readonly Mock<IJevClient> jevMock = new();
     private readonly Mock<ILlmClientFactory> llmClientFactoryMock = new();
     private readonly Mock<IEmbeddingGenerator<string, Embedding<float>>> embeddingsMock = new();
@@ -32,6 +33,10 @@ public sealed class JokeProfilerTests : IDisposable
         profilesMock
             .Setup(r => r.GetJokesWithoutAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
+        // This replica gets the profiling lease unless a test says otherwise.
+        locksMock
+            .Setup(l => l.TryAcquireAsync(JokeProfiler.LeaseKey, It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
         llmClientFactoryMock
             .Setup(f => f.CreateEmbeddingGenerator("AzureOpenAI", "text-embedding-3-small"))
             .Returns(embeddingsMock.Object);
@@ -42,7 +47,7 @@ public sealed class JokeProfilerTests : IDisposable
     private IMeterFactory Meters => metricsProvider.GetRequiredService<IMeterFactory>();
 
     private JokeProfiler CreateProfiler()
-        => new(profilesMock.Object, jevMock.Object, llmClientFactoryMock.Object, Options.Create(options),
+        => new(profilesMock.Object, locksMock.Object, jevMock.Object, llmClientFactoryMock.Object, Options.Create(options),
             new SimilarityMetrics(Meters), NullLogger<JokeProfiler>.Instance);
 
     private static Joke MakeJoke(int id, string? explanation) => new() { Id = id, Language = "Ukrainian", Text = $"Joke {id}", Explanation = explanation };
@@ -123,4 +128,31 @@ public sealed class JokeProfilerTests : IDisposable
     [Fact]
     public void VectorBytes_RoundTrip()
         => Assert.Equal([1.5f, -2f, 0f], JokeProfiler.FromBytes(JokeProfiler.ToBytes([1.5f, -2f, 0f])));
+
+    [Fact]
+    public async Task ProfileAsync_WhileAnotherReplicaHoldsTheLease_DoesNothing()
+    {
+        Lacking(JokeProfile.JevKind, MakeJoke(1, null));
+        locksMock
+            .Setup(l => l.TryAcquireAsync(JokeProfiler.LeaseKey, It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        Assert.Equal(0, await CreateProfiler().ProfileAsync(CancellationToken.None));
+        jevMock.VerifyNoOtherCalls();
+        Assert.Empty(saved);
+    }
+
+    [Fact]
+    public async Task ProfileAsync_TakesTheLeaseForHalfAnHour()
+    {
+        DateTime? from = null, until = null;
+        locksMock
+            .Setup(l => l.TryAcquireAsync(JokeProfiler.LeaseKey, It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .Callback<string, string, DateTime, DateTime, CancellationToken>((_, _, now, expires, _) => (from, until) = (now, expires))
+            .ReturnsAsync(true);
+
+        await CreateProfiler().ProfileAsync(CancellationToken.None);
+
+        Assert.Equal(TimeSpan.FromMinutes(30), until - from);
+    }
 }

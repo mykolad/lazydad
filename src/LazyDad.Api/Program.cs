@@ -50,7 +50,10 @@ builder.Services.AddScoped<ISchedulerLockRepository, SchedulerLockRepository>();
 builder.Services.AddScoped<IJokeProfileRepository, JokeProfileRepository>();
 
 // "You might also like": Jev profiles, embeddings as the fallback (see JokeProfiler, JokeSimilarity).
-builder.Services.Configure<SimilarityOptions>(builder.Configuration.GetSection(SimilarityOptions.SectionName));
+builder.Services.AddOptions<SimilarityOptions>()
+    .Bind(builder.Configuration.GetSection(SimilarityOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<SimilarityOptions>, SimilarityOptionsValidator>();
 builder.Services.AddSingleton<SimilarityMetrics>();
 builder.Services.AddHttpClient<IJevClient, JevClient>(http => http.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddScoped<IJokeProfiler, JokeProfiler>();

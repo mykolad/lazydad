@@ -9,10 +9,11 @@ public class SimilarityOptions
     public const string SectionName = "Similarity";
 
     /// <summary>
-    /// The most jokes profiled per tick, newest first: the tick's own jokes, then older ones without a profile
-    /// (the backfill), until every joke has one.
+    /// The most jokes each method profiles per tick, newest first: the tick's own jokes, then older ones without a
+    /// profile (the backfill), until every joke has one. 200 covers ~1,200 jokes in a day of ticks (every 4 hours);
+    /// a Jev answer takes well under a second.
     /// </summary>
-    public int BatchSize { get; set; } = 60;
+    public int BatchSize { get; set; } = 200;
 
     public JevOptions Jev { get; set; } = new();
     public EmbeddingOptions Embeddings { get; set; } = new();

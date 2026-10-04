@@ -220,8 +220,8 @@ public class JokeSchedulerService : BackgroundService
 
     /// <summary>
     /// Profiles the jokes "you might also like" ranks by (JokeProfiler): this tick's jokes first, then a batch of older
-    /// ones without a profile. Only the replica holding the tick's lease gets here, so replicas don't profile the same
-    /// jokes twice. Similar jokes are optional, so nothing here fails the tick: a failure waits for the next one.
+    /// ones without a profile (the profiler takes its own lease, so two replicas never profile at once). Similar jokes
+    /// are optional, so nothing here fails the tick: a failure waits for the next one.
     /// </summary>
     private async Task ProfileJokesAsync(CancellationToken stoppingToken)
     {

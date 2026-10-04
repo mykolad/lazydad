@@ -30,16 +30,35 @@ public class JokeProfileRepository : IJokeProfileRepository
     public async Task SaveAsync(JokeProfile profile, CancellationToken cancellationToken)
     {
         var existing = await context.JokeProfiles.FindAsync([profile.JokeId, profile.Kind], cancellationToken);
-        if (existing is null)
+        if (existing is not null)
         {
-            context.JokeProfiles.Add(profile);
+            Update(existing, profile);
+            await context.SaveChangesAsync(cancellationToken);
+            return;
         }
-        else
+
+        var entry = context.JokeProfiles.Add(profile);
+        try
         {
-            existing.Version = profile.Version;
-            existing.Vector = profile.Vector;
-            existing.CreatedAt = profile.CreatedAt;
+            await context.SaveChangesAsync(cancellationToken);
         }
-        await context.SaveChangesAsync(cancellationToken);
+        catch (DbUpdateException)
+        {
+            // The primary key: another replica saved this joke's profile in the meantime. Write ours over it; if the row
+            // isn't there, the failure was something else.
+            entry.State = EntityState.Detached;
+            var current = await context.JokeProfiles.FindAsync([profile.JokeId, profile.Kind], cancellationToken);
+            if (current is null)
+                throw;
+            Update(current, profile);
+            await context.SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    private static void Update(JokeProfile existing, JokeProfile profile)
+    {
+        existing.Version = profile.Version;
+        existing.Vector = profile.Vector;
+        existing.CreatedAt = profile.CreatedAt;
     }
 }

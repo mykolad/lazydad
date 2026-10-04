@@ -21,12 +21,22 @@ public interface IJokeProfiler
 /// asked for again unless its version changes (a new pinned Jev model or question set, another embedding model).
 /// A method that fails stops for this batch; the next tick tries again. Nothing here fails the tick (the scheduler
 /// catches it anyway).
+/// One replica at a time: a lease of its own in SchedulerLocks (<see cref="LeaseKey"/>), since a new revision's startup
+/// tick can run while the old revision's tick is still profiling, and both would pay Jev for the same jokes.
 /// </summary>
 public sealed class JokeProfiler : IJokeProfiler
 {
+    public const string LeaseKey = "profiles";
+    // Far longer than a batch takes (a few hundred answers of well under a second). Not released early: the next
+    // profiling is the next tick, hours later; a startup tick within the half hour leaves its jokes to that one.
+    public static readonly TimeSpan LeaseLength = TimeSpan.FromMinutes(30);
     private const int EmbeddingBatch = 100;
+    // This process, as the lease's holder.
+    private static readonly string Holder =
+        $"{(Environment.MachineName.Length > 60 ? Environment.MachineName[..60] : Environment.MachineName)}/{Guid.NewGuid():N}";
 
     private readonly IJokeProfileRepository profiles;
+    private readonly ISchedulerLockRepository locks;
     private readonly IJevClient jev;
     private readonly ILlmClientFactory llmClientFactory;
     private readonly IOptions<SimilarityOptions> options;
@@ -35,6 +45,7 @@ public sealed class JokeProfiler : IJokeProfiler
 
     public JokeProfiler(
         IJokeProfileRepository profiles,
+        ISchedulerLockRepository locks,
         IJevClient jev,
         ILlmClientFactory llmClientFactory,
         IOptions<SimilarityOptions> options,
@@ -42,6 +53,7 @@ public sealed class JokeProfiler : IJokeProfiler
         ILogger<JokeProfiler> logger)
     {
         this.profiles = profiles;
+        this.locks = locks;
         this.jev = jev;
         this.llmClientFactory = llmClientFactory;
         this.options = options;
@@ -60,6 +72,15 @@ public sealed class JokeProfiler : IJokeProfiler
     public async Task<int> ProfileAsync(CancellationToken cancellationToken)
     {
         var settings = options.Value;
+        if (!settings.Jev.Enabled && !settings.Embeddings.Enabled)
+            return 0;
+        var now = DateTime.UtcNow;
+        if (!await locks.TryAcquireAsync(LeaseKey, Holder, now, now + LeaseLength, cancellationToken))
+        {
+            logger.LogInformation("Another replica is profiling jokes; this tick leaves it to that one.");
+            return 0;
+        }
+
         var saved = 0;
         if (settings.Jev.Enabled)
             saved += await ProfileWithJevAsync(settings, cancellationToken);
