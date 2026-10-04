@@ -59,3 +59,6 @@ coverage/
 # Written by the app at startup (HtmlGeneratorService)
 src/LazyDad.Api/wwwroot/index.html
 src/LazyDad.Api/wwwroot/index.html.tmp
+
+# The similarity experiment's cached answers and comparison page (experiments/similarity/README.md).
+experiments/similarity/out/

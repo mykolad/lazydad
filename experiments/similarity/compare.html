@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Similar jokes: blind test</title>
+<style>
+  :root { --bg: #f6efe4; --surface: #fffaf2; --text: #241f1a; --muted: #6b6259; --accent: #8a4b1d; --line: #e2d6c4; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1d1a16; --surface: #29251f; --text: #f1e9dd; --muted: #b3a898; --accent: #e3a46f; --line: #3d372e; }
+  }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  .muted { color: var(--muted); }
+  .joke { white-space: pre-line; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 16px; margin: 16px 0; }
+  .lists { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 640px) { .lists { grid-template-columns: 1fr; } }
+  .lists ol { margin: 8px 0 0; padding-left: 20px; }
+  .lists li { margin-bottom: 8px; }
+  .tag { font-size: 12px; color: var(--muted); }
+  .choices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  button { font: inherit; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--accent); background: transparent; color: var(--text); cursor: pointer; }
+  button[aria-pressed="true"] { background: var(--accent); color: var(--bg); }
+  button:disabled { cursor: default; opacity: 0.7; }
+  button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .reveal { font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Which "you might also like" is better?</h1>
+  <p class="muted">For each joke, two methods each picked 3 similar jokes. They're shown as X and Y in random order. Pick the
+    better list; your answers stay in this browser. Once every joke has an answer, reveal which method was which (the answers are then final).</p>
+  <p id="progress" aria-live="polite"></p>
+  <div id="rounds"></div>
+  <p><button type="button" id="reveal">Reveal the score</button></p>
+  <div id="score" aria-live="polite" tabindex="-1"></div>
+</main>
+<script>
+  const ROUNDS = /*DATA*/[];
+  // Answers belong to these rounds: a re-run with other jokes or another X/Y order gets its own key.
+  const signature = ROUNDS.map(r => [r.joke.id, r.xIs, ...r.x.map(j => j.id), ...r.y.map(j => j.id)].join(',')).join(';');
+  let hash = 0;
+  for (const c of signature) hash = (hash * 31 + c.codePointAt(0)) >>> 0;
+  const KEY = `lazydad-similarity-${hash.toString(36)}`;
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { /* not kept */ }
+  const answers = saved.answers || {};
+  let revealed = saved.revealed === true;
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify({ answers, revealed })); } catch { /* not kept */ } };
+
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  const tags = j => revealed ? ` <span class="tag">(${esc(j.topic)}, ${esc(j.wordplay)})</span>` : '';
+  const list = items => `<ol>${items.map(j => `<li><span class="joke" lang="uk">${esc(j.text)}</span>${tags(j)}</li>`).join('')}</ol>`;
+
+  function score() {
+    const wins = { Jev: 0, Embeddings: 0, same: 0 };
+    ROUNDS.forEach((r, i) => {
+      const a = answers[i];
+      if (a === 'same') wins.same++;
+      else if (a === 'x') wins[r.xIs]++;
+      else if (a === 'y') wins[r.xIs === 'Jev' ? 'Embeddings' : 'Jev']++;
+    });
+    return wins;
+  }
+
+  function render() {
+    // Once revealed, the choices are frozen: the score stays blind and matches what's saved.
+    document.getElementById('rounds').innerHTML = ROUNDS.map((r, i) => {
+      const yIs = r.xIs === 'Jev' ? 'Embeddings' : 'Jev';
+      const choice = (value, label) =>
+        `<button type="button" data-round="${i}" data-value="${value}" aria-pressed="${answers[i] === value}"${revealed ? ' disabled' : ''}>${label}</button>`;
+      return `<section class="card" aria-labelledby="joke-${i}">
+        <h2 class="muted" style="font-size:14px;margin:0">Joke ${i + 1} of ${ROUNDS.length}</h2>
+        <p class="joke" id="joke-${i}" lang="uk"><strong>${esc(r.joke.text)}</strong>${tags(r.joke)}</p>
+        <div class="lists">
+          <div><strong>X${revealed ? ` = ${r.xIs}` : ''}</strong>${list(r.x)}</div>
+          <div><strong>Y${revealed ? ` = ${yIs}` : ''}</strong>${list(r.y)}</div>
+        </div>
+        <div class="choices" role="group" aria-label="Better list for joke ${i + 1}">
+          ${choice('x', 'X is better')}${choice('y', 'Y is better')}${choice('same', 'About the same')}
+        </div>
+        ${revealed ? `<p class="tag">The two lists share ${r.overlap} of 3 jokes.</p>` : ''}
+      </section>`;
+    }).join('');
+    const done = ROUNDS.filter((_, i) => answers[i] !== undefined).length;
+    document.getElementById('progress').textContent = `${done} of ${ROUNDS.length} answered.`;
+    // The methods are revealed only when every round has an answer.
+    document.getElementById('reveal').disabled = revealed || done < ROUNDS.length;
+    const w = score();
+    document.getElementById('score').innerHTML = revealed
+      ? `<p class="reveal">Jev: ${w.Jev} · Embeddings: ${w.Embeddings} · About the same: ${w.same}</p>`
+      : '';
+  }
+
+  document.addEventListener('click', event => {
+    const button = event.target.closest('button');
+    if (!button || button.disabled) return;
+    if (button.id === 'reveal') {
+      if (ROUNDS.some((_, i) => answers[i] === undefined)) return;
+      revealed = true;
+    } else if (button.dataset.round !== undefined && !revealed) {
+      answers[button.dataset.round] = button.dataset.value;
+    } else {
+      return;
+    }
+    save();
+    render();
+    // render() replaced the buttons: keep keyboard focus on the one just pressed, or, after the reveal (which disables
+    // every button), on the score.
+    if (revealed) {
+      document.getElementById('score').focus();
+    } else {
+      document.querySelector(`[data-round="${button.dataset.round}"][data-value="${button.dataset.value}"]`)?.focus();
+    }
+  });
+  render();
+</script>
+</body>
+</html>
