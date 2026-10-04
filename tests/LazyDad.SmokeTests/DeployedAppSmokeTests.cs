@@ -90,6 +90,26 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
     }
 
     [Fact]
+    public async Task JokePage_HasTheJokeInItsPreview_AndSimilarJokes()
+    {
+        var feed = await target.PollAsync<JsonElement>(async () => await target.GetJsonAsync("jokes/feed?sort=new&limit=1"), SmokeTarget.ColdStartTimeout, "/jokes/feed");
+        var id = feed.GetProperty("items")[0].GetProperty("id").GetInt32();
+
+        // The shared link: the shell, with the joke's own address in its link-preview tags.
+        using var page = await target.Client.GetAsync($"j/{id}");
+        var html = await page.Content.ReadAsStringAsync();
+        Assert.Equal(HttpStatusCode.OK, page.StatusCode);
+        Assert.Matches($"<meta property=\"og:url\" content=\"https?://[^\"]+/j/{id}\">", html);
+        Assert.Contains("<meta property=\"og:title\"", html);
+        Assert.Contains("src=\"/app.js?v=", html);
+
+        var similar = await target.GetJsonAsync($"jokes/{id}/similar?limit=4");
+        var ids = similar.EnumerateArray().Select(j => j.GetProperty("id").GetInt32()).ToList();
+        Assert.InRange(ids.Count, 0, 4);
+        Assert.DoesNotContain(id, ids);
+    }
+
+    [Fact]
     public async Task Vote_WithoutAChange_ReturnsTheCounts()
     {
         // value = previous = 0 changes nothing, so this checks the endpoint (routing, rate limiter,

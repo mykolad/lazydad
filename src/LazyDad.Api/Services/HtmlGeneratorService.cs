@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using LazyDad.Api.Configuration;
+using LazyDad.Data.Entities;
 using Microsoft.Extensions.Options;
 
 namespace LazyDad.Api.Services;
@@ -9,6 +10,8 @@ namespace LazyDad.Api.Services;
 /// Writes <c>wwwroot/index.html</c>: the page shell (header, the version link, the loading state, and
 /// the config for <c>app.js</c>). The jokes, the leaderboard and the votes are live data, which
 /// <c>app.js</c> fetches from the API, so the shell only changes with the build and is written once at startup.
+/// A joke's own page (<c>/j/&lt;id&gt;</c>) is the same shell with that joke in its title and link-preview tags
+/// (<see cref="JokePageHtml"/>), built per request: crawlers read those tags without running <c>app.js</c>.
 /// </summary>
 public class HtmlGeneratorService
 {
@@ -33,6 +36,9 @@ public class HtmlGeneratorService
         // The browser chrome follows the page's theme, including a manual choice.
         "var m=document.getElementById('ld-theme-color');if(m)m.content=t==='dark'?'#1d1a16':'#f5ead8'})();";
 
+    internal const string SiteDescription = "Українські батьківські жарти від ШІ: нова партія кожні 4 години, найкращі три обирає ШІ-суддя.";
+    internal static readonly PageMeta SitePage = new("LazyDad", "LazyDad", SiteDescription, null, null);
+
     private readonly IOptions<JokeGenerationOptions> options;
     private readonly IOptions<AppInfoOptions> appInfo;
     private readonly IWebHostEnvironment env;
@@ -55,7 +61,7 @@ public class HtmlGeneratorService
         await WriteLock.WaitAsync(cancellationToken);
         try
         {
-            var html = BuildHtml(LanguageCodes(options.Value), appInfo.Value);
+            var html = BuildHtml(LanguageCodes(options.Value), appInfo.Value, SitePage);
 
             var wwwroot = Path.Combine(env.ContentRootPath, "wwwroot");
             Directory.CreateDirectory(wwwroot);
@@ -74,12 +80,26 @@ public class HtmlGeneratorService
         }
     }
 
+    /// <summary>The shell for a joke's page: <paramref name="origin"/> is the site's scheme and host, as the visitor reached it.</summary>
+    public string JokePageHtml(Joke joke, string origin)
+        => BuildHtml(LanguageCodes(options.Value), appInfo.Value, JokePage(joke, origin));
+
+    /// <summary>The shell without a joke (an unknown joke's address: <c>app.js</c> says it's not there).</summary>
+    public string SiteHtml() => BuildHtml(LanguageCodes(options.Value), appInfo.Value, SitePage);
+
+    internal static PageMeta JokePage(Joke joke, string origin)
+    {
+        // One line: the title and previews don't keep a dialogue's line breaks.
+        var text = string.Join(' ', joke.Text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return new PageMeta($"{text} — LazyDad", text, SiteDescription, $"{origin}/j/{joke.Id}", $"{origin}/icon-512.png");
+    }
+
     internal static IReadOnlyDictionary<string, string> LanguageCodes(JokeGenerationOptions options)
         => options.Languages
             .Where(l => !string.IsNullOrWhiteSpace(l.LanguageCode))
             .ToDictionary(l => l.Language, l => l.LanguageCode, StringComparer.OrdinalIgnoreCase);
 
-    internal static string BuildHtml(IReadOnlyDictionary<string, string> languageCodes, AppInfoOptions appInfo)
+    internal static string BuildHtml(IReadOnlyDictionary<string, string> languageCodes, AppInfoOptions appInfo, PageMeta page)
     {
         // Busts browser caches of app.css/app.js on every deploy.
         var assetVersion = Uri.EscapeDataString(appInfo.Version);
@@ -94,8 +114,9 @@ public class HtmlGeneratorService
             <head>
               <meta charset="UTF-8">
               <meta name="viewport" content="width=device-width, initial-scale=1">
-              <title>LazyDad</title>
-              <meta name="description" content="Українські батьківські жарти від ШІ: нова партія кожні 4 години, найкращі три обирає ШІ-суддя.">
+              <title>{{EscapeHtml(page.Title)}}</title>
+              <meta name="description" content="{{EscapeHtml(page.Description)}}">
+              {{PreviewTags(page)}}
               <meta name="color-scheme" content="light dark">
               <meta name="theme-color" content="#f5ead8" id="ld-theme-color">
               <link rel="icon" href="/favicon.ico" sizes="48x48">
@@ -106,15 +127,15 @@ public class HtmlGeneratorService
               <link rel="preconnect" href="https://fonts.googleapis.com">
               <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
               <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caprasimo&family=Nunito:wght@400;600;700;900&subset=cyrillic,cyrillic-ext&display=swap">
-              <link rel="stylesheet" href="app.css?v={{assetVersion}}">
-              <script src="app.js?v={{assetVersion}}" defer></script>
+              <link rel="stylesheet" href="/app.css?v={{assetVersion}}">
+              <script src="/app.js?v={{assetVersion}}" defer></script>
             </head>
             <body>
             <div class="ld-root">
               <header class="ld-header">
                 <div class="ld-brand">
-                  <img class="ld-logo ld-logo--light" src="logo.svg" width="46" height="46" alt="">
-                  <img class="ld-logo ld-logo--dark" src="logo-dark.svg" width="46" height="46" alt="">
+                  <img class="ld-logo ld-logo--light" src="/logo.svg" width="46" height="46" alt="">
+                  <img class="ld-logo ld-logo--dark" src="/logo-dark.svg" width="46" height="46" alt="">
                   <div class="ld-brand-text">
                     <h1 class="ld-wordmark">LazyDad</h1>
                     <span class="ld-count" id="ld-count"></span>
@@ -157,6 +178,7 @@ public class HtmlGeneratorService
                   <div class="ld-toplist" id="ld-toplist"></div>
                   {{VersionHtml(appInfo)}}
                 </div>
+                <div class="ld-page" id="ld-page" hidden></div>
                 <section class="ld-feed" id="ld-feed" aria-label="Усі жарти" data-i18n-aria="all" hidden>
                   <div class="ld-feed-head">
                     <h2 data-i18n="all">Усі жарти</h2>
@@ -172,11 +194,29 @@ public class HtmlGeneratorService
                 </section>
               </main>
             </div>
+            <span class="ld-sr" id="ld-live" role="status" aria-live="polite"></span>
             <script type="application/json" id="ld-config">{{config}}</script>
             </body>
             </html>
 
             """;
+    }
+
+    // Open Graph and Twitter card tags, so a shared link shows a preview card in messengers.
+    private static string PreviewTags(PageMeta page)
+    {
+        var tags = new StringBuilder()
+            .Append("<meta property=\"og:type\" content=\"website\">")
+            .Append("<meta property=\"og:site_name\" content=\"LazyDad\">")
+            .Append("<meta property=\"og:locale\" content=\"uk_UA\">")
+            .Append($"<meta property=\"og:title\" content=\"{EscapeHtml(page.ShareTitle)}\">")
+            .Append($"<meta property=\"og:description\" content=\"{EscapeHtml(page.Description)}\">")
+            .Append("<meta name=\"twitter:card\" content=\"summary\">");
+        if (page.Url is { } url)
+            tags.Append($"<meta property=\"og:url\" content=\"{EscapeHtml(url)}\"><link rel=\"canonical\" href=\"{EscapeHtml(url)}\">");
+        if (page.ImageUrl is { } image)
+            tags.Append($"<meta property=\"og:image\" content=\"{EscapeHtml(image)}\">");
+        return tags.ToString();
     }
 
     private static string Skeleton(string width)
@@ -200,3 +240,9 @@ public class HtmlGeneratorService
     private static string EscapeHtml(string text)
         => text.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;");
 }
+
+/// <summary>
+/// What a page's head says about it: <paramref name="Title"/> for the browser tab, <paramref name="ShareTitle"/> and
+/// <paramref name="Description"/> for link previews, and, when known, its address and preview image (absolute URLs).
+/// </summary>
+public sealed record PageMeta(string Title, string ShareTitle, string Description, string? Url, string? ImageUrl);

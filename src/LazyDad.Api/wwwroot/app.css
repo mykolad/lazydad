@@ -147,7 +147,10 @@ html[data-theme="dark"] .ld-panel { background: #3d472b; }
   display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; border-radius: 22px;
   background: var(--color-accent-2-100);
 }
-.ld-label { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--color-accent-2-700); }
+.ld-label {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--color-accent-2-700);
+}
 .ld-note p { margin: 0; font-size: 14px; text-wrap: pretty; }
 .ld-spot-meta { font-size: 13px; }
 /* The Top 3's entries (each with its votes and share button) share one grid cell: the panel keeps the tallest one's height, and a rotation only switches which one is visible. */
@@ -155,10 +158,17 @@ html[data-theme="dark"] .ld-panel { background: #3d472b; }
 .ld-spot-slide { grid-area: 1 / 1; display: flex; flex-direction: column; gap: 20px; }
 .ld-spot-slide[aria-hidden="true"] { visibility: hidden; }
 .ld-spot-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+/* The Top 3's share and open (↗) controls; the share button widens to say "Copied". */
 .ld-round {
-  width: 40px; height: 40px; border: 0; border-radius: 999px; cursor: pointer;
-  display: grid; place-items: center; background: var(--color-bg); color: var(--color-text);
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-width: 40px; height: 40px; padding: 0; border: 0; border-radius: 999px; cursor: pointer; text-decoration: none;
+  background: var(--color-bg); color: var(--color-text); font: 700 12px var(--font-body);
 }
+.ld-round:has(span) { padding: 0 12px; }
+a.ld-round:hover { color: var(--color-text); }
+/* A Top 3 joke's text opens its page. */
+.ld-text-link { color: inherit; text-decoration: none; }
+.ld-text-link:hover { color: inherit; text-decoration: underline; text-decoration-thickness: 2px; }
 
 /* — Top 3 list (wide layouts only) — */
 .ld-toprow {
@@ -200,8 +210,16 @@ a.ld-version:hover { color: var(--color-text); }
 .ld-seg-opt:has(input:focus-visible) { outline: 2px solid var(--color-accent); outline-offset: -2px; }
 
 .ld-list { display: flex; flex-direction: column; gap: 16px; }
-.ld-joke { display: flex; align-items: flex-start; gap: 16px; padding: 14px 16px 14px 10px; border-radius: 26px; }
+.ld-joke { position: relative; display: flex; align-items: flex-start; gap: 16px; padding: 14px 16px 14px 10px; border-radius: 26px; }
 .ld-joke:hover { background: var(--color-surface); }
+/* The joke's text is the link to its page, stretched over the whole row; the controls and the note sit above it.
+   The focus ring goes around the row, which is what the link opens. */
+.ld-joke-link { color: inherit; text-decoration: none; }
+.ld-joke-link:hover { color: inherit; }
+.ld-joke-link::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
+.ld-joke-link:focus-visible { outline: none; }
+.ld-joke:has(.ld-joke-link:focus-visible) { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.ld-joke .ld-vote, .ld-joke .ld-why, .ld-joke-foot button { position: relative; z-index: 1; }
 .ld-joke-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
 .ld-joke-text { margin: 0; font-size: 17px; line-height: 1.5; text-wrap: pretty; }
 /* Some models write jokes as short dialogues ("— Тату, …" on separate lines): keep their line breaks. */
@@ -214,9 +232,13 @@ a.ld-version:hover { color: var(--color-text); }
   background: transparent; color: color-mix(in srgb, var(--color-text) 70%, transparent); font: 600 12px var(--font-body);
 }
 .ld-copy:hover { background: color-mix(in srgb, var(--color-text) 8%, transparent); }
-/* The lightbulb while its "why it's funny" is open, and that note in a feed row (smaller than the Top 3's). */
-.ld-copy[aria-expanded="true"] { background: var(--color-accent-2-100); color: var(--color-accent-2-700); }
-.ld-why { padding: 10px 14px; border-radius: 16px; }
+/* The lightbulb while its "why it's funny" is open, and that note in a feed row: a lightbulb and the text. */
+.ld-copy[data-why]:hover, .ld-copy[aria-expanded="true"] { background: var(--color-accent-2-200); color: var(--color-accent-2-800); }
+.ld-why {
+  flex-direction: row; align-items: flex-start; gap: 10px; padding: 10px 14px; border-radius: 18px;
+  color: var(--color-accent-2-900); line-height: 1.5;
+}
+.ld-why svg { margin-top: 3px; color: var(--color-accent-2-700); }
 
 .ld-sentinel { height: 1px; }
 .ld-more {
@@ -252,6 +274,9 @@ a.ld-version:hover { color: var(--color-text); }
   font-variant-numeric: tabular-nums; color: var(--color-neutral-700);
 }
 .ld-vote--v .ld-score { min-width: 0; padding: 2px 0; font-size: 16px; }
+.ld-vote--lg { padding: 4px; }
+.ld-vote--lg button { width: 44px; height: 44px; }
+.ld-vote--lg .ld-score { min-width: 50px; font-size: 21px; }
 .ld-score[data-sign="1"] { color: var(--color-accent-700); }
 .ld-score[data-sign="-1"] { color: var(--color-accent-2-700); }
 .ld-split {
@@ -262,6 +287,88 @@ a.ld-version:hover { color: var(--color-text); }
 .ld-vote--v .ld-split { bottom: auto; top: 50%; left: calc(100% + 8px); transform: translateY(-50%); }
 /* Hover, or keyboard focus (a mouse click also focuses the button, and must not pin the tooltip). */
 .ld-vote:hover .ld-split, .ld-vote:has(:focus-visible) .ld-split { display: block; }
+
+/* — a joke's page (/j/<id>) — */
+.ld-page { flex: 1 1 100%; max-width: 880px; min-width: 0; display: flex; flex-direction: column; gap: 28px; }
+.ld-back {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 18px 0 12px;
+  border-radius: 999px; background: var(--color-surface); color: var(--color-text); text-decoration: none;
+  font-size: 14px; font-weight: 700;
+}
+.ld-back:hover { background: var(--color-neutral-200); color: var(--color-text); }
+.ld-hero {
+  position: relative; overflow: hidden; display: flex; flex-direction: column; align-items: flex-start; gap: 22px;
+  padding: clamp(24px, 5cqi, 48px); border-radius: 40px; background: var(--color-surface);
+}
+.ld-hero::before {
+  content: ""; position: absolute; right: -90px; top: -110px; width: 300px; height: 300px;
+  border-radius: 50%; background: var(--color-accent-200); opacity: .5;
+}
+.ld-hero > * { position: relative; }
+.ld-toppill {
+  display: inline-flex; align-items: center; gap: 8px; padding: 5px 14px 5px 5px; border-radius: 999px;
+  background: var(--color-accent-2-200); color: var(--color-accent-2-900); font-size: 13px; font-weight: 700;
+}
+.ld-toppill-rank {
+  width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--color-accent-2-700); color: var(--color-bg); font: 900 13px var(--font-heading);
+}
+.ld-hero-text {
+  margin: 0; max-width: 760px; font: 900 clamp(28px, 4.4cqi, 46px)/1.15 var(--font-heading); letter-spacing: -.015em;
+  text-wrap: pretty; overflow-wrap: anywhere; hyphens: auto; white-space: pre-line;
+}
+.ld-hero-title { font-size: clamp(26px, 4cqi, 36px); }
+.ld-hero-text:focus, .ld-hero-title:focus { outline: none; }
+.ld-hero-body { margin: 0; max-width: 560px; font-size: 17px; text-wrap: pretty; }
+/* 70%, not the design's 64%: on the card's surface that keeps 13px text above WCAG AA. */
+.ld-hero-meta { font-size: 13px; color: color-mix(in srgb, var(--color-text) 70%, transparent); }
+.ld-hero-note { align-self: stretch; max-width: 640px; gap: 6px; padding: 16px 20px; border-radius: 24px; }
+.ld-hero-note p { font-size: 15px; line-height: 1.5; color: var(--color-accent-2-900); }
+.ld-hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+/* The big lightbulb: sage when its note is open, with a ring. */
+.ld-bulb {
+  width: 52px; height: 52px; border: 0; border-radius: 999px; cursor: pointer; display: grid; place-items: center;
+  background: var(--color-bg); color: var(--color-accent-2-700); transition: background .2s, box-shadow .2s;
+}
+.ld-bulb[aria-expanded="true"] {
+  background: var(--color-accent-2-700); color: var(--color-accent-2-100);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent-2-700) 30%, transparent);
+}
+.ld-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 52px; padding: 0 22px;
+  border: 0; border-radius: 999px; cursor: pointer; white-space: nowrap; font: 700 15px var(--font-body);
+}
+/* The selected-pill colour, not the design's accent: its light label then reaches WCAG AA (see --color-selected). */
+.ld-btn--primary { background: var(--color-selected); color: var(--color-bg); }
+.ld-btn--primary:hover { background: color-mix(in srgb, var(--color-selected) 85%, var(--color-text)); }
+/* accent-700, not the design's accent, for the same reason. */
+.ld-btn--ghost { padding: 0 18px; background: transparent; color: var(--color-accent-700); }
+.ld-btn--ghost:hover { background: color-mix(in srgb, var(--color-accent) 10%, transparent); }
+
+.ld-similar { display: flex; flex-direction: column; gap: 16px; }
+.ld-similar h2 { font-size: 26px; }
+.ld-similar-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 14px; }
+.ld-card {
+  display: flex; flex-direction: column; justify-content: space-between; gap: 16px; padding: 20px 22px; border-radius: 28px;
+  background: var(--color-surface); color: var(--color-text); text-decoration: none;
+}
+.ld-card:hover { background: color-mix(in srgb, var(--color-surface), var(--color-text) 6%); color: var(--color-text); }
+.ld-card-text { font-size: 16px; line-height: 1.5; text-wrap: pretty; white-space: pre-line; }
+.ld-card-foot { display: flex; align-items: center; gap: 10px; }
+.ld-card-meta { margin-right: auto; font-size: 12.5px; color: color-mix(in srgb, var(--color-text) 70%, transparent); }
+.ld-card-score {
+  display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 10px 0 6px; border-radius: 999px;
+  background: var(--color-bg); font: 900 14px var(--font-heading); font-variant-numeric: tabular-nums; color: var(--color-neutral-700);
+}
+.ld-card-score:has([data-sign="1"]) { color: var(--color-accent-700); }
+.ld-card-score:has([data-sign="-1"]) { color: var(--color-accent-2-700); }
+.ld-card-open { color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+
+/* Read by screen readers, not shown. */
+.ld-sr {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
 
 /* — states — */
 .ld-state { flex: 1 1 100%; display: flex; flex-direction: column; }

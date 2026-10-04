@@ -38,7 +38,7 @@ A redesign of the LazyDad site: AI‑generated Ukrainian dad jokes, a new batch 
       - The joke: `clamp(22px, 2.4vw, 27px)`, line‑height 1.25.
       - The "Чому це смішно" note box: sage‑100 background, radius 22px, padding 14×16. The label is 11px/700 uppercase with .1em tracking in sage‑700. The body is 14px.
       - A meta line (13px): date · generator model · "оцінив" judge model.
-      - A vote pill and a round 40px share button.
+      - A vote pill, a round 40px share-link button and a round 40px open (↗) link. The note has a lightbulb icon in its label and is always visible (no lightbulb button). The joke's text also links to its page.
     - **Top 3 list** (shown only when the root container is at least 760px wide, via a CSS container query; hidden on mobile. The sticky aside uses the same breakpoint): a column of all 3 top jokes below the panel.
       - 14px top margin, 8px gap between rows.
       - Each row is a button: padding 12/16/12/12, radius 24px, 12px gap.
@@ -54,7 +54,22 @@ A redesign of the LazyDad site: AI‑generated Ukrainian dad jokes, a new batch 
       - Left: a **vertical** vote pill (up button, score, down button) on a surface background, radius 999px, 3px padding.
       - Right:
         - Joke text: 17px, line‑height 1.5, `text-wrap: pretty`.
-        - Meta: 12.5px at 64% opacity (for example "23 вер · gpt-6-luna"), with a 32px ghost copy button on the right.
+        - Explanation (when the lightbulb is on): sage‑100 box, radius 18px, padding 10×14, a 15px sage‑700 lightbulb and 14px sage‑900 text.
+        - Meta: 12.5px at 64% opacity (for example "23 вер · gpt-6-luna"), with two 32px ghost buttons on the right: the lightbulb (only for jokes with an explanation; sage‑200 background and sage‑800 icon while open) and share link.
+      - The joke's text is a link to its page, stretched over the whole row, so a click anywhere on the row opens it (the vote pill, the note and the buttons sit above it). Its focus ring goes around the row.
+
+### Joke page (`/j/<id>`)
+- Same header; the aside and the feed are hidden. Content max-width 880px, 28px gap between blocks.
+- Back pill "← Усі жарти": 40px high, surface background, 700 14px. It returns to the list at the same scroll position, with focus back on the joke that was opened.
+- Hero card: surface background, radius 40px, padding `clamp(24px,5cqi,48px)`, 22px gap, a decorative accent‑200 circle (300px, 50% opacity) at the top right.
+  - For a Top 3 joke, a sage pill "Топ‑3 · місце N" with a 26px rank badge.
+  - The joke: Nunito 900, `clamp(28px,4.4cqi,46px)`, line‑height 1.15, max-width 760px. It's the page's heading and takes focus after an in-page navigation.
+  - Meta: 13px. Date · model, plus "оцінив <judge>" for Top 3 jokes.
+  - The explanation (when the lightbulb is on; the judge's note for a Top 3 joke): sage‑100, radius 24px, padding 16×20, max-width 640px, a "ЧОМУ ЦЕ СМІШНО" label with a lightbulb and 15px text.
+  - Actions, 12px gap: a large vote pill (44px buttons, 21px score), a 52px lightbulb toggle (on: sage‑700 with a sage‑100 icon and a 4px sage ring; off: bg colour with a sage‑700 icon), a primary "Поділитися" button (52px) and a ghost "Копіювати текст" button.
+- "Вам також може сподобатися" (h2, 26px) above a grid of 4 cards (`repeat(auto-fill, minmax(min(100%,320px),1fr))`, 14px gap). Each card is a link: surface, radius 28px, padding 20×22, 16px text, then the date, a net-score pill (bg colour, chevron-up) and a ↗ icon.
+- An unknown joke: the back pill and "Такого жарту немає" (the server answers 404).
+- `<title>`: the joke plus " — LazyDad". The server writes it and the link-preview tags (`og:title`, `og:description`, `og:url`, `og:image`, `twitter:card`, `canonical`) into the shell, so messengers show a preview card without running `app.js`.
     - Below the list: an infinite‑scroll sentinel, then the "loading more" row (surface card with three accent dots and the text "Шукаємо ще жарти…"). When there is nothing left to load, show the end message "Це всі жарти. Поки що." (18px, 900).
 
 ### Vote control (used everywhere)
@@ -74,8 +89,11 @@ A redesign of the LazyDad site: AI‑generated Ukrainian dad jokes, a new batch 
 - **Theme**: stored as a preference (`system` | `light` | `dark`), default `system`. The resolved theme follows `matchMedia('(prefers-color-scheme: dark)')` and updates live. Persisted in localStorage. `data-theme` is set on `<html>` before first paint to avoid a flash of the wrong theme.
 - **Language**: `ua` (default) or `en`, persisted. `<html lang>` follows it; each joke carries its own `lang`.
 - **Top 3 spotlight**: advances every 7 s. It pauses while hovered or focused, and stays paused while the pause button is off. The tabs jump directly. With `prefers-reduced-motion` it doesn't rotate (and the pause button is hidden).
-- **Share**: `navigator.share({title:'LazyDad', text})` when available. Otherwise copy to the clipboard, and the icon changes to a check for 1.6 s.
-- **Copy** (list rows): copies `"<joke> — LazyDad"`, then shows a check and "Скопійовано" for 1.6 s (only once the clipboard write succeeded).
+- **Share** (every share button): shares the joke's page, `https://lazydad.fyi/j/<id>`. On touch devices (`(pointer: coarse)`) with `navigator.share`, through `navigator.share({title:'LazyDad', text, url})`; otherwise the link is copied, and the button shows a check with "Скопійовано" ("Посилання скопійовано" on the joke page) for 1.8 s, only once the clipboard write succeeded. A polite live region announces it.
+- **Copy text** (joke page only): the joke and its link on the next line.
+- **Explanation**: the lightbulb is a toggle (`aria-expanded`, `aria-controls`, a constant name "Чому це смішно?"); each joke keeps its own open or closed state, on every place it's shown.
+- **Open joke**: `/j/<id>` with the History API (the list stays in the page); Back, Forward and the back pill restore the list's scroll position. Ctrl/Cmd-click opens a new tab: rows, cards and the Top 3's links are real `<a href>`.
+- **Similar jokes**: `GET /jokes/<id>/similar?limit=4`, never the joke itself. For now they're ranked by shared words (see Deviations); the similarity experiment (`experiments/similarity`) compares Jev and embeddings for a better ranking.
 - **Sort**: Newest (by date desc) or Top voted (by net score desc, then newest). Changing the sort resets the list. A vote doesn't move its row: re-sorting would pull it out from under the pointer.
 - **Infinite scroll**: an IntersectionObserver on the sentinel with `rootMargin: 120px`, pages of 20.
 - **Countdown**: the time until the scheduler's next batch (`/jokes/summary`), refreshed every 15 s. When a batch completes while the page is open, the Top 3 reloads and the new jokes are placed in the list.
@@ -91,6 +109,8 @@ A redesign of the LazyDad site: AI‑generated Ukrainian dad jokes, a new batch 
 - `GET /jokes/feed?sort=new|top&limit=(≤50)[&after=<next>]` → `{ total, items, next }` (keyset cursor; `next` is null on the last page)
 - `GET /jokes/top` → the leaderboard entries above
 - `GET /jokes/summary` → `{ count, nextBatchAt }`
+- `GET /jokes/{id}` → a joke (404 if there's none); `GET /jokes/{id}/similar?limit=(≤12)` → up to `limit` jokes, most similar first
+- `GET /j/{id}` → the page shell with the joke's title and link-preview tags (404 with the plain shell if there's no such joke)
 - `POST /jokes/{id}/vote { value: -1|0|1, previous: -1|0|1 }` → `{ up, down }` (rate-limited per client IP)
 
 ## Copy (UA / EN)
@@ -103,8 +123,15 @@ A redesign of the LazyDad site: AI‑generated Ukrainian dad jokes, a new batch 
 | next | Нові жарти через {h} год {m} хв | New batch in {h}h {m}m |
 | all | Усі жарти | All jokes |
 | newest / best | Нові / Найкращі | Newest / Top voted |
-| copy / copied | Копіювати / Скопійовано | Copy / Copied |
+| copied | Скопійовано | Copied |
 | share | Поділитися | Share |
+| whyQ (lightbulb) | Чому це смішно? | Why is it funny? |
+| shareLink / linkCopied | Поділитися посиланням / Посилання скопійовано | Share link / Link copied |
+| copyText | Копіювати текст | Copy text |
+| open | Відкрити жарт | Open joke |
+| back | Усі жарти | All jokes |
+| similar | Вам також може сподобатися | You might also like |
+| topLabel | Топ-3 · місце {n} | Top 3 · place {n} |
 | up / down (split) | за / проти | up / down |
 | up / down aria | Смішно / Не смішно | Funny / Not funny |
 | more | Шукаємо ще жарти… | Finding more jokes… |
@@ -125,7 +152,7 @@ Fonts:
 
 Radii: containers 26–40px, controls 999px, tooltips and pills 999px.
 
-Icons: Lucide at stroke‑width 2.75 (clock, monitor, sun, moon, chevron‑up/down, copy, check, share‑2, git‑commit, pause, play).
+Icons: Lucide at stroke‑width 2.75 (clock, monitor, sun, moon, chevron‑up/down, copy, check, share‑2, lightbulb, arrow‑up‑right, arrow‑left, git‑commit, pause, play).
 
 ### Brand
 The logo is a sloth with a chevron mustache, winking. The files are in `src/LazyDad.Api/wwwroot` (served from the site root):
@@ -182,3 +209,10 @@ The dark theme is the light ramps reversed (step 100 swaps with 900, and so on).
 | CalVer | `YYYY.MM.DD[.N]` | `YYYY.MM.DD` | The SHA already tells builds on one day apart |
 | Copy feedback | always | only after a successful clipboard write | Doesn't claim a copy that failed |
 | Top voted after a vote | — | the row stays in place | Re-sorting would pull it out from under the pointer |
+| Feed row as a link | `role="link"` on the article, Enter/Space opens | the joke's text is an `<a href>` stretched over the row | No interactive controls nested in a link; Ctrl/Cmd-click and "open in new tab" work |
+| Primary "Поділитися" and ghost "Копіювати текст" | accent fill / accent text | `--color-selected` fill / accent‑700 text | The same contrast fix as the selected pills (WCAG AA for 15px text) |
+| Joke page and card meta | 64% opacity | 70% | Stays above WCAG AA on the surface colour |
+| Feed explanation | lightbulb and text | plus a hidden "Чому це смішно:" for screen readers | The icon alone says nothing to them |
+| Link copied | the button changes | the button changes, and a polite live region announces it | A changed button name isn't always read |
+| Similar jokes | embeddings suggested | for now, shared words (first five letters, the jokes' template words left out), then votes, then newest; the best-voted fill the rest | Until the similarity experiment picks a method |
+| Not-found joke | — | "Такого жарту немає" with the back pill; the server answers 404 | A shared link can point at a joke that doesn't exist |
