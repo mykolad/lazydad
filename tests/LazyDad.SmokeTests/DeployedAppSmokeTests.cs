@@ -128,6 +128,41 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
     }
 
     [Fact]
+    public async Task Me_WhenSignedOut_SaysSo_AndIsNeverCached()
+    {
+        // The new revision: the old one, still serving during the swap, has no /me.
+        await target.PollAsync<JsonElement>(async () =>
+        {
+            var json = await target.GetJsonAsync("healthz");
+            return target.ExpectedRevision is null || json.GetProperty("revision").GetString() == target.ExpectedRevision ? json : null;
+        }, SmokeTarget.ColdStartTimeout, $"revision '{target.ExpectedRevision}'");
+
+        using var response = await target.Client.GetAsync("me");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("no-store", response.Headers.CacheControl?.ToString() ?? "");
+        using var me = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.False(me.RootElement.GetProperty("signedIn").GetBoolean());
+    }
+
+    [Fact]
+    public async Task ThisRevision_SignInKeyRingWorks()
+    {
+        // The new revision checks its key ring (database + Key Vault key) in the background at startup. "off" means sign-in
+        // isn't configured here (no pepper); "failed" means it is, and the key ring can't be used: a missing Key Vault
+        // role or a wrong DataProtection:KeyVaultKeyId.
+        var keyRing = await target.PollAsync<JsonElement>(async () =>
+        {
+            var json = await target.GetJsonAsync("status");
+            var isExpectedRevision = target.ExpectedRevision is null || json.GetProperty("revision").GetString() == target.ExpectedRevision;
+            return isExpectedRevision && json.TryGetProperty("signIn", out var signIn)
+                && signIn.GetProperty("keyRing").GetString() != "pending" ? signIn.GetProperty("keyRing") : null;
+        }, SmokeTarget.ColdStartTimeout, $"revision '{target.ExpectedRevision}' to finish its key ring check");
+
+        Assert.Contains(keyRing.GetString(), new[] { "ok", "off" });
+    }
+
+    [Fact]
     public async Task JokesApi_ReturnsAJsonArray()
     {
         var jokes = await target.PollAsync<JsonElement>(async () => await target.GetJsonAsync("jokes"), SmokeTarget.ColdStartTimeout, "/jokes");

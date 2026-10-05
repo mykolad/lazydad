@@ -68,6 +68,7 @@ public class TelemetryTests
         {
             // As if an instrumentation had recorded the visitor: the filter must drop it before export.
             Activity.Current?.SetTag("client.address", "203.0.113.7");
+            Activity.Current?.SetTag("enduser.id", "VoterKeyQmFzZTY0VmFsdWU=");
             Activity.Current?.SetTag("probe.kept", "kept-value");
             logger.LogInformation("Probe says {Word}", "hello-otlp");
             return "ok";
@@ -81,6 +82,7 @@ public class TelemetryTests
         using (var http = new HttpClient { BaseAddress = new Uri(app.Urls.First()) })
         {
             http.DefaultRequestHeaders.UserAgent.ParseAdd("FingerprintBrowser/1.0");
+            http.DefaultRequestHeaders.Add("Cookie", "__Host-lazydad=SignInCookieValue");
             Assert.Equal("ok", await http.GetStringAsync("/probe"));
             Assert.Equal("healthy", await http.GetStringAsync("/healthz"));
         }
@@ -106,6 +108,9 @@ public class TelemetryTests
         Assert.Matches(new Regex(@"grafana\.host\.id.{1,8}lazydad-app-under-test--r1-replica-7", RegexOptions.Singleline), traces);
         Assert.DoesNotContain("203.0.113.7", traces);
         Assert.DoesNotContain("FingerprintBrowser", traces);
+        // Nothing about who's signed in: not the cookie, not a voter key.
+        Assert.DoesNotContain("SignInCookieValue", traces);
+        Assert.DoesNotContain("VoterKey", traces);
         Assert.DoesNotContain("/healthz", traces);
         Assert.Contains("Probe says hello-otlp", collector.Body("/otlp/v1/logs"));
         Assert.Contains("http.server.request.duration", collector.Body("/otlp/v1/metrics"));

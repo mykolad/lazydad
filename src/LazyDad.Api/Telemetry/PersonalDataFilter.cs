@@ -17,7 +17,7 @@ public sealed class PersonalDataFilter : BaseProcessor<Activity>
         "network.peer.address", "network.peer.port",
         // The browser's user agent, which helps fingerprint a visitor.
         "user_agent.original",
-        // A signed-in user (none yet; sign-in would come from an external identity provider).
+        // A signed-in reader (nothing sets it today: the app never records who's signed in).
         "enduser.id",
         // The same, under older semantic conventions.
         "http.client_ip", "http.user_agent", "net.peer.ip", "net.sock.peer.addr",
