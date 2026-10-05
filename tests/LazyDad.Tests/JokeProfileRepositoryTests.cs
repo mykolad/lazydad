@@ -106,7 +106,7 @@ public sealed class JokeProfileRepositoryTests : IDisposable
         public bool Inserted { get; private set; }
 
         public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
-            DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+            DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken)
         {
             if (!Inserted)
             {

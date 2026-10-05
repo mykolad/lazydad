@@ -54,6 +54,11 @@ public class SchedulerLockRepository : ISchedulerLockRepository
         throw new InvalidOperationException($"Could not acquire scheduler lock '{lockKey}'.");
     }
 
+    public async Task ReleaseAsync(string lockKey, string holder, DateTime now, CancellationToken cancellationToken)
+        => await context.SchedulerLocks
+            .Where(l => l.LockKey == lockKey && l.HolderInstanceId == holder && l.ExpiresAt > now)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(l => l.ExpiresAt, now), cancellationToken);
+
     /// <summary>
     /// Inserts the lease row. The primary key makes the insert fail for all but one replica: <c>false</c> means
     /// another replica's row is there now. Any other failure (a timeout, a schema problem) is rethrown, so it

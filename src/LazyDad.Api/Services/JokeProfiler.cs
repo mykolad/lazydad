@@ -27,8 +27,8 @@ public interface IJokeProfiler
 public sealed class JokeProfiler : IJokeProfiler
 {
     public const string LeaseKey = "profiles";
-    // Longer than a batch usually takes (a few hundred answers of well under a second). Not released early: the next
-    // profiling is the next tick, hours later; a startup tick within the half hour leaves its jokes to that one.
+    // Longer than a batch usually takes (a few hundred answers of well under a second). Released when the batch is done,
+    // so a restart or deploy right after a tick can profile; it only expires on its own if this process dies mid-batch.
     public static readonly TimeSpan LeaseLength = TimeSpan.FromMinutes(30);
     // No new Jev call or embedding batch this close to the lease's end: the slowest single call (Jev's 30-second
     // timeout, the Azure OpenAI client's 100 seconds) still ends while this replica holds it, so a slow batch stops
@@ -103,10 +103,18 @@ public sealed class JokeProfiler : IJokeProfiler
 
         var stopAt = now + LeaseLength - StopBeforeLeaseEnds;
         var saved = 0;
-        if (settings.Jev.Enabled)
-            saved += await ProfileWithJevAsync(settings, stopAt, cancellationToken);
-        if (settings.Embeddings.Enabled)
-            saved += await ProfileWithEmbeddingsAsync(settings, stopAt, cancellationToken);
+        try
+        {
+            if (settings.Jev.Enabled)
+                saved += await ProfileWithJevAsync(settings, stopAt, cancellationToken);
+            if (settings.Embeddings.Enabled)
+                saved += await ProfileWithEmbeddingsAsync(settings, stopAt, cancellationToken);
+        }
+        finally
+        {
+            // Not with the tick's token: a shutdown mid-batch should still free the lease for the next replica.
+            await locks.ReleaseAsync(LeaseKey, Holder, time.GetUtcNow().UtcDateTime, CancellationToken.None);
+        }
         return saved;
     }
 

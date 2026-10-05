@@ -179,4 +179,18 @@ public sealed class JokeProfilerTests : IDisposable
 
         public override DateTimeOffset GetUtcNow() => Now;
     }
+
+    [Fact]
+    public async Task ProfileAsync_ReleasesTheLease_EvenWhenSavingFails()
+    {
+        Lacking(JokeProfile.JevKind, MakeJoke(1, null));
+        jevMock.Setup(j => j.ProfileAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync([1f]);
+        profilesMock
+            .Setup(r => r.SaveAsync(It.IsAny<JokeProfile>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("The database is busy."));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => CreateProfiler().ProfileAsync(CancellationToken.None));
+
+        locksMock.Verify(l => l.ReleaseAsync(JokeProfiler.LeaseKey, It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
 }
