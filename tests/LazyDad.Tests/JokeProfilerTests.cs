@@ -32,6 +32,10 @@ public sealed class JokeProfilerTests : IDisposable
             .Callback<JokeProfile, CancellationToken>((profile, _) => saved.Add(profile))
             .Returns(Task.CompletedTask);
         profilesMock
+            .Setup(r => r.SaveAllAsync(It.IsAny<IReadOnlyList<JokeProfile>>(), It.IsAny<CancellationToken>()))
+            .Callback<IReadOnlyList<JokeProfile>, CancellationToken>((profiles, _) => saved.AddRange(profiles))
+            .Returns(Task.CompletedTask);
+        profilesMock
             .Setup(r => r.GetJokesWithoutAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
         // This replica gets the profiling lease unless a test says otherwise.
@@ -195,5 +199,21 @@ public sealed class JokeProfilerTests : IDisposable
 
         Assert.Equal("jev/failed", Assert.Single(profiles.GetMeasurementSnapshot(), m => m.Value != 0) is var m ? $"{m.Tags["kind"]}/{m.Tags["outcome"]}" : null);
         locksMock.Verify(l => l.ReleaseAsync(JokeProfiler.LeaseKey, It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ProfileAsync_SavesAnEmbeddingBatchInOneWrite()
+    {
+        options.Jev.ApiKey = "";
+        Lacking(JokeProfile.EmbeddingKind, MakeJoke(1, null), MakeJoke(2, null), MakeJoke(3, null));
+        embeddingsMock
+            .Setup(g => g.GenerateAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<EmbeddingGenerationOptions?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IEnumerable<string> values, EmbeddingGenerationOptions? _, CancellationToken _) =>
+                new GeneratedEmbeddings<Embedding<float>>(values.Select(_ => new Embedding<float>(new float[] { 1 }))));
+
+        await CreateProfiler().ProfileAsync(CancellationToken.None);
+
+        profilesMock.Verify(r => r.SaveAllAsync(It.Is<IReadOnlyList<JokeProfile>>(p => p.Count == 3), It.IsAny<CancellationToken>()), Times.Once);
+        profilesMock.Verify(r => r.SaveAsync(It.IsAny<JokeProfile>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 }

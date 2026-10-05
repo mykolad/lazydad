@@ -101,6 +101,37 @@ public sealed class JokeProfileRepositoryTests : IDisposable
         Assert.Equal([1, 2], Assert.Single(await new JokeProfileRepository(verify).GetAllAsync(JokeProfile.JevKind, "v1", CancellationToken.None)).Vector);
     }
 
+    [Fact]
+    public async Task SaveAllAsync_AddsNewProfiles_AndReplacesEarlierOnes()
+    {
+        await using (var context = CreateContext())
+            await new JokeProfileRepository(context).SaveAsync(Profile(JokeId(1), JokeProfile.EmbeddingKind, "e0", [1]), CancellationToken.None);
+
+        await using (var context = CreateContext())
+            await new JokeProfileRepository(context).SaveAllAsync(
+                [Profile(JokeId(1), JokeProfile.EmbeddingKind, "e1", [2]), Profile(JokeId(2), JokeProfile.EmbeddingKind, "e1", [3])],
+                CancellationToken.None);
+
+        await using var verify = CreateContext();
+        var all = await new JokeProfileRepository(verify).GetAllAsync(JokeProfile.EmbeddingKind, "e1", CancellationToken.None);
+        Assert.Equal([(JokeId(1), (byte)2), (JokeId(2), (byte)3)], all.OrderBy(p => p.JokeId).Select(p => (p.JokeId, p.Vector[0])));
+    }
+
+    [Fact]
+    public async Task SaveAllAsync_WhenAnotherReplicaInsertsOneFirst_StillSavesThemAll()
+    {
+        var conflict = new InsertFirst(() => database.CreateContext(), Profile(JokeId(2), JokeProfile.EmbeddingKind, "e1", [9]));
+        await using (var context = database.CreateContext([conflict]))
+            await new JokeProfileRepository(context).SaveAllAsync(
+                [Profile(JokeId(1), JokeProfile.EmbeddingKind, "e1", [1]), Profile(JokeId(2), JokeProfile.EmbeddingKind, "e1", [2])],
+                CancellationToken.None);
+
+        await using var verify = CreateContext();
+        var all = await new JokeProfileRepository(verify).GetAllAsync(JokeProfile.EmbeddingKind, "e1", CancellationToken.None);
+        Assert.True(conflict.Inserted);
+        Assert.Equal([(JokeId(1), (byte)1), (JokeId(2), (byte)2)], all.OrderBy(p => p.JokeId).Select(p => (p.JokeId, p.Vector[0])));
+    }
+
     private sealed class InsertFirst(Func<LazyDadDbContext> otherContext, JokeProfile profile) : SaveChangesInterceptor
     {
         public bool Inserted { get; private set; }

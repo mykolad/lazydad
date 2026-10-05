@@ -1,5 +1,6 @@
 using LazyDad.Data.Entities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 
 namespace LazyDad.Data.Repositories;
 
@@ -52,6 +53,37 @@ public class JokeProfileRepository : IJokeProfileRepository
                 throw;
             Update(current, profile);
             await context.SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    public async Task SaveAllAsync(IReadOnlyList<JokeProfile> profiles, CancellationToken cancellationToken)
+    {
+        if (profiles.Count == 0)
+            return;
+        var kinds = profiles.Select(p => p.Kind).Distinct().ToList();
+        var ids = profiles.Select(p => p.JokeId).ToList();
+        var existing = await context.JokeProfiles
+            .Where(p => ids.Contains(p.JokeId) && kinds.Contains(p.Kind))
+            .ToDictionaryAsync(p => (p.JokeId, p.Kind), cancellationToken);
+        var added = new List<EntityEntry<JokeProfile>>();
+        foreach (var profile in profiles)
+        {
+            if (existing.TryGetValue((profile.JokeId, profile.Kind), out var current))
+                Update(current, profile);
+            else
+                added.Add(context.JokeProfiles.Add(profile));
+        }
+        try
+        {
+            await context.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException)
+        {
+            // A key conflict: another replica saved some of these meanwhile. One by one, each writes over its row.
+            foreach (var entry in added)
+                entry.State = EntityState.Detached;
+            foreach (var profile in profiles)
+                await SaveAsync(profile, cancellationToken);
         }
     }
 

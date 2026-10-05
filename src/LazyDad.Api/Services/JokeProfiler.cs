@@ -180,11 +180,20 @@ public sealed class JokeProfiler : IJokeProfiler
                 logger.LogWarning(ex, "The embedding model couldn't profile {Count} joke(s); they wait for the next tick.", batch.Length);
                 break;
             }
-            for (var i = 0; i < batch.Length; i++)
+            // The whole batch in one write: a hundred row-by-row writes after a slow model call could outlast the lease.
+            var batchProfiles = batch.Select((joke, i) => Profile(joke.Id, JokeProfile.EmbeddingKind, version, embeddings[i].Vector.ToArray())).ToList();
+            try
             {
-                await SaveAsync(batch[i].Id, JokeProfile.EmbeddingKind, version, embeddings[i].Vector.ToArray(), cancellationToken);
-                saved++;
+                await profiles.SaveAllAsync(batchProfiles, cancellationToken);
             }
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                metrics.RecordProfile(JokeProfile.EmbeddingKind, "failed");
+                throw;
+            }
+            foreach (var _ in batchProfiles)
+                metrics.RecordProfile(JokeProfile.EmbeddingKind, "saved");
+            saved += batchProfiles.Count;
         }
         if (saved > 0)
             logger.LogInformation("Embedded {Count} joke(s).", saved);
@@ -195,14 +204,7 @@ public sealed class JokeProfiler : IJokeProfiler
     {
         try
         {
-            await profiles.SaveAsync(new JokeProfile
-            {
-                JokeId = jokeId,
-                Kind = kind,
-                Version = version,
-                Vector = ToBytes(vector),
-                CreatedAt = time.GetUtcNow().UtcDateTime,
-            }, cancellationToken);
+            await profiles.SaveAsync(Profile(jokeId, kind, version, vector), cancellationToken);
         }
         catch (Exception) when (!cancellationToken.IsCancellationRequested)
         {
@@ -212,6 +214,15 @@ public sealed class JokeProfiler : IJokeProfiler
         }
         metrics.RecordProfile(kind, "saved");
     }
+
+    private JokeProfile Profile(int jokeId, string kind, string version, float[] vector) => new()
+    {
+        JokeId = jokeId,
+        Kind = kind,
+        Version = version,
+        Vector = ToBytes(vector),
+        CreatedAt = time.GetUtcNow().UtcDateTime,
+    };
 
     public static byte[] ToBytes(float[] vector)
     {
