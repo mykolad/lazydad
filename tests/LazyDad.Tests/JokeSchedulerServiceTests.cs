@@ -51,7 +51,11 @@ public sealed class JokeSchedulerServiceTests : IDisposable
             .Setup(r => r.AddAsync(It.IsAny<Joke>(), It.IsAny<CancellationToken>()))
             .Callback<Joke, CancellationToken>((joke, _) => { lock (saved) { joke.Id = saved.Count + 1; saved.Add(joke); } })
             .Returns(Task.CompletedTask);
-        // No duplicates to remove unless a test says otherwise.
+        // This replica gets the duplicates cleanup's lease, and there are no duplicates to remove, unless a test says otherwise.
+        lockRepositoryMock
+            .Setup(l => l.TryAcquireAsync(It.Is<string>(k => k.StartsWith("duplicates:")), It.IsAny<string>(), It.IsAny<DateTime>(),
+                It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
         jokeRepositoryMock
             .Setup(r => r.RemoveDuplicatesAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
@@ -506,7 +510,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         lockRepositoryMock.Verify(r => r.AcquireAsync(
             "jokes:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(), nextDue.AddMinutes(-5),
             It.IsAny<CancellationToken>()), Times.Once);
-        lockRepositoryMock.Verify(r => r.TryAcquireAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Never);
+        lockRepositoryMock.Verify(r => r.TryAcquireAsync("jokes:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -769,5 +773,37 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         Assert.Contains("Жарт А", prompt);
         Assert.DoesNotContain("Жарт А.", prompt);
         Assert.Equal([1], Assert.Single(status.LastTicks).Jokes.Select(j => j.Id));
+    }
+
+    [Fact]
+    public async Task Tick_WhileAnotherReplicaRemovesDuplicates_LeavesItToThatOne_AndReleasesItsOwnLeaseOtherwise()
+    {
+        SetupModel("fast", () => Reply("Жарт"));
+        lockRepositoryMock
+            .Setup(l => l.TryAcquireAsync("duplicates:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        jokeRepositoryMock.Verify(r => r.RemoveDuplicatesAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        lockRepositoryMock.Verify(l => l.ReleaseAsync("duplicates:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.Single(saved);
+    }
+
+    [Fact]
+    public async Task Tick_ReleasesTheDuplicatesLease_AfterTheCleanup()
+    {
+        SetupModel("fast", () => Reply("Жарт"));
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        jokeRepositoryMock.Verify(r => r.RemoveDuplicatesAsync("Ukrainian", It.IsAny<CancellationToken>()), Times.Once);
+        lockRepositoryMock.Verify(l => l.ReleaseAsync("duplicates:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 }

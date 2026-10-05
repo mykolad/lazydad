@@ -226,19 +226,33 @@ public class JokeSchedulerService : BackgroundService
     /// apart, and the rare one two models write in the same tick (each checks only what's saved before it). /status lists
     /// only jokes that still exist, so a copy deleted here (or by another replica) drops off it. Nothing here fails the tick.
     /// </summary>
-    /// <returns>The ids it deleted (none if it failed).</returns>
+    /// <returns>The ids it deleted (none if it failed, or another replica was cleaning).</returns>
     private async Task<IReadOnlyList<int>> RemoveDuplicatesAsync(string language, CancellationToken stoppingToken)
     {
         try
         {
             using var scope = scopeFactory.CreateScope();
-            var removed = await scope.ServiceProvider.GetRequiredService<IJokeRepository>().RemoveDuplicatesAsync(language, stoppingToken);
-            if (removed.Count > 0)
+            // One replica at a time (startup ticks overlap): two cleanups choosing from different snapshots could each
+            // delete a different copy and leave none. Another replica cleaning now means this one has nothing to add.
+            var locks = scope.ServiceProvider.GetRequiredService<ISchedulerLockRepository>();
+            var lockKey = $"duplicates:{language}";
+            var now = DateTime.UtcNow;
+            if (!await locks.TryAcquireAsync(lockKey, instanceId, now, now + DuplicatesLeaseLength, stoppingToken))
+                return [];
+            try
             {
-                readCache.Invalidate();
-                logger.LogInformation("Removed {Count} duplicate '{Language}' joke(s).", removed.Count, language);
+                var removed = await scope.ServiceProvider.GetRequiredService<IJokeRepository>().RemoveDuplicatesAsync(language, stoppingToken);
+                if (removed.Count > 0)
+                {
+                    readCache.Invalidate();
+                    logger.LogInformation("Removed {Count} duplicate '{Language}' joke(s).", removed.Count, language);
+                }
+                return removed;
             }
-            return removed;
+            finally
+            {
+                await locks.ReleaseAsync(lockKey, instanceId, DateTime.UtcNow, CancellationToken.None);
+            }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -419,4 +433,7 @@ public class JokeSchedulerService : BackgroundService
     }
 
     private const int MaxLoggedResponseLength = 2000;
+
+    // Far longer than a cleanup takes (one read and a delete or two); it only runs out on its own if the process dies.
+    private static readonly TimeSpan DuplicatesLeaseLength = TimeSpan.FromMinutes(5);
 }
