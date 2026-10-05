@@ -195,7 +195,7 @@ public class JokeSchedulerService : BackgroundService
         // Duplicates go before the judge sees the new jokes: two models can write the same joke in one tick, and the judge
         // could put both copies in the Top 3, which the cleanup never deletes.
         var removed = await RemoveDuplicatesAsync(language.Language, stoppingToken);
-        var saved = results.OfType<Joke>().Where(j => !removed.Contains(j.Id)).ToList();
+        var saved = await StillThereAsync(results.OfType<Joke>().Where(j => !removed.Contains(j.Id)).ToList(), stoppingToken);
 
         using var scope = scopeFactory.CreateScope();
         var topJokeService = scope.ServiceProvider.GetRequiredService<TopJokeService>();
@@ -283,6 +283,34 @@ public class JokeSchedulerService : BackgroundService
         {
             logger.LogError(ex, "Removing duplicate '{Language}' jokes failed; the next tick tries again.", language);
             return [];
+        }
+    }
+
+    /// <summary>
+    /// The tick's jokes that still exist: another replica's cleanup may have deleted one as a later copy (startup ticks
+    /// overlap), and the judge mustn't rank a deleted joke (its slot couldn't be saved). A deletion in the moment between
+    /// this and the leaderboard's write fails only that update, which the next tick makes again. If the database can't
+    /// say, all of them.
+    /// </summary>
+    private async Task<IReadOnlyList<Joke>> StillThereAsync(IReadOnlyList<Joke> jokes, CancellationToken stoppingToken)
+    {
+        if (jokes.Count == 0)
+            return jokes;
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var existing = (await scope.ServiceProvider.GetRequiredService<IJokeRepository>()
+                .GetExistingIdsAsync(jokes.Select(j => j.Id).ToList(), stoppingToken)).ToHashSet();
+            return jokes.Where(j => existing.Contains(j.Id)).ToList();
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Couldn't check which of the tick's jokes still exist; the judge sees all of them.");
+            return jokes;
         }
     }
 
