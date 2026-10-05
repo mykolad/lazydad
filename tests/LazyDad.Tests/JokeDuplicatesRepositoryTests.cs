@@ -167,6 +167,27 @@ public sealed class JokeDuplicatesRepositoryTests : IDisposable
         Assert.Equal(1, await verify.TopJokes.CountAsync());
     }
 
+    [Fact]
+    public async Task RemoveDuplicatesAsync_SparesACopyThatGotAVoteWhileItRan()
+    {
+        var oldest = Add("Чому борщ став фотографом? Бо ловив бурякові кадри!", 0);
+        var voted = Add("Чому борщ став фотографом? Бо ловив бурякові кадри.", 10);
+        // A visitor votes for the later copy just before this delete runs: it's now the most-voted, so it stays.
+        var vote = new BeforeDelete(() =>
+        {
+            using var other = CreateContext();
+            other.Jokes.Where(j => j.Id == voted).ExecuteUpdate(s => s.SetProperty(j => j.Up, 1));
+        });
+
+        IReadOnlyList<int> removed;
+        await using (var context = database.CreateContext([vote]))
+            removed = await new JokeRepository(context).RemoveDuplicatesAsync("Ukrainian", CancellationToken.None);
+
+        Assert.True(vote.Ran);
+        Assert.Empty(removed);
+        Assert.Equal([oldest, voted], RemainingIds());
+    }
+
     private sealed class BeforeDelete(Action action) : DbCommandInterceptor
     {
         public bool Ran { get; private set; }

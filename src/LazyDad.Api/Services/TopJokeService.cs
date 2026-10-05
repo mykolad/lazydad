@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using LazyDad.Api.Configuration;
+using LazyDad.Data;
 using LazyDad.Data.Entities;
 using LazyDad.Data.Repositories;
 using Microsoft.Extensions.AI;
@@ -65,9 +66,12 @@ public class TopJokeService
             ? await jokeRepository.GetRecentByLanguageAsync(language, settings.SeedSampleSize, cancellationToken)
             : newJokes;
 
+        // One candidate per joke text (JokeText): copies of the same joke must never hold two slots, whatever the duplicate
+        // cleanup managed. The leaderboard's own entries come first, so a copy already in it is the one kept.
         var candidates = current.Select(t => t.Joke)
             .Concat(challengers)
             .DistinctBy(j => j.Id)
+            .DistinctBy(j => JokeText.Key(j.Text))
             .ToList();
 
         var slots = Math.Min(settings.Size, candidates.Count);

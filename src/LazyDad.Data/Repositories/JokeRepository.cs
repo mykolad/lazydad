@@ -61,19 +61,25 @@ public class JokeRepository : IJokeRepository
                 .Skip(1))
             // Deleting a Top 3 joke would delete its slot too (cascade): a second copy in the Top 3 stays.
             .Where(j => !top.Contains(j.Id))
-            .Select(j => j.Id)
             .ToList();
         if (copies.Count == 0)
             return [];
 
-        // The Top 3 is checked again in the delete itself: another replica's tick may have promoted a copy since it was
-        // read above (startup ticks run on every replica), and deleting it would delete its slot. Profiles and votes are
-        // deleted with them (cascade).
-        await context.Jokes
-            .Where(j => copies.Contains(j.Id) && !context.TopJokes.Any(t => t.JokeId == j.Id))
-            .ExecuteDeleteAsync(cancellationToken);
-        var kept = await context.Jokes.Where(j => copies.Contains(j.Id)).Select(j => j.Id).ToListAsync(cancellationToken);
-        return copies.Except(kept).ToList();
+        // What was read is checked again in the delete itself, so a change since then spares the copy: another replica's
+        // tick may have promoted it to the Top 3 (deleting it would delete its slot), or a vote may have made it the most
+        // voted. So each copy goes only while its vote count is still the one read (one statement per count; almost always
+        // just 0). Profiles and votes are deleted with them (cascade).
+        foreach (var sameVotes in copies.GroupBy(c => c.Votes))
+        {
+            var ids = sameVotes.Select(c => c.Id).ToList();
+            var votes = sameVotes.Key;
+            await context.Jokes
+                .Where(j => ids.Contains(j.Id) && j.Up + j.Down == votes && !context.TopJokes.Any(t => t.JokeId == j.Id))
+                .ExecuteDeleteAsync(cancellationToken);
+        }
+        var copyIds = copies.Select(c => c.Id).ToList();
+        var kept = await context.Jokes.Where(j => copyIds.Contains(j.Id)).Select(j => j.Id).ToListAsync(cancellationToken);
+        return copyIds.Except(kept).ToList();
     }
 
     public async Task<List<int>> GetExistingIdsAsync(IReadOnlyCollection<int> ids, CancellationToken cancellationToken)
