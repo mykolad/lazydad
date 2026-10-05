@@ -79,9 +79,11 @@ public class VoteRepository : IVoteRepository
         }
         catch (DbException)
         {
-            // The primary key: the same voter's other request inserted first. Read again (a different failure shows
-            // up there, or as running out of attempts).
-            return false;
+            // The primary key, if the same voter's other request inserted first: then its row is there, and the caller
+            // reads again. Anything else (a transient error, for the execution strategy to retry) goes on up.
+            if (await context.Votes.AnyAsync(v => v.JokeId == jokeId && v.VoterKey == voterKey, cancellationToken))
+                return false;
+            throw;
         }
     }
 

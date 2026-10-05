@@ -2,6 +2,7 @@ using System.Data.Common;
 using LazyDad.Data;
 using LazyDad.Data.Entities;
 using LazyDad.Data.Repositories;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 
@@ -179,6 +180,19 @@ public sealed class VoteRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task SetAsync_WhenTheInsertFailsForAnotherReason_Throws()
+    {
+        // Not a race (no row appeared): the error must reach the caller, or the execution strategy, as it is.
+        var failure = new FailingInsert();
+        await using (var context = database.CreateContext([failure]))
+            await Assert.ThrowsAsync<SqliteException>(
+                () => new VoteRepository(context).SetAsync(jokeId, Alice, 1, Now, CancellationToken.None));
+
+        Assert.True(failure.Failed);
+        await AssertStateAsync(jokeId, 0, 0, []);
+    }
+
+    [Fact]
     public async Task GetAsync_ReturnsTheVotersVotesOnTheseJokes()
     {
         await SetAsync(jokeId, Alice, 1);
@@ -218,6 +232,22 @@ public sealed class VoteRepositoryTests : IDisposable
             await new VoteRepository(context).DeleteAllAsync(Alice, CancellationToken.None);
 
         await AssertStateAsync(jokeId, 0, 1, [-1]);
+    }
+
+    private sealed class FailingInsert : DbCommandInterceptor
+    {
+        public bool Failed { get; private set; }
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken)
+        {
+            if (command.CommandText.StartsWith("INSERT INTO Votes", StringComparison.Ordinal))
+            {
+                Failed = true;
+                throw new SqliteException("A failure that isn't a key conflict.", 1);
+            }
+            return ValueTask.FromResult(result);
+        }
     }
 
     /// <summary>
