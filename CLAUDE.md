@@ -238,7 +238,8 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
   `revision` is the platform's `CONTAINER_APP_REVISION`, unique per rollout. Smoke tests wait for both; Traffic
   Manager's health checks expect its `200`.
 - `/status` returns the version, revision and this process's last scheduler tick per language
-  (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details).
+  (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details). It lists only jokes
+  that still exist (a saved one can be deleted later as a duplicate copy, by any replica); without the database, all.
 - **Monitoring:** a Grafana Cloud stack (free tier, `eu-north`) gets all three apps' telemetry, one service per app
   (`job="lazydad-app"`, `"lazydad-app-swedencentral"`, `"lazydad-app-staging"`), with the uptime check and email alerts
   on prod (per app, plus `LazyDadAppNotReporting` when an app sends nothing for 10 minutes). The dashboard is

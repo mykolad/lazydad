@@ -13,10 +13,12 @@ public interface IJokeRepository
     Task<bool> TextExistsAsync(string language, string text, CancellationToken cancellationToken);
     /// <summary>
     /// Deletes the later copies of each joke in <paramref name="language"/> (see <see cref="JokeText"/>), keeping one per
-    /// group: the copy in the Top 3, else the most-voted, else the oldest. A Top 3 joke is never deleted. Their profiles and
-    /// votes go with them. Returns the ids it deleted.
+    /// group: the copy in the Top 3, else the most-voted, else the oldest. A Top 3 joke is never deleted, so a group with
+    /// several copies in the Top 3 keeps them all. Their profiles and votes go with them. Returns the ids it deleted.
     /// </summary>
     Task<IReadOnlyList<int>> RemoveDuplicatesAsync(string language, CancellationToken cancellationToken);
+    /// <summary>Which of <paramref name="ids"/> are still jokes.</summary>
+    Task<List<int>> GetExistingIdsAsync(IReadOnlyCollection<int> ids, CancellationToken cancellationToken);
     Task AddAsync(Joke joke, CancellationToken cancellationToken);
     Task<int> CountAsync(CancellationToken cancellationToken);
     /// <summary>

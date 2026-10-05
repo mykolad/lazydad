@@ -123,6 +123,16 @@ public sealed class JokeDuplicatesRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task GetExistingIdsAsync_ReturnsOnlyTheIdsThatAreStillJokes()
+    {
+        var kept = Add("Перший жарт.", 0);
+
+        await using var context = CreateContext();
+        Assert.Equal([kept], await new JokeRepository(context).GetExistingIdsAsync([kept, kept + 1000], CancellationToken.None));
+        Assert.Empty(await new JokeRepository(context).GetExistingIdsAsync([], CancellationToken.None));
+    }
+
+    [Fact]
     public async Task RemoveDuplicatesAsync_WithoutDuplicates_DeletesNothing()
     {
         Add("Перший жарт.", 0);

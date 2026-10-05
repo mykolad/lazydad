@@ -221,8 +221,8 @@ public class JokeSchedulerService : BackgroundService
 
     /// <summary>
     /// Deletes later copies of the same joke (JokeRepository.RemoveDuplicatesAsync): the copies the old model saved weeks
-    /// apart, and the rare one two models write in the same tick (each checks only what's saved before it). Nothing here
-    /// fails the tick.
+    /// apart, and the rare one two models write in the same tick (each checks only what's saved before it). /status lists
+    /// only jokes that still exist, so a copy deleted here (or by another replica) drops off it. Nothing here fails the tick.
     /// </summary>
     private async Task RemoveDuplicatesAsync(string language, CancellationToken stoppingToken)
     {
@@ -232,8 +232,6 @@ public class JokeSchedulerService : BackgroundService
             var removed = await scope.ServiceProvider.GetRequiredService<IJokeRepository>().RemoveDuplicatesAsync(language, stoppingToken);
             if (removed.Count > 0)
             {
-                // A copy this tick saved (two models wrote the same joke) is gone: /status must not list it.
-                status.ForgetJokes(removed);
                 readCache.Invalidate();
                 logger.LogInformation("Removed {Count} duplicate '{Language}' joke(s).", removed.Count, language);
             }
@@ -318,6 +316,9 @@ public class JokeSchedulerService : BackgroundService
         var delay = TimeSpan.FromSeconds(options.Value.RetryDelaySeconds);
         // This model's answers that were jokes the site already has: the next try is told to write another.
         var repeated = new List<string>();
+        // A try that failed or came back empty: if the last try then repeats a joke, that's what's counted (and alerted),
+        // not "duplicate", which means every try repeated one.
+        string? problem = null;
 
         for (var attempt = 1; ; attempt++)
         {
@@ -333,9 +334,9 @@ public class JokeSchedulerService : BackgroundService
                     repeated.Add(draft.Text);
                     if (attempt == attempts)
                     {
-                        metrics.RecordJoke(language.Language, model.Model, "duplicate");
-                        logger.LogWarning("{Model} repeated an existing '{Language}' joke on every try. Skipping: {Text}",
-                            model.Model, language.Language, draft.Text);
+                        metrics.RecordJoke(language.Language, model.Model, problem ?? "duplicate");
+                        logger.LogWarning("{Model} saved no '{Language}' joke: its last try repeated an existing one ({Text}); " +
+                            "an earlier try: {Problem}.", model.Model, language.Language, draft.Text, problem ?? "duplicate");
                         return null;
                     }
                     // Not a failure to wait out: ask again at once, naming the joke it repeated.
@@ -363,6 +364,7 @@ public class JokeSchedulerService : BackgroundService
                         language.Language, model.Model);
                     return null;
                 }
+                problem ??= "empty";
                 logger.LogWarning("LLM returned an empty response for '{Language}' ({Model}); trying again in {Delay} s.",
                     language.Language, model.Model, delay.TotalSeconds);
             }
@@ -381,6 +383,7 @@ public class JokeSchedulerService : BackgroundService
                         language.Language, model.Model, ProviderResponse(ex));
                     return null;
                 }
+                problem = "failed";
                 logger.LogWarning(ex, "Failed to generate joke for '{Language}' ({Model}); trying again in {Delay} s. Provider response: {ProviderResponse}",
                     language.Language, model.Model, delay.TotalSeconds, ProviderResponse(ex));
             }

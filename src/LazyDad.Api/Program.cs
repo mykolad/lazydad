@@ -104,14 +104,20 @@ app.MapGet("/healthz", () => Results.Ok(new { status = "healthy", version = appV
 // apart by this.
 var processId = Guid.NewGuid().ToString("N");
 // What this process's scheduler did: its last tick per language, and the jokes it saved most recently (see SchedulerStatus).
-app.MapGet("/status", (SchedulerStatus status) => Results.Ok(new
+// Only jokes that still exist: one can be deleted later as a duplicate copy, by this replica or another. If the database
+// can't be reached, it reports what this process saved.
+app.MapGet("/status", async (SchedulerStatus status, IJokeRepository jokes, CancellationToken cancellationToken) =>
 {
-    version = appVersion,
-    revision = appRevision,
-    process = processId,
-    ticks = status.LastTicks,
-    savedJokes = status.SavedJokes,
-}));
+    var (ticks, savedJokes) = (status.LastTicks, status.SavedJokes);
+    try
+    {
+        (ticks, savedJokes) = status.Existing((await jokes.GetExistingIdsAsync(status.ReportedJokeIds(), cancellationToken)).ToHashSet());
+    }
+    catch (Exception) when (!cancellationToken.IsCancellationRequested)
+    {
+    }
+    return Results.Ok(new { version = appVersion, revision = appRevision, process = processId, ticks, savedJokes });
+});
 
 // The page shell (wwwroot/index.html) depends only on the build and the configuration (the jokes
 // are fetched by app.js), so write it once, before the server starts listening.

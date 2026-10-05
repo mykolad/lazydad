@@ -710,22 +710,23 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Tick_WhenTwoModelsWroteTheSameJoke_StatusListsOnlyTheCopyThatWasKept()
+    public async Task Tick_WhenATryFailedAndTheLastOneRepeatedAJoke_CountsTheFailure_NotADuplicate()
     {
-        SetupModel("fast", () => Reply("Той самий жарт"));
-        SetupModel("slow", () => Reply("Той самий жарт."));
-        // The cleanup deletes the later copy (id 2: saves are numbered in order).
-        jokeRepositoryMock
-            .Setup(r => r.RemoveDuplicatesAsync("Ukrainian", It.IsAny<CancellationToken>()))
-            .ReturnsAsync([2]);
-        var scheduler = CreateScheduler(Ukrainian("fast", "slow"));
+        // "duplicate" means every try repeated a joke; a real failure among them is what's counted (and alerted).
+        var tries = 0;
+        SetupModel("fast", () => ++tries == 1
+            ? Task.FromException<ChatResponse>(new HttpRequestException("The model is unavailable."))
+            : Reply("Старий жарт"));
+        jokeRepositoryMock.Setup(r => r.TextExistsAsync("Ukrainian", "Старий жарт", It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+        using var jokes = Collect("lazydad.jokes");
 
         await scheduler.StartAsync(CancellationToken.None);
         await StartupTicksDoneAsync();
         await scheduler.StopAsync(CancellationToken.None);
 
-        Assert.Equal(2, saved.Count);
-        Assert.Equal([1], status.SavedJokes.Select(j => j.Id));
-        Assert.Equal([1], Assert.Single(status.LastTicks).Jokes.Select(j => j.Id));
+        Assert.Equal(3, tries);
+        Assert.Empty(saved);
+        Assert.Equal(["fast/failed"], Measured(jokes, "model", "outcome"));
     }
 }

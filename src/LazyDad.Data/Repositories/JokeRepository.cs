@@ -76,6 +76,9 @@ public class JokeRepository : IJokeRepository
         return copies.Except(kept).ToList();
     }
 
+    public async Task<List<int>> GetExistingIdsAsync(IReadOnlyCollection<int> ids, CancellationToken cancellationToken)
+        => ids.Count == 0 ? [] : await context.Jokes.Where(j => ids.Contains(j.Id)).Select(j => j.Id).ToListAsync(cancellationToken);
+
     public async Task AddAsync(Joke joke, CancellationToken cancellationToken)
     {
         context.Jokes.Add(joke);

@@ -75,16 +75,20 @@ public class SchedulerStatusTests
     }
 
     [Fact]
-    public void ForgetJokes_DropsThemFromTheSavedJokesAndTheLastTick()
+    public void Existing_ShowsOnlyJokesThatStillExist_InTheSavedJokesAndTheLastTick()
     {
         var status = new SchedulerStatus();
         status.RecordSavedJoke(new SavedJoke("Ukrainian", 1, "fast", DateTime.UtcNow));
         status.RecordSavedJoke(new SavedJoke("Ukrainian", 2, "slow", DateTime.UtcNow));
         status.Record(new TickStatus("Ukrainian", DateTime.UtcNow, true, [new GeneratedJoke(1, "fast"), new GeneratedJoke(2, "slow")], "unchanged", null));
 
-        status.ForgetJokes([2]);
+        // Joke 2 was deleted as a duplicate copy (by this replica or another).
+        var (ticks, saved) = status.Existing(new HashSet<int> { 1 });
 
-        Assert.Equal([1], status.SavedJokes.Select(j => j.Id));
-        Assert.Equal([1], Assert.Single(status.LastTicks).Jokes.Select(j => j.Id));
+        Assert.Equal([1, 2], status.ReportedJokeIds().Order());
+        Assert.Equal([1], saved.Select(j => j.Id));
+        Assert.Equal([1], Assert.Single(ticks).Jokes.Select(j => j.Id));
+        // What the process recorded stays as it was: the filtering is only for what /status shows.
+        Assert.Equal(2, status.SavedJokes.Count);
     }
 }

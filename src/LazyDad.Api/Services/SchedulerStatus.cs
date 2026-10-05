@@ -56,27 +56,17 @@ public class SchedulerStatus
 
     public const int SavedJokesKept = 20;
 
+    /// <summary>Every joke id this process reports (its saved jokes and its last ticks' jokes).</summary>
+    public IReadOnlyList<int> ReportedJokeIds()
+        => SavedJokes.Select(j => j.Id).Concat(LastTicks.SelectMany(t => t.Jokes.Select(j => j.Id))).Distinct().ToList();
+
     /// <summary>
-    /// Drops jokes that were deleted (duplicate copies): /status lists only jokes that exist, which the deploy's smoke
-    /// tests check.
+    /// What /status shows: only the jokes in <paramref name="existing"/>. A saved joke can be deleted later as a duplicate
+    /// copy, by this replica or another, and the deploy's smoke tests check every listed joke exists.
     /// </summary>
-    public void ForgetJokes(IReadOnlyCollection<int> ids)
-    {
-        if (ids.Count == 0)
-            return;
-        lock (savedJokesLock)
-        {
-            var kept = savedJokes.Where(j => !ids.Contains(j.Id)).ToList();
-            savedJokes.Clear();
-            foreach (var joke in kept)
-                savedJokes.Enqueue(joke);
-        }
-        foreach (var (language, tick) in lastTicks)
-        {
-            if (tick.Jokes.Any(j => ids.Contains(j.Id)))
-                lastTicks.TryUpdate(language, tick with { Jokes = tick.Jokes.Where(j => !ids.Contains(j.Id)).ToList() }, tick);
-        }
-    }
+    public (IReadOnlyList<TickStatus> Ticks, IReadOnlyList<SavedJoke> SavedJokes) Existing(IReadOnlySet<int> existing)
+        => (LastTicks.Select(t => t with { Jokes = t.Jokes.Where(j => existing.Contains(j.Id)).ToList() }).ToList(),
+            SavedJokes.Where(j => existing.Contains(j.Id)).ToList());
 }
 
 /// <param name="Leaderboard">
