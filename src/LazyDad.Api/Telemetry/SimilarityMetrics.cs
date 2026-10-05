@@ -27,7 +27,11 @@ public sealed class SimilarityMetrics
 
     private readonly TimeProvider time;
     // The balance Jev reported last, and when; no measurement until a request has reported one, or once it's stale.
-    private (double Usd, DateTimeOffset At)? jevCredits;
+    // One immutable object, swapped whole: the profiler writes it and the metrics exporter reads it on other threads,
+    // so they must never see a balance with another reading's time.
+    private CreditsReading? jevCredits;
+
+    private sealed record CreditsReading(double Usd, DateTimeOffset At);
 
     public SimilarityMetrics(IMeterFactory meterFactory)
         : this(meterFactory, TimeProvider.System)
@@ -44,7 +48,7 @@ public sealed class SimilarityMetrics
         // "{USD}", not "USD": an annotation keeps the unit out of the Prometheus names (lazydad_jev_cost_total, lazydad_jev_credits).
         jevCost = meter.CreateCounter<double>("lazydad.jev.cost", "{USD}", "What Jev charged, in US dollars, as it reports per request.");
         meter.CreateObservableGauge<double>("lazydad.jev.credits",
-            () => jevCredits is { } credits && time.GetUtcNow() - credits.At < CreditsFreshFor
+            () => Volatile.Read(ref jevCredits) is { } credits && time.GetUtcNow() - credits.At < CreditsFreshFor
                 ? [new Measurement<double>(credits.Usd)]
                 : Array.Empty<Measurement<double>>(),
             "{USD}", "Jev credits left, in US dollars, as the last request reported.");
@@ -67,7 +71,7 @@ public sealed class SimilarityMetrics
 
     public void RecordJevCost(double usd) => jevCost.Add(usd);
 
-    public void RecordJevCredits(double usd) => jevCredits = (usd, time.GetUtcNow());
+    public void RecordJevCredits(double usd) => Volatile.Write(ref jevCredits, new CreditsReading(usd, time.GetUtcNow()));
 
     public void RecordProfile(string kind, string outcome) => profiles.Add(1, new("kind", kind), new("outcome", outcome));
 

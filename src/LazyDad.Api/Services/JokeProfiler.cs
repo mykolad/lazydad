@@ -27,9 +27,13 @@ public interface IJokeProfiler
 public sealed class JokeProfiler : IJokeProfiler
 {
     public const string LeaseKey = "profiles";
-    // Far longer than a batch takes (a few hundred answers of well under a second). Not released early: the next
+    // Longer than a batch usually takes (a few hundred answers of well under a second). Not released early: the next
     // profiling is the next tick, hours later; a startup tick within the half hour leaves its jokes to that one.
     public static readonly TimeSpan LeaseLength = TimeSpan.FromMinutes(30);
+    // No new Jev call or embedding batch this close to the lease's end: the slowest single call (Jev's 30-second
+    // timeout, the Azure OpenAI client's 100 seconds) still ends while this replica holds it, so a slow batch stops
+    // early and leaves the rest to the next tick instead of overlapping another replica's.
+    public static readonly TimeSpan StopBeforeLeaseEnds = TimeSpan.FromMinutes(5);
     private const int EmbeddingBatch = 100;
     // This process, as the lease's holder.
     private static readonly string Holder =
@@ -42,6 +46,7 @@ public sealed class JokeProfiler : IJokeProfiler
     private readonly IOptions<SimilarityOptions> options;
     private readonly SimilarityMetrics metrics;
     private readonly ILogger<JokeProfiler> logger;
+    private readonly TimeProvider time;
 
     public JokeProfiler(
         IJokeProfileRepository profiles,
@@ -51,6 +56,20 @@ public sealed class JokeProfiler : IJokeProfiler
         IOptions<SimilarityOptions> options,
         SimilarityMetrics metrics,
         ILogger<JokeProfiler> logger)
+        : this(profiles, locks, jev, llmClientFactory, options, metrics, logger, TimeProvider.System)
+    {
+    }
+
+    /// <summary>For tests: a fake clock.</summary>
+    internal JokeProfiler(
+        IJokeProfileRepository profiles,
+        ISchedulerLockRepository locks,
+        IJevClient jev,
+        ILlmClientFactory llmClientFactory,
+        IOptions<SimilarityOptions> options,
+        SimilarityMetrics metrics,
+        ILogger<JokeProfiler> logger,
+        TimeProvider time)
     {
         this.profiles = profiles;
         this.locks = locks;
@@ -59,6 +78,7 @@ public sealed class JokeProfiler : IJokeProfiler
         this.options = options;
         this.metrics = metrics;
         this.logger = logger;
+        this.time = time;
     }
 
     /// <summary>What both methods see: the joke and, if it has one, why it's funny (as in the experiment).</summary>
@@ -74,22 +94,31 @@ public sealed class JokeProfiler : IJokeProfiler
         var settings = options.Value;
         if (!settings.Jev.Enabled && !settings.Embeddings.Enabled)
             return 0;
-        var now = DateTime.UtcNow;
+        var now = time.GetUtcNow().UtcDateTime;
         if (!await locks.TryAcquireAsync(LeaseKey, Holder, now, now + LeaseLength, cancellationToken))
         {
             logger.LogInformation("Another replica is profiling jokes; this tick leaves it to that one.");
             return 0;
         }
 
+        var stopAt = now + LeaseLength - StopBeforeLeaseEnds;
         var saved = 0;
         if (settings.Jev.Enabled)
-            saved += await ProfileWithJevAsync(settings, cancellationToken);
+            saved += await ProfileWithJevAsync(settings, stopAt, cancellationToken);
         if (settings.Embeddings.Enabled)
-            saved += await ProfileWithEmbeddingsAsync(settings, cancellationToken);
+            saved += await ProfileWithEmbeddingsAsync(settings, stopAt, cancellationToken);
         return saved;
     }
 
-    private async Task<int> ProfileWithJevAsync(SimilarityOptions settings, CancellationToken cancellationToken)
+    private bool PastDeadline(DateTime stopAt, string method)
+    {
+        if (time.GetUtcNow().UtcDateTime < stopAt)
+            return false;
+        logger.LogWarning("Profiling with {Method} ran close to the end of its lease; the rest waits for the next tick.", method);
+        return true;
+    }
+
+    private async Task<int> ProfileWithJevAsync(SimilarityOptions settings, DateTime stopAt, CancellationToken cancellationToken)
     {
         var version = JevVersion(settings);
         var jokes = await profiles.GetJokesWithoutAsync(JokeProfile.JevKind, version, settings.BatchSize, cancellationToken);
@@ -97,6 +126,8 @@ public sealed class JokeProfiler : IJokeProfiler
         // One at a time: a batch is a few dozen jokes at most, and Jev answers in well under a second.
         foreach (var joke in jokes)
         {
+            if (PastDeadline(stopAt, JokeProfile.JevKind))
+                break;
             float[] vector;
             try
             {
@@ -116,7 +147,7 @@ public sealed class JokeProfiler : IJokeProfiler
         return saved;
     }
 
-    private async Task<int> ProfileWithEmbeddingsAsync(SimilarityOptions settings, CancellationToken cancellationToken)
+    private async Task<int> ProfileWithEmbeddingsAsync(SimilarityOptions settings, DateTime stopAt, CancellationToken cancellationToken)
     {
         var version = EmbeddingVersion(settings);
         var jokes = await profiles.GetJokesWithoutAsync(JokeProfile.EmbeddingKind, version, settings.BatchSize, cancellationToken);
@@ -127,6 +158,8 @@ public sealed class JokeProfiler : IJokeProfiler
         var saved = 0;
         foreach (var batch in jokes.Chunk(EmbeddingBatch))
         {
+            if (PastDeadline(stopAt, JokeProfile.EmbeddingKind))
+                break;
             GeneratedEmbeddings<Embedding<float>> embeddings;
             try
             {
@@ -158,7 +191,7 @@ public sealed class JokeProfiler : IJokeProfiler
             Kind = kind,
             Version = version,
             Vector = ToBytes(vector),
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = time.GetUtcNow().UtcDateTime,
         }, cancellationToken);
         metrics.RecordProfile(kind, "saved");
     }
