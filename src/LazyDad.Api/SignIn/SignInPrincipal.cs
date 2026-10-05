@@ -23,7 +23,9 @@ public static class SignInPrincipal
         voterKey = null;
         provider = principal?.FindFirst(ProviderClaim)?.Value;
         var voter = principal?.FindFirst(VoterClaim)?.Value;
-        if (principal?.Identity?.IsAuthenticated != true || provider is null || !SignInProviders.IsKnown(provider) || voter is null)
+        // Exactly these two claims: a ticket carrying anything else (an account id, a name) isn't one this app wrote.
+        if (principal?.Identity?.IsAuthenticated != true || principal.Claims.Count() != 2
+            || provider is null || !SignInProviders.IsKnown(provider) || voter is null)
             return false;
 
         var key = new byte[voter.Length];

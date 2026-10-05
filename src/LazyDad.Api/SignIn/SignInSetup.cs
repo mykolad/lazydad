@@ -41,15 +41,17 @@ public static class SignInSetup
         services.AddSingleton<SignInMetrics>();
         services.AddSingleton<KeyRingCheck>();
 
-        // The key ring lives in the database, on its read-write connection (never a read-only replica: a key is used as
-        // soon as it's made), and is read about once a day. Its keys are encrypted with the Key Vault key; the validator
-        // makes that key required wherever sign-in is on, except in Development.
-        var dataProtection = services.AddDataProtection()
-            .SetApplicationName(ApplicationName)
-            .PersistKeysToDbContext<LazyDadDbContext>();
+        // With a Key Vault key, the key ring lives in the database, on its read-write connection (never a read-only
+        // replica: a key is used as soon as it's made), read about once a day, and each key is encrypted with the Key
+        // Vault key. The validator requires that key wherever sign-in is on, except in Development. Without it (a local
+        // run), the ring stays on this machine (ASP.NET's default): a local run often points at production's database,
+        // and must never add an unencrypted key to production's ring, nor need production's Key Vault key.
+        var dataProtection = services.AddDataProtection().SetApplicationName(ApplicationName);
         var keyRing = builder.Configuration.GetSection(KeyRingOptions.SectionName).Get<KeyRingOptions>() ?? new KeyRingOptions();
         if (keyRing.TryGetKeyId(out var keyId))
-            dataProtection.ProtectKeysWithAzureKeyVault(keyId, new DefaultAzureCredential());
+            dataProtection
+                .PersistKeysToDbContext<LazyDadDbContext>()
+                .ProtectKeysWithAzureKeyVault(keyId, new DefaultAzureCredential());
 
         services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
             .AddCookie(cookie =>

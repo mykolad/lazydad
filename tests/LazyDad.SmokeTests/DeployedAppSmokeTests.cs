@@ -148,9 +148,9 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
     [Fact]
     public async Task ThisRevision_SignInKeyRingWorks()
     {
-        // The new revision checks its key ring (database + Key Vault key) in the background at startup. "off" means sign-in
-        // isn't configured here (no pepper); "failed" means it is, and the key ring can't be used: a missing Key Vault
-        // role or a wrong DataProtection:KeyVaultKeyId.
+        // The new revision checks its key ring (database + Key Vault key) in the background at startup. Every environment
+        // Deploy Environment deploys has sign-in configured: "off" means its pepper setting is gone, "failed" that the key
+        // ring can't be used (a missing Key Vault role or a wrong DataProtection:KeyVaultKeyId).
         var keyRing = await target.PollAsync<JsonElement>(async () =>
         {
             var json = await target.GetJsonAsync("status");
@@ -159,7 +159,7 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
                 && signIn.GetProperty("keyRing").GetString() != "pending" ? signIn.GetProperty("keyRing") : null;
         }, SmokeTarget.ColdStartTimeout, $"revision '{target.ExpectedRevision}' to finish its key ring check");
 
-        Assert.Contains(keyRing.GetString(), new[] { "ok", "off" });
+        Assert.Equal("ok", keyRing.GetString());
     }
 
     [Fact]

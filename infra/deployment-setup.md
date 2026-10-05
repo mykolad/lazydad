@@ -954,7 +954,7 @@ az containerapp update -g $RG -n $APP --set-env-vars `
 A pepper that isn't base64 of at least 32 bytes, or sign-in without the key id, stops the new revision at startup (the
 old one keeps serving). Each start then checks the key ring in the background (one value encrypted and decrypted, which
 the first time also makes its first key): `/status` shows `signIn.keyRing` as `ok`, or `failed` when the app can't use
-its key (a missing role, a wrong key id), and the smoke tests fail on `failed`. Without a pepper, sign-in is off (`off`).
+its key (a missing role, a wrong key id). Without a pepper, sign-in is off (`off`). The smoke tests require `ok`.
 
 ## 8. Database users
 

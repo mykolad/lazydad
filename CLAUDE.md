@@ -93,10 +93,11 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
     app, `VoterKeyPepper` / `VoterKeyPepperStaging`; runbook section 7, step 6). Empty = sign-in off. Never store or log
     the account id, a claim or a voter key;
   - the cookie (`SignInSetup`): `__Host-lazydad`, HttpOnly, Secure, `SameSite=Lax`, a session cookie for now, holding
-    only the voter key and the provider (`SignInPrincipal`; any other cookie is rejected). Its key ring is in the database
-    (`DataProtectionKeys`, application name `lazydad`, so both production apps share it; always the read-write
-    connection), each key wrapped with a Key Vault key (`DataProtection:KeyVaultKeyId`, versionless; required wherever
-    sign-in is on, except Development). `KeyRingCheck` proves the ring at startup in the background (`/status`
+    exactly the voter key and the provider (`SignInPrincipal`; any other cookie is rejected). With a Key Vault key
+    (`DataProtection:KeyVaultKeyId`, versionless; required wherever sign-in is on, except Development) its key ring is in
+    the database (`DataProtectionKeys`, application name `lazydad`, so both production apps share it; always the
+    read-write connection), each key wrapped with that key. Without one (a local run) the ring stays on the machine, so a
+    local run against production's database never adds an unencrypted key to production's ring. `KeyRingCheck` proves the ring at startup in the background (`/status`
     `signIn.keyRing`: `off`, `pending`, `ok`, `failed`);
   - `SignInController`: `GET /auth/signin/{provider}?returnUrl=` (local URLs only; 404 for a provider that isn't
     enabled), `POST /auth/signout`, `GET /me` → `{signedIn, provider}`, all `no-store`. Providers are authentication
@@ -170,8 +171,9 @@ dotnet user-secrets set "LlmProviders:AzureOpenAI:Endpoint"  "<endpoint>"       
 
 Azure SQL firewall must allow the local machine's public IP.
 
-To try sign-in locally, give it a pepper of its own (any 32 random bytes; never production's). In Development the key
-ring may stay unprotected, and the `dev` provider signs you in at `/auth/signin/dev?account=alice`:
+To try sign-in locally, give it a pepper of its own (any 32 random bytes; never production's). Leave
+`DataProtection:KeyVaultKeyId` unset: the key ring then stays on your machine, out of the database. The `dev` provider
+signs you in at `/auth/signin/dev?account=alice`:
 
 ```
 dotnet user-secrets set "SignIn:VoterKeyPepper" "$([Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)))" --project src/LazyDad.Api
@@ -352,7 +354,7 @@ joke on `/status` as soon as it's saved; DB rows alone could come from the drain
 `/jokes`, that
 the leaderboard is populated with valid ranks, that `app.js`/`app.css`, `/jokes/feed` and `/jokes/summary`
 are served, that a joke's page (`/j/<id>`) carries its link-preview tags and `/jokes/<id>/similar` answers, that the vote endpoint answers (with a no-op vote, so it never changes the counts), that `/me` answers signed out
-(and `no-store`), and that the new revision's key ring check isn't `failed` (`ok`, or `off` without sign-in).
+(and `no-store`), and that the new revision's key ring check is `ok` (every deployed app has sign-in configured, so `off` fails too).
 To run them against staging locally:
 
 ```

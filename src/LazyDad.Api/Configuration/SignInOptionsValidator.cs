@@ -29,7 +29,7 @@ public class SignInOptionsValidator : IValidateOptions<SignInOptions>
 
         var keyId = keyRing.Value.KeyVaultKeyId;
         if (keyId.Length > 0 && !keyRing.Value.TryGetKeyId(out _))
-            errors.Add($"{KeyRingOptions.SectionName}:KeyVaultKeyId must be a Key Vault key's https URL (…/keys/<name>), was '{keyId}'.");
+            errors.Add($"{KeyRingOptions.SectionName}:KeyVaultKeyId must be a Key Vault key's https URL without a version (…/keys/<name>), was '{keyId}'.");
         else if (keyId.Length == 0 && !environment.IsDevelopment())
             errors.Add($"Sign-in is on, so {KeyRingOptions.SectionName}:KeyVaultKeyId must name the Key Vault key that protects " +
                 "the cookies' key ring (only Development may leave it unprotected).");

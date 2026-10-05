@@ -16,9 +16,10 @@ public class KeyRingOptions
     /// </summary>
     public string KeyVaultKeyId { get; set; } = string.Empty;
 
+    /// <summary>An https URL whose path is exactly <c>/keys/&lt;name&gt;</c>: no version, so it follows the key's rotation.</summary>
     public bool TryGetKeyId(out Uri keyId)
         => Uri.TryCreate(KeyVaultKeyId, UriKind.Absolute, out keyId!)
             && keyId.Scheme == Uri.UriSchemeHttps
-            && keyId.AbsolutePath.StartsWith("/keys/", StringComparison.Ordinal)
-            && keyId.AbsolutePath.Length > "/keys/".Length;
+            && keyId.Query.Length == 0 && keyId.Fragment.Length == 0
+            && keyId.AbsolutePath.Split('/') is ["", "keys", { Length: > 0 }];
 }

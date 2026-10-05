@@ -7,6 +7,7 @@ using LazyDad.Data;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -41,6 +42,11 @@ public sealed class SignInTests : IAsyncDisposable
     }
 
     private async Task<WebApplication> StartAsync(string environment, string pepper, string keyId)
+        => await StartAsync(environment, pepper, keyId, keyRingInDatabase: false);
+
+    // keyRingInDatabase: as production keeps it (a Key Vault key id configured), but with the keys left unencrypted, so
+    // the test needs no Key Vault.
+    private async Task<WebApplication> StartAsync(string environment, string pepper, string keyId, bool keyRingInDatabase)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = environment });
         builder.WebHost.UseUrls("http://127.0.0.1:0");
@@ -53,6 +59,8 @@ public sealed class SignInTests : IAsyncDisposable
         builder.Services.AddDbContext<LazyDadDbContext>(database.Configure);
         builder.Services.AddControllers().AddApplicationPart(typeof(SignInController).Assembly);
         builder.AddSignIn();
+        if (keyRingInDatabase)
+            builder.Services.PostConfigure<KeyManagementOptions>(options => options.XmlEncryptor = null);
         var app = builder.Build();
         apps.Add(app);
         app.Services.GetRequiredService<SignInMetrics>();
@@ -63,6 +71,9 @@ public sealed class SignInTests : IAsyncDisposable
     }
 
     private Task<WebApplication> StartDevelopmentAsync() => StartAsync(Environments.Development, Pepper, "");
+
+    private Task<WebApplication> StartWithTheKeyRingInTheDatabaseAsync()
+        => StartAsync(Environments.Development, Pepper, KeyId, keyRingInDatabase: true);
 
     private HttpClient Client(WebApplication app)
     {
@@ -230,14 +241,25 @@ public sealed class SignInTests : IAsyncDisposable
     public async Task ASignInOnOneApp_CountsOnAnotherAppWithTheSameDatabase()
     {
         // The two production apps: a sign-in that starts in one region can land in the other.
-        var first = await StartDevelopmentAsync();
-        var second = await StartDevelopmentAsync();
+        var first = await StartWithTheKeyRingInTheDatabaseAsync();
+        var second = await StartWithTheKeyRingInTheDatabaseAsync();
 
         var cookie = await SignInAsync(Client(first), "alice");
 
         Assert.True((await MeAsync(Client(second), cookie)).GetProperty("signedIn").GetBoolean());
         await using var context = database.CreateContext();
         Assert.NotEmpty(await context.DataProtectionKeys.ToListAsync());
+    }
+
+    [Fact]
+    public async Task ALocalRunWithoutAKeyVaultKey_KeepsItsKeyRingOutOfTheDatabase()
+    {
+        // A local run often points at production's database: its unencrypted keys must never join production's ring.
+        var cookie = await SignInAsync(Client(await StartDevelopmentAsync()), "alice");
+
+        Assert.NotEmpty(cookie);
+        await using var context = database.CreateContext();
+        Assert.Empty(await context.DataProtectionKeys.ToListAsync());
     }
 
     [Fact]
@@ -251,7 +273,16 @@ public sealed class SignInTests : IAsyncDisposable
                 CookieAuthenticationDefaults.AuthenticationScheme)),
             CookieAuthenticationDefaults.AuthenticationScheme));
 
+        // The right two claims, and one more: not a cookie this app writes either.
+        var voterKey = Convert.ToBase64String(app.Services.GetRequiredService<VoterKeys>().For(SignInProviders.Development, "alice"));
+        var padded = Tickets(app).Protect(new AuthenticationTicket(
+            new(new System.Security.Claims.ClaimsIdentity(
+                [new(SignInPrincipal.VoterClaim, voterKey), new(SignInPrincipal.ProviderClaim, "dev"), new("email", "alice@example.com")],
+                CookieAuthenticationDefaults.AuthenticationScheme)),
+            CookieAuthenticationDefaults.AuthenticationScheme));
+
         Assert.False((await MeAsync(client, foreign)).GetProperty("signedIn").GetBoolean());
+        Assert.False((await MeAsync(client, padded)).GetProperty("signedIn").GetBoolean());
         Assert.False((await MeAsync(client, "not-a-cookie")).GetProperty("signedIn").GetBoolean());
     }
 

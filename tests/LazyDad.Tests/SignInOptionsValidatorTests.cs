@@ -44,6 +44,8 @@ public class SignInOptionsValidatorTests
     [InlineData("http://lazydad-kv.vault.azure.net/keys/DataProtection")]
     [InlineData("https://lazydad-kv.vault.azure.net/secrets/DataProtection")]
     [InlineData("https://lazydad-kv.vault.azure.net/keys/")]
+    [InlineData("https://lazydad-kv.vault.azure.net/keys/DataProtection/0123456789abcdef0123456789abcdef")]
+    [InlineData("https://lazydad-kv.vault.azure.net/keys/DataProtection?api-version=7.4")]
     public void Validate_RejectsAKeyIdThatIsNotAKeyVaultKey(string keyId)
         => Assert.Contains(Validate(Pepper, keyId, Environments.Development).Failures!, f => f.Contains("KeyVaultKeyId"));
 }

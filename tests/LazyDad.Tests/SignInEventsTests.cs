@@ -98,6 +98,9 @@ public sealed class SignInEventsTests : IDisposable
         Assert.Equal(SignInProviders.GitHub, provider);
 
         Assert.False(SignInPrincipal.TryRead(SignInPrincipal.Create("x", key), out _, out _));
+        var padded = SignInPrincipal.Create(SignInProviders.GitHub, key);
+        ((ClaimsIdentity)padded.Identity!).AddClaim(new Claim("email", "alice@example.com"));
+        Assert.False(SignInPrincipal.TryRead(padded, out _, out _));
         Assert.False(SignInPrincipal.TryRead(SignInPrincipal.Create(SignInProviders.GitHub, new byte[16]), out _, out _));
         Assert.False(SignInPrincipal.TryRead(new ClaimsPrincipal(new ClaimsIdentity(SignInPrincipal.Create(SignInProviders.GitHub, key).Claims)), out _, out _));
         Assert.False(SignInPrincipal.TryRead(null, out _, out _));
