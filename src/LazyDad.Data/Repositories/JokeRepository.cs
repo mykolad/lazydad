@@ -84,34 +84,35 @@ public class JokeRepository : IJokeRepository
 
         var groupIds = groups.SelectMany(g => g.Select(j => j.Id)).ToList();
         var top = (await context.TopJokes.Where(t => groupIds.Contains(t.JokeId)).Select(t => t.JokeId).ToListAsync(cancellationToken)).ToHashSet();
-        var copies = groups
-            .SelectMany(g => g
+        var removed = new List<int>();
+        foreach (var group in groups)
+        {
+            var ranked = group
                 .OrderByDescending(j => top.Contains(j.Id))
                 .ThenByDescending(j => j.Votes)
                 .ThenBy(j => j.GeneratedAt)
                 .ThenBy(j => j.Id)
-                .Skip(1))
+                .ToList();
+            var keeper = ranked[0];
             // Deleting a Top 3 joke would delete its slot too (cascade): a second copy in the Top 3 stays.
-            .Where(j => !top.Contains(j.Id))
-            .ToList();
-        if (copies.Count == 0)
-            return [];
-
-        // What was read is checked again in the delete itself, so a change since then spares the copy: another replica's
-        // tick may have promoted it to the Top 3 (deleting it would delete its slot), or a vote may have made it the most
-        // voted. So each copy goes only while its vote count is still the one read (one statement per count; almost always
-        // just 0). Profiles and votes are deleted with them (cascade).
-        foreach (var sameVotes in copies.GroupBy(c => c.Votes))
-        {
-            var ids = sameVotes.Select(c => c.Id).ToList();
-            var votes = sameVotes.Key;
-            await context.Jokes
-                .Where(j => ids.Contains(j.Id) && j.Up + j.Down == votes && !context.TopJokes.Any(t => t.JokeId == j.Id))
-                .ExecuteDeleteAsync(cancellationToken);
+            foreach (var copy in ranked.Skip(1).Where(j => !top.Contains(j.Id)))
+            {
+                // One statement re-checks what the choice was made from, so a change since then spares the copy instead of
+                // reversing the choice: the copy is still not in the Top 3 (another replica's tick may have promoted it),
+                // its vote count and the keeper's are still the ones read (a vote may have made it the most-voted, or the
+                // keeper lost its votes), and the keeper still exists. Its profiles and votes go with it (cascade).
+                var (keeperId, keeperVotes, copyVotes) = (keeper.Id, keeper.Votes, copy.Votes);
+                var deleted = await context.Jokes
+                    .Where(j => j.Id == copy.Id
+                        && j.Up + j.Down == copyVotes
+                        && !context.TopJokes.Any(t => t.JokeId == j.Id)
+                        && context.Jokes.Any(k => k.Id == keeperId && k.Up + k.Down == keeperVotes))
+                    .ExecuteDeleteAsync(cancellationToken);
+                if (deleted > 0)
+                    removed.Add(copy.Id);
+            }
         }
-        var copyIds = copies.Select(c => c.Id).ToList();
-        var kept = await context.Jokes.Where(j => copyIds.Contains(j.Id)).Select(j => j.Id).ToListAsync(cancellationToken);
-        return copyIds.Except(kept).ToList();
+        return removed;
     }
 
     public async Task<List<int>> GetExistingIdsAsync(IReadOnlyCollection<int> ids, CancellationToken cancellationToken)

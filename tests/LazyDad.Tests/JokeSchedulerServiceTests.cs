@@ -831,7 +831,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Tick_LooksAtEveryJokeOnTheProcesssFirstCleanup_ThenAtTheLastDays()
+    public async Task Tick_LooksAtEveryJokeOnTheFirstCleanupOfTheProcess_ThenAtTheLastDays()
     {
         SetupModel("fast", () => Reply("Жарт"));
         var since = new List<DateTime?>();

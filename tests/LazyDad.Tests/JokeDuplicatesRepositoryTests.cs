@@ -188,6 +188,28 @@ public sealed class JokeDuplicatesRepositoryTests : IDisposable
         Assert.Equal([oldest, voted], RemainingIds());
     }
 
+    [Fact]
+    public async Task RemoveDuplicatesAsync_SparesACopyWhenTheKeeperLostItsVotesWhileItRan()
+    {
+        // The later copy has a vote, the keeper two. Before the delete runs, the keeper's votes are taken back: the copy
+        // is now the most-voted, so it must not go (with its vote).
+        var keeper = Add("Чому кава стала вчителькою? Бо бадьорила клас!", 10, up: 2);
+        var copy = Add("Чому кава стала вчителькою? Бо бадьорила клас.", 20, up: 1);
+        var unvote = new BeforeDelete(() =>
+        {
+            using var other = CreateContext();
+            other.Jokes.Where(j => j.Id == keeper).ExecuteUpdate(s => s.SetProperty(j => j.Up, 0));
+        });
+
+        IReadOnlyList<int> removed;
+        await using (var context = database.CreateContext([unvote]))
+            removed = await new JokeRepository(context).RemoveDuplicatesAsync("Ukrainian", null, CancellationToken.None);
+
+        Assert.True(unvote.Ran);
+        Assert.Empty(removed);
+        Assert.Equal([keeper, copy], RemainingIds());
+    }
+
     private sealed class BeforeDelete(Action action) : DbCommandInterceptor
     {
         public bool Ran { get; private set; }
