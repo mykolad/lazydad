@@ -806,4 +806,27 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         jokeRepositoryMock.Verify(r => r.RemoveDuplicatesAsync("Ukrainian", It.IsAny<CancellationToken>()), Times.Once);
         lockRepositoryMock.Verify(l => l.ReleaseAsync("duplicates:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    [Fact]
+    public async Task Tick_WhenReleasingTheDuplicatesLeaseFails_StillLeavesOutTheDeletedCopies()
+    {
+        SetupModel("fast", () => Reply("Жарт А"));
+        // Answers after "fast", so its joke is saved second (id 2), and the cleanup deletes it.
+        SetupModel("slow", async () => { await Task.Delay(300); return await Reply("Жарт А."); });
+        jokeRepositoryMock
+            .Setup(r => r.RemoveDuplicatesAsync("Ukrainian", It.IsAny<CancellationToken>()))
+            .ReturnsAsync([2]);
+        lockRepositoryMock
+            .Setup(l => l.ReleaseAsync("duplicates:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("The database is busy."));
+        var scheduler = CreateScheduler(Ukrainian("fast", "slow"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        var tick = Assert.Single(status.LastTicks);
+        Assert.True(tick.Succeeded);
+        Assert.Equal([1], tick.Jokes.Select(j => j.Id));
+    }
 }

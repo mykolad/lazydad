@@ -251,7 +251,16 @@ public class JokeSchedulerService : BackgroundService
             }
             finally
             {
-                await locks.ReleaseAsync(lockKey, instanceId, DateTime.UtcNow, CancellationToken.None);
+                // Best-effort: a failure here mustn't lose the ids above (the judge must not see deleted jokes), and the
+                // lease runs out on its own in DuplicatesLeaseLength.
+                try
+                {
+                    await locks.ReleaseAsync(lockKey, instanceId, DateTime.UtcNow, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Couldn't release the '{LockKey}' lease; it runs out on its own.", lockKey);
+                }
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
