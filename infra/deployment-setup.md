@@ -61,7 +61,8 @@ What it all looks like at the end:
 ## Before you start
 
 You need the Azure CLI (`az login` as an Owner of the subscription), the GitHub CLI (`gh auth login` as the repo's
-owner) and a clone of the repository: run everything from its root.
+owner), `jq` for the bash blocks (on Windows: `winget install jqlang.jq`) and a
+clone of the repository: run everything from its root.
 
 Each command block is bash (Git Bash on Windows). Under it, a collapsed **PowerShell 7** version does the same, or a
 note says the bash commands run unchanged. Both use the same variable names, except `$PID` and `$ENV`, which
@@ -870,6 +871,56 @@ The next tick profiles its own jokes, then older ones, up to `Similarity:BatchSi
 both profiles (about a day for 1,200 jokes); each is asked once (about $0.0002 a joke with Jev, a fraction of that for its embedding). The
 dashboard's "Similar jokes" row shows the requests, the credits left and which method ranked the suggestions; the
 alerts `LazyDadJevCreditsLow` and `LazyDadProfileFailed` (section 11) say when to top up or look.
+
+**6. Health probes.** Traffic Manager checks each prod app's `/healthz` from outside and leaves out a region that stops
+answering, but only the platform can restart a replica that's stuck (running, no longer answering). `/healthz` doesn't
+touch the database, so the probes only ask "is the process alive and serving":
+
+| Probe | What it does | Setting |
+|---|---|---|
+| Startup | gives a new replica time to start before the others apply | every 10 s, up to 30 failures (5 minutes) |
+| Liveness | restarts the container when it stops answering | every 30 s, after 3 failures in a row (~1.5 minutes) |
+| Readiness | sends traffic only to a replica that answers | every 10 s, after 3 failures |
+
+None of them checks the database: both regions share it, so a database blip would take both apps out, where today the
+read cache still serves. Every restart runs a startup tick (an extra batch of jokes), which is why liveness waits for 3
+failures. The CLI has no flags for probes, so this patches the app's container definition through the API (a new
+revision, keeping every setting). Staging first; then each prod app on its own, never while a deploy runs (Azure
+refuses a second change to an app mid-operation). Deploys change only the image, so the probes stay.
+
+```bash
+probes='[
+  {"type": "Startup",   "httpGet": {"path": "/healthz", "port": 8080}, "periodSeconds": 10, "timeoutSeconds": 5, "failureThreshold": 30},
+  {"type": "Liveness",  "httpGet": {"path": "/healthz", "port": 8080}, "periodSeconds": 30, "timeoutSeconds": 5, "failureThreshold": 3},
+  {"type": "Readiness", "httpGet": {"path": "/healthz", "port": 8080}, "periodSeconds": 10, "timeoutSeconds": 5, "failureThreshold": 3}]'
+APP=lazydad-app-staging   # then lazydad-app, then lazydad-app-swedencentral
+URL="https://management.azure.com$(az containerapp show -g $RG -n $APP --query id -o tsv)?api-version=2024-03-01"
+az rest --method get --url "$URL" \
+  | jq --argjson probes "$probes" '{properties: {template: {containers: [.properties.template.containers[0] + {probes: $probes}]}}}' > probes.json
+az rest --method patch --url "$URL" --body @probes.json -o none
+az containerapp show -g $RG -n $APP --query "properties.template.containers[0].probes[].type" -o tsv
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$probes = @(
+  @{ type = 'Startup';   httpGet = @{ path = '/healthz'; port = 8080 }; periodSeconds = 10; timeoutSeconds = 5; failureThreshold = 30 },
+  @{ type = 'Liveness';  httpGet = @{ path = '/healthz'; port = 8080 }; periodSeconds = 30; timeoutSeconds = 5; failureThreshold = 3 },
+  @{ type = 'Readiness'; httpGet = @{ path = '/healthz'; port = 8080 }; periodSeconds = 10; timeoutSeconds = 5; failureThreshold = 3 })
+$APP = 'lazydad-app-staging'   # then lazydad-app, then lazydad-app-swedencentral
+$URL = "https://management.azure.com$(az containerapp show -g $RG -n $APP --query id -o tsv)?api-version=2024-03-01"
+$container = (az rest --method get --url $URL | ConvertFrom-Json).properties.template.containers[0]
+$container | Add-Member -NotePropertyName probes -NotePropertyValue $probes -Force
+@{ properties = @{ template = @{ containers = @($container) } } } | ConvertTo-Json -Depth 20 | Set-Content probes.json
+az rest --method patch --url $URL --body '@probes.json' -o none
+az containerapp show -g $RG -n $APP --query 'properties.template.containers[0].probes[].type' -o tsv
+```
+
+</details>
+
+The new revision should turn `Healthy` within a minute (`az containerapp revision list -g $RG -n $APP -o table`); the
+environment's system logs (Log Analytics, `ContainerAppSystemLogs_CL`) record any probe failure.
 
 ## 8. Database users
 

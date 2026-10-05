@@ -195,8 +195,9 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
   only knew the key.
 - **Container Apps** (Consumption, 0.25 vCPU / 0.5 GiB each, the smallest size), production in **two regions**:
   - `lazydad-app` (prod, environment `lazydad-cae`, West Europe) and `lazydad-app-swedencentral` (prod, environment
-    `lazydad-cae-swedencentral`, Sweden Central, next to the database): **exactly one replica each** (min = max = 1), no
-    health probes yet. Same image, same settings, same database; the scheduler lease makes one of them run each batch
+    `lazydad-cae-swedencentral`, Sweden Central, next to the database): **exactly one replica each** (min = max = 1),
+    with startup, liveness and readiness probes on `/healthz` (no database check: both regions share the database;
+    runbook section 7, step 6), like staging. Same image, same settings, same database; the scheduler lease makes one of them run each batch
     (each app's startup tick still runs). The vote rate limit is per replica.
     Public address: **`lazydad.fyi`**, through Cloudflare's proxy (Free plan: DDoS protection, bot settings, a rate-limit
     rule on votes) to **Azure Traffic Manager** (`lazydad-traffic`, weighted 1:1, HTTPS health checks on each app's
