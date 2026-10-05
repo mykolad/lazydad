@@ -58,7 +58,8 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
 - **Similar jokes** (`/jokes/{id}/similar`): ranked from stored profiles (`JokeProfiles` table, one row per joke and
   kind, with the version that made it), never by a call at request time. `JokeProfiler` asks for each joke's profile
   once, after its tick (the tick's own jokes, then older ones without one, up to `Similarity:BatchSize`, 200, a tick,
-  so the backfill is gradual), one replica at a time (its own `profiles` lease in `SchedulerLocks`): **Jev** (`JevClient`, jevtypesafeai.com, the pinned `Similarity:Jev:Model`; the topic and the kind of
+  so the backfill is gradual), one replica at a time (its own `profiles` lease in `SchedulerLocks`, 30 minutes, released when the batch is done;
+  no new call starts in its last 5 minutes): **Jev** (`JevClient`, jevtypesafeai.com, the pinned `Similarity:Jev:Model`; the topic and the kind of
   wordplay as probabilities, the questions in `JevQuestions`) and an **embedding** (`text-embedding-3-small`, 512
   dimensions, through `LlmClientFactory`). `JokeSimilarity` ranks by Jev (cosine, wordplay at half weight), falls back
   to embeddings for a joke without a Jev profile, and to shared words without either. Jev won the blind test in
