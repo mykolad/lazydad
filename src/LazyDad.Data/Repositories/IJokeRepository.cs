@@ -15,6 +15,8 @@ public interface IJokeRepository
     /// Deletes the later copies of each joke in <paramref name="language"/> (see <see cref="JokeText"/>), keeping one per
     /// group: the copy in the Top 3, else the most-voted, else the oldest. A Top 3 joke is never deleted, so a group with
     /// several copies in the Top 3 keeps them all. Their profiles and votes go with them. Returns the ids it deleted.
+    /// The keeper is chosen from what it reads; a change after that (a vote, a Top 3 promotion) only ever spares a copy,
+    /// so at worst an identical copy stays instead of the other. The caller runs one cleanup per language at a time.
     /// </summary>
     Task<IReadOnlyList<int>> RemoveDuplicatesAsync(string language, CancellationToken cancellationToken);
     /// <summary>Which of <paramref name="ids"/> are still jokes.</summary>
