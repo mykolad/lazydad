@@ -202,11 +202,9 @@ public sealed class VoteRepositoryTests : IDisposable
         await SetAsync(otherJokeId, Alice, -1);
         await SetAsync(jokeId, Bob, 1);
 
-        int deleted;
         await using (var context = database.CreateContext())
-            deleted = await new VoteRepository(context).DeleteAllAsync(Alice, CancellationToken.None);
+            await new VoteRepository(context).DeleteAllAsync(Alice, CancellationToken.None);
 
-        Assert.Equal(2, deleted);
         await AssertStateAsync(jokeId, 1, 0, [1]);
         await AssertStateAsync(otherJokeId, 0, 0, []);
     }
@@ -217,7 +215,7 @@ public sealed class VoteRepositoryTests : IDisposable
         await SetAsync(jokeId, Bob, -1);
 
         await using (var context = database.CreateContext())
-            Assert.Equal(0, await new VoteRepository(context).DeleteAllAsync(Alice, CancellationToken.None));
+            await new VoteRepository(context).DeleteAllAsync(Alice, CancellationToken.None);
 
         await AssertStateAsync(jokeId, 0, 1, [-1]);
     }

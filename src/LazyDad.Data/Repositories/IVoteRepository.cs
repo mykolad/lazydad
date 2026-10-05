@@ -15,6 +15,9 @@ public interface IVoteRepository
     /// <summary>The voter's votes on these jokes, by joke id (jokes without a vote are left out).</summary>
     Task<IReadOnlyDictionary<int, int>> GetAsync(byte[] voterKey, IReadOnlyCollection<int> jokeIds, CancellationToken cancellationToken);
 
-    /// <summary>Deletes all of the voter's votes and takes them off the jokes' counts. Returns how many there were.</summary>
-    Task<int> DeleteAllAsync(byte[] voterKey, CancellationToken cancellationToken);
+    /// <summary>
+    /// Deletes all of the voter's votes and takes them off the jokes' counts. Returns no count: a retry after a commit
+    /// whose answer was lost finds nothing left and would report 0.
+    /// </summary>
+    Task DeleteAllAsync(byte[] voterKey, CancellationToken cancellationToken);
 }

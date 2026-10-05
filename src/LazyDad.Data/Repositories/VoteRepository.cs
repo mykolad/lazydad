@@ -123,14 +123,14 @@ public class VoteRepository : IVoteRepository
             .ToDictionaryAsync(v => v.JokeId, v => (int)v.Value, cancellationToken);
     }
 
-    public async Task<int> DeleteAllAsync(byte[] voterKey, CancellationToken cancellationToken)
+    public async Task DeleteAllAsync(byte[] voterKey, CancellationToken cancellationToken)
     {
         CheckVoterKey(voterKey);
 
         // Serializable: the voter's own vote that lands meanwhile waits until this commits (and then counts on its own),
         // instead of being deleted after the counts were taken. Rare, so the stricter locks cost nothing that matters.
         var strategy = context.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async token =>
+        await strategy.ExecuteAsync(async token =>
         {
             await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.Serializable, token);
             var votes = context.Votes.Where(v => v.VoterKey == voterKey);
@@ -140,9 +140,8 @@ public class VoteRepository : IVoteRepository
             await context.Jokes
                 .Where(j => votes.Any(v => v.JokeId == j.Id && v.Value == -1))
                 .ExecuteUpdateAsync(setters => setters.SetProperty(j => j.Down, j => j.Down > 0 ? j.Down - 1 : 0), token);
-            var deleted = await votes.ExecuteDeleteAsync(token);
+            await votes.ExecuteDeleteAsync(token);
             await transaction.CommitAsync(token);
-            return deleted;
         }, cancellationToken);
     }
 
