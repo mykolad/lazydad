@@ -1,6 +1,7 @@
 using LazyDad.Api.Configuration;
 using LazyDad.Api.Networking;
 using LazyDad.Api.Services;
+using LazyDad.Api.SignIn;
 using LazyDad.Api.Telemetry;
 using LazyDad.Data;
 using LazyDad.Data.Repositories;
@@ -48,6 +49,15 @@ builder.Services.AddScoped<IJokeRepository, JokeRepository>();
 builder.Services.AddScoped<ITopJokeRepository, TopJokeRepository>();
 builder.Services.AddScoped<ISchedulerLockRepository, SchedulerLockRepository>();
 builder.Services.AddScoped<IJokeProfileRepository, JokeProfileRepository>();
+builder.Services.AddScoped<IVoteRepository, VoteRepository>();
+
+// Sign-in for voting (#24): a vote belongs to a voter key, a keyed hash of the account (see VoterKeys). Off while
+// SignIn:VoterKeyPepper is empty.
+builder.Services.AddOptions<SignInOptions>()
+    .Bind(builder.Configuration.GetSection(SignInOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<SignInOptions>, SignInOptionsValidator>();
+builder.Services.AddSingleton<VoterKeys>();
 
 // "You might also like": Jev profiles, embeddings as the fallback (see JokeProfiler, JokeSimilarity).
 builder.Services.AddOptions<SimilarityOptions>()
