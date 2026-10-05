@@ -314,8 +314,20 @@ jobs:
       - name: Remove this runner from the app's IP restrictions
         if: ${{ always() && steps.ingress.outputs.rule != '' }}
         run: |
-          az containerapp ingress access-restriction remove -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
-            --rule-name "${{ steps.ingress.outputs.rule }}" -o none
+          # Another change to the app can be under way (a setting, a restart; e.g. its owner's az containerapp update):
+          # Azure then refuses with ContainerAppOperationInProgress. Keep trying for 10 minutes rather than leave this
+          # runner's address admitted; a rule that's already gone counts as removed.
+          rule="${{ steps.ingress.outputs.rule }}"
+          for attempt in $(seq 1 30); do
+            if names=$(az containerapp ingress access-restriction list -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" --query "[].name" -o tsv); then
+              grep -qxF "$rule" <<< "$names" || exit 0
+              az containerapp ingress access-restriction remove -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" --rule-name "$rule" -o none && exit 0
+            fi
+            echo "::warning::Couldn't remove $rule yet (try $attempt of 30); trying again in 20 s."
+            sleep 20
+          done
+          echo "::error::Couldn't remove $rule from ${{ inputs.app-name }}'s IP restrictions. Remove it by hand: az containerapp ingress access-restriction remove -n ${{ inputs.app-name }} -g $RESOURCE_GROUP --rule-name $rule"
+          exit 1
 
       - name: Summary
         if: ${{ always() }}
