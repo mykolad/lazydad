@@ -16,6 +16,10 @@ public class SignInController : ControllerBase
     /// <summary>The Development provider's account when none is given (<c>?account=</c> picks another, to vote as several readers).</summary>
     public const string DevelopmentAccount = "dev";
 
+    /// <summary>The header the page's own requests that change something send (see <see cref="SignOutOfSite"/>).</summary>
+    public const string RequestHeader = "X-LazyDad";
+    public const string RequestHeaderValue = "1";
+
     private readonly EnabledSignInProviders providers;
     private readonly VoterKeys voterKeys;
     private readonly SignInMetrics metrics;
@@ -44,7 +48,6 @@ public class SignInController : ControllerBase
             var principal = SignInPrincipal.Create(provider,
                 voterKeys.For(provider, string.IsNullOrWhiteSpace(account) ? DevelopmentAccount : account));
             await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal);
-            metrics.Record(provider, SignInMetrics.Completed);
             return LocalRedirect(target);
         }
 
@@ -52,9 +55,16 @@ public class SignInController : ControllerBase
         return Challenge(new AuthenticationProperties { RedirectUri = target }, provider);
     }
 
+    /// <summary>
+    /// Only from the page's own script, which sends <see cref="RequestHeader"/>: another site's form can't add a header,
+    /// and its script would need a CORS permission this site never gives. Without the check, any site could sign a
+    /// reader out (the reader's cookie isn't sent cross-site, but the answer's expired cookie would still replace it).
+    /// </summary>
     [HttpPost("auth/signout")]
     public async Task<IActionResult> SignOutOfSite()
     {
+        if (Request.Headers[RequestHeader] != RequestHeaderValue)
+            return StatusCode(StatusCodes.Status403Forbidden);
         await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
         return NoContent();
     }

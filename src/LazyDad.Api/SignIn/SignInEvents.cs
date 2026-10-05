@@ -30,8 +30,8 @@ public static class SignInEvents
             return Task.CompletedTask;
         }
 
+        // Counted as completed once the cookie is written (the cookie scheme's OnSignedIn), not here.
         context.Principal = SignInPrincipal.Create(provider, services.GetRequiredService<VoterKeys>().For(provider, id));
-        metrics.Record(provider, SignInMetrics.Completed);
         return Task.CompletedTask;
     }
 

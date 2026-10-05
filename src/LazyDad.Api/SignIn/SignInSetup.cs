@@ -84,6 +84,13 @@ public static class SignInSetup
                         context.RejectPrincipal();
                     return Task.CompletedTask;
                 };
+                // A sign-in is complete once its cookie is written: for the dev provider and every remote one alike.
+                cookie.Events.OnSignedIn = context =>
+                {
+                    if (SignInPrincipal.TryRead(context.Principal, out _, out var provider))
+                        context.HttpContext.RequestServices.GetRequiredService<SignInMetrics>().Record(provider, SignInMetrics.Completed);
+                    return Task.CompletedTask;
+                };
             });
     }
 }

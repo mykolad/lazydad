@@ -60,7 +60,8 @@ public sealed class SignInEventsTests : IDisposable
             [(SignInPrincipal.VoterClaim, Convert.ToBase64String(expectedKey)), (SignInPrincipal.ProviderClaim, SignInProviders.Microsoft)],
             context.Principal!.Claims.Select(c => (c.Type, c.Value)));
         Assert.Null(context.Result);
-        Assert.Equal([SignInMetrics.Completed], Counted());
+        // Not counted yet: "completed" comes once the cookie is written (the cookie scheme's OnSignedIn, see SignInTests).
+        Assert.Empty(Counted());
     }
 
     [Fact]

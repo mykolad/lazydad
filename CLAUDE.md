@@ -71,7 +71,8 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
 - **API for the page:** `GET /jokes/feed?sort=new|top&limit=(≤ 50)[&after=<next>]` → `{total, items, next}` (keyset cursor, so new jokes don't shift pages);
   `GET /jokes/summary` → `{count, nextBatchAt}`; `POST /jokes/{id}/vote {value, previous}` → `{up, down}`;
   `GET /jokes/{id}` (cached like the feed); `GET /jokes/{id}/similar?limit=(≤ 12)` → the most similar jokes;
-  `GET /me` → `{signedIn, provider}`, `GET /auth/signin/{provider}?returnUrl=`, `POST /auth/signout` (never cached).
+  `GET /me` → `{signedIn, provider}`, `GET /auth/signin/{provider}?returnUrl=`, `POST /auth/signout` (never cached; sign-out
+  only with the page's `X-LazyDad: 1` header, which another site's form can't send).
 - **Read cache** (`JokeReadCache`, `ReadCache:Seconds`, 30 by default, 0 = off): the joke count, the Top 3, each joke by id, the
   similarity index and each feed page (by sort, cursor and size) are kept in memory per replica (at most 20,000 rows), since every visitor reads
   the same ones and the load test found the database to be the first limit (`docs/performance.md`, the history of
@@ -102,7 +103,7 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   - `SignInController`: `GET /auth/signin/{provider}?returnUrl=` (local URLs only; 404 for a provider that isn't
     enabled), `POST /auth/signout`, `GET /me` → `{signedIn, provider}`, all `no-store`. Providers are authentication
     schemes named after them; their callbacks go through `SignInEvents` (only the voter key survives;
-    `lazydad_signins_total{provider, outcome}`). No real provider yet: only `dev`, in Development (`?account=` picks
+    `lazydad_signins_total{provider, outcome}`, `completed` counted once the cookie is written). No real provider yet: only `dev`, in Development (`?account=` picks
     the made-up account, to vote as several readers).
 - One loop per enabled language runs concurrently via `Task.WhenAll`: a startup tick, then a delay to each regular
   due time. **Due times are fixed UTC times** (`TickSchedule`: every whole `IntervalHours` since midnight UTC, so

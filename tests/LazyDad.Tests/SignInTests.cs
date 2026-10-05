@@ -229,12 +229,25 @@ public sealed class SignInTests : IAsyncDisposable
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "auth/signout");
         request.Headers.Add("Cookie", $"{SignInSetup.CookieName}={cookie}");
+        request.Headers.Add(SignInController.RequestHeader, SignInController.RequestHeaderValue);
         using var response = await client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
         var removal = SetCookie(response).ToLowerInvariant();
         Assert.StartsWith($"{SignInSetup.CookieName.ToLowerInvariant()}=;", removal);
         Assert.Contains("expires=thu, 01 jan 1970", removal);
+    }
+
+    [Fact]
+    public async Task SignOut_WithoutThePagesHeader_IsRefused()
+    {
+        // What another site's form can send: the reader's cookie stays.
+        var client = Client(await StartDevelopmentAsync());
+
+        using var response = await client.PostAsync("auth/signout", new FormUrlEncodedContent([]));
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.False(response.Headers.Contains("Set-Cookie"));
     }
 
     [Fact]
