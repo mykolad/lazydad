@@ -93,7 +93,7 @@ A redesign of the LazyDad site: AI‑generated Ukrainian dad jokes, a new batch 
 - **Copy text** (joke page only): the joke and its link on the next line.
 - **Explanation**: the lightbulb is a toggle (`aria-expanded`, `aria-controls`, a constant name "Чому це смішно?"); each joke keeps its own open or closed state, on every place it's shown.
 - **Open joke**: `/j/<id>` with the History API (the list stays in the page); Back, Forward and the back pill restore the list's scroll position. Ctrl/Cmd-click opens a new tab: rows, cards and the Top 3's links are real `<a href>`.
-- **Similar jokes**: `GET /jokes/<id>/similar?limit=4`, never the joke itself. For now they're ranked by shared words (see Deviations); the similarity experiment (`experiments/similarity`) compares Jev and embeddings for a better ranking.
+- **Similar jokes**: `GET /jokes/<id>/similar?limit=4`, never the joke itself. Ranked by the jokes' Jev profiles (topic and kind of wordplay), with embeddings as the fallback (see Deviations and CLAUDE.md).
 - **Sort**: Newest (by date desc) or Top voted (by net score desc, then newest). Changing the sort resets the list. A vote doesn't move its row: re-sorting would pull it out from under the pointer.
 - **Infinite scroll**: an IntersectionObserver on the sentinel with `rootMargin: 120px`, pages of 20.
 - **Countdown**: the time until the scheduler's next batch (`/jokes/summary`), refreshed every 15 s. When a batch completes while the page is open, the Top 3 reloads and the new jokes are placed in the list.
@@ -214,5 +214,5 @@ The dark theme is the light ramps reversed (step 100 swaps with 900, and so on).
 | Joke page and card meta | 64% opacity | 70% | Stays above WCAG AA on the surface colour |
 | Feed explanation | lightbulb and text | plus a hidden "Чому це смішно:" for screen readers | The icon alone says nothing to them |
 | Link copied | the button changes | the button changes, and a polite live region announces it | A changed button name isn't always read |
-| Similar jokes | embeddings suggested | for now, shared words (first five letters, the jokes' template words left out), then votes, then newest; the best-voted fill the rest | Until the similarity experiment picks a method |
+| Similar jokes | embeddings suggested | Jev profiles (topic and kind of wordplay), embeddings as the fallback, shared words while a joke has neither; then votes, then newest | Jev won the blind test (#63): suggestions in the same style, not about the same thing |
 | Not-found joke | — | "Такого жарту немає" with the back pill; the server answers 404 | A shared link can point at a joke that doesn't exist |

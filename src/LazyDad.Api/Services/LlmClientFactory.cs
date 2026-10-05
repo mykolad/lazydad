@@ -18,6 +18,7 @@ public sealed class LlmClientFactory : ILlmClientFactory, IDisposable
 {
     private readonly IOptions<Dictionary<string, LlmProviderOptions>> providers;
     private readonly ConcurrentDictionary<(string Provider, string Model), Lazy<IChatClient>> clients = new();
+    private readonly ConcurrentDictionary<(string Provider, string Deployment), Lazy<IEmbeddingGenerator<string, Embedding<float>>>> embeddingGenerators = new();
     // Entra ID when no API key is configured: the app's managed identity in Azure, the developer's
     // `az login` locally. Created on first use; one per factory (a singleton), so its token cache is shared.
     private readonly Lazy<TokenCredential> entraCredential;
@@ -64,11 +65,39 @@ public sealed class LlmClientFactory : ILlmClientFactory, IDisposable
         }
     }
 
+    public IEmbeddingGenerator<string, Embedding<float>> CreateEmbeddingGenerator(string providerName, string deploymentName)
+    {
+        if (!providers.Value.TryGetValue(providerName, out var options))
+            throw new InvalidOperationException($"LLM provider '{providerName}' is not configured.");
+
+        var key = (providerName, deploymentName);
+        var generator = embeddingGenerators.GetOrAdd(key, _ => new Lazy<IEmbeddingGenerator<string, Embedding<float>>>(() => providerName switch
+        {
+            "AzureOpenAI" => AzureOpenAIClient(options).GetEmbeddingClient(deploymentName).AsIEmbeddingGenerator()
+                .AsBuilder()
+                .UseOpenTelemetry(configure: telemetry => telemetry.EnableSensitiveData = false)
+                .Build(),
+            _ => throw new NotSupportedException($"LLM provider '{providerName}' is not supported.")
+        }));
+        try
+        {
+            return new SharedEmbeddingGenerator(generator.Value);
+        }
+        catch
+        {
+            embeddingGenerators.TryRemove(new KeyValuePair<(string, string), Lazy<IEmbeddingGenerator<string, Embedding<float>>>>(key, generator));
+            throw;
+        }
+    }
+
     public void Dispose()
     {
         foreach (var client in clients.Values.Where(c => c.IsValueCreated))
             client.Value.Dispose();
         clients.Clear();
+        foreach (var generator in embeddingGenerators.Values.Where(g => g.IsValueCreated))
+            generator.Value.Dispose();
+        embeddingGenerators.Clear();
     }
 
     /// <summary>
@@ -77,11 +106,14 @@ public sealed class LlmClientFactory : ILlmClientFactory, IDisposable
     /// </summary>
     internal static bool UsesEntraId(LlmProviderOptions options) => string.IsNullOrWhiteSpace(options.ApiKey);
 
-    private IChatClient CreateAzureOpenAIClient(LlmProviderOptions options, string modelName)
-    {
-        var client = UsesEntraId(options)
+    private AzureOpenAIClient AzureOpenAIClient(LlmProviderOptions options)
+        => UsesEntraId(options)
             ? new AzureOpenAIClient(new Uri(options.Endpoint), entraCredential.Value, clientOptions())
             : new AzureOpenAIClient(new Uri(options.Endpoint), new AzureKeyCredential(options.ApiKey), clientOptions());
+
+    private IChatClient CreateAzureOpenAIClient(LlmProviderOptions options, string modelName)
+    {
+        var client = AzureOpenAIClient(options);
 
         // A span and duration/token metrics per call (collected only when telemetry is on, see TelemetryExtensions).
         // Prompts and responses stay off the spans: that's the default, set explicitly so an OTEL_* setting can't change it.
@@ -89,6 +121,15 @@ public sealed class LlmClientFactory : ILlmClientFactory, IDisposable
             .AsBuilder()
             .UseOpenTelemetry(configure: telemetry => telemetry.EnableSensitiveData = false)
             .Build();
+    }
+
+    /// <summary>A shared embedding generator handed to a caller: disposing it leaves the shared one alive.</summary>
+    private sealed class SharedEmbeddingGenerator(IEmbeddingGenerator<string, Embedding<float>> innerGenerator)
+        : DelegatingEmbeddingGenerator<string, Embedding<float>>(innerGenerator)
+    {
+        protected override void Dispose(bool disposing)
+        {
+        }
     }
 
     /// <summary>A shared client handed to a caller: disposing it leaves the shared client alive.</summary>

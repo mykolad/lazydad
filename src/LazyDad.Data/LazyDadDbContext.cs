@@ -10,6 +10,7 @@ public class LazyDadDbContext : DbContext
     public DbSet<Joke> Jokes => Set<Joke>();
     public DbSet<SchedulerLock> SchedulerLocks => Set<SchedulerLock>();
     public DbSet<TopJoke> TopJokes => Set<TopJoke>();
+    public DbSet<JokeProfile> JokeProfiles => Set<JokeProfile>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -36,6 +37,20 @@ public class LazyDadDbContext : DbContext
             entity.Property(e => e.JudgeModel).HasMaxLength(100).IsRequired();
             // A joke can hold at most one slot.
             entity.HasIndex(e => e.JokeId).IsUnique();
+            entity.HasOne(e => e.Joke)
+                .WithMany()
+                .HasForeignKey(e => e.JokeId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<JokeProfile>(entity =>
+        {
+            // One profile per joke and method; a new version replaces the old row.
+            entity.HasKey(e => new { e.JokeId, e.Kind });
+            entity.Property(e => e.Kind).HasMaxLength(20).IsRequired();
+            entity.Property(e => e.Version).HasMaxLength(100).IsRequired();
+            // A Jev profile is ~30 floats, an embedding 512 (2 KB).
+            entity.Property(e => e.Vector).HasMaxLength(8000).IsRequired();
             entity.HasOne(e => e.Joke)
                 .WithMany()
                 .HasForeignKey(e => e.JokeId)

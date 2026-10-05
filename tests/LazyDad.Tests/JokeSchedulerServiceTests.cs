@@ -30,6 +30,8 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     // Loose mock: AcquireAsync completes, TryAcquireAsync returns false unless a test sets it up.
     private readonly Mock<ISchedulerLockRepository> lockRepositoryMock = new();
     private readonly Mock<ILlmClientFactory> llmClientFactoryMock = new();
+    // Profiles nothing unless a test sets it up.
+    private readonly Mock<IJokeProfiler> profilerMock = new();
     private readonly List<Joke> saved = [];
     private readonly SchedulerStatus status = new();
     private readonly JokeReadCache readCache = new(new ConfigurationBuilder().Build(), new ServiceCollection().BuildServiceProvider().GetRequiredService<IServiceScopeFactory>());
@@ -95,6 +97,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         services.AddSingleton(topJokeRepositoryMock.Object);
         services.AddSingleton(lockRepositoryMock.Object);
         services.AddSingleton(llmClientFactoryMock.Object);
+        services.AddSingleton(profilerMock.Object);
         services.AddScoped<JokeGenerationService>();
         if (!omitTopJokeService)
             services.AddScoped<TopJokeService>();
@@ -601,5 +604,43 @@ public sealed class JokeSchedulerServiceTests : IDisposable
 
         Assert.True(scheduler.ExecuteTask.IsCompletedSuccessfully);
         Assert.Empty(saved);
+    }
+
+    [Fact]
+    public async Task Tick_ProfilesTheJokesForSimilarJokes_AfterSavingThem()
+    {
+        SetupModel("fast", () => Reply("Жарт"));
+        var savedWhenProfiling = -1;
+        profilerMock
+            .Setup(p => p.ProfileAsync(It.IsAny<CancellationToken>()))
+            .Callback(() => savedWhenProfiling = saved.Count)
+            .ReturnsAsync(1);
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Equal(1, savedWhenProfiling);
+        profilerMock.Verify(p => p.ProfileAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Tick_WhenProfilingFails_StillSucceeds()
+    {
+        SetupModel("fast", () => Reply("Жарт"));
+        profilerMock
+            .Setup(p => p.ProfileAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("The database is busy."));
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+        using var ticks = Collect("lazydad.scheduler.ticks");
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Single(saved);
+        Assert.True(Assert.Single(status.LastTicks).Succeeded);
+        Assert.Equal(["Ukrainian/succeeded"], Measured(ticks, "language", "outcome"));
     }
 }

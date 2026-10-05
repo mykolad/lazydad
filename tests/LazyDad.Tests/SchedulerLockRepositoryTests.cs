@@ -133,4 +133,30 @@ public sealed class SchedulerLockRepositoryTests : IDisposable
             DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken)
             => throw new DbUpdateException("Simulated failure (not a key conflict).");
     }
+
+    private async Task ReleaseAsync(string holder, DateTime now)
+    {
+        await using var context = CreateContext();
+        await new SchedulerLockRepository(context).ReleaseAsync(Key, holder, now, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Release_LetsTheNextReplicaTakeTheLeaseAtOnce()
+    {
+        await TryAcquireAsync("a", Now, Now.AddMinutes(30));
+
+        await ReleaseAsync("a", Now.AddMinutes(5));
+
+        Assert.True(await TryAcquireAsync("b", Now.AddMinutes(5), Now.AddMinutes(35)));
+    }
+
+    [Fact]
+    public async Task Release_ByAnotherReplica_LeavesTheHoldersLease()
+    {
+        await TryAcquireAsync("a", Now, Now.AddMinutes(30));
+
+        await ReleaseAsync("b", Now.AddMinutes(5));
+
+        Assert.Equal(("a", Now.AddMinutes(30)), await LeaseAsync());
+    }
 }

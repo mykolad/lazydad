@@ -213,4 +213,51 @@ public class LlmClientFactoryTests
         var ex = Assert.Throws<NotSupportedException>(() => factory.CreateClient("SomethingElse", "model"));
         Assert.Contains("'SomethingElse' is not supported", ex.Message);
     }
+
+    [Fact]
+    public async Task CreateEmbeddingGenerator_CallsTheDeploymentAsTheApp_WithTheDimensions_AndIsShared()
+    {
+        var handler = new EmbeddingHandler();
+        using var factory = new LlmClientFactory(
+            Options.Create(new Dictionary<string, LlmProviderOptions> { ["AzureOpenAI"] = new() { Endpoint = "https://example.openai.azure.com/" } }),
+            new Lazy<TokenCredential>(() => new FakeCredential()),
+            () => new AzureOpenAIClientOptions { Transport = new HttpClientPipelineTransport(new HttpClient(handler)) });
+
+        var first = factory.CreateEmbeddingGenerator("AzureOpenAI", "text-embedding-3-small");
+        var shared = first.GetService<OpenTelemetryEmbeddingGenerator<string, Embedding<float>>>();
+        first.Dispose();
+        using var second = factory.CreateEmbeddingGenerator("AzureOpenAI", "text-embedding-3-small");
+        var embeddings = await second.GenerateAsync(["joke"], new EmbeddingGenerationOptions { Dimensions = 2 });
+
+        Assert.NotNull(shared);
+        Assert.Same(shared, second.GetService<OpenTelemetryEmbeddingGenerator<string, Embedding<float>>>());
+        Assert.Equal([0.5f, -0.5f], embeddings[0].Vector.ToArray());
+        var (request, body) = Assert.Single(handler.Requests);
+        Assert.Equal("Bearer fake-entra-token", request.Headers.Authorization?.ToString());
+        Assert.Contains("/deployments/text-embedding-3-small/embeddings", request.RequestUri!.AbsolutePath);
+        Assert.Contains("\"dimensions\":2", body);
+    }
+
+    [Fact]
+    public void CreateEmbeddingGenerator_ForUnconfiguredProvider_Throws()
+    {
+        using var factory = CreateFactory([]);
+
+        Assert.Throws<InvalidOperationException>(() => factory.CreateEmbeddingGenerator("AzureOpenAI", "text-embedding-3-small"));
+    }
+
+    private sealed class EmbeddingHandler : HttpMessageHandler
+    {
+        public List<(HttpRequestMessage Request, string Body)> Requests { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests.Add((request, await request.Content!.ReadAsStringAsync(cancellationToken)));
+            const string embeddings = """
+                {"object":"list","model":"text-embedding-3-small","usage":{"prompt_tokens":1,"total_tokens":1},
+                 "data":[{"object":"embedding","index":0,"embedding":[0.5,-0.5]}]}
+                """;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(embeddings, Encoding.UTF8, "application/json") };
+        }
+    }
 }
