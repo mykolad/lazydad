@@ -72,8 +72,9 @@ jobs:
   deploy:
     name: deploy (${{ inputs.app-name }})
     runs-on: ubuntu-latest
-    # Up to about 17 minutes per smoke-test attempt if every wait times out, and there can be two.
-    timeout-minutes: 45
+    # Up to about 17 minutes per smoke-test attempt if every wait times out, and there can be two; plus up to 10 for
+    # removing this runner from the IP restrictions while the app is busy, which must not be cut off.
+    timeout-minutes: 55
     environment:
       name: ${{ inputs.environment }}
       url: ${{ steps.app.outputs.url }}
@@ -314,8 +315,23 @@ jobs:
       - name: Remove this runner from the app's IP restrictions
         if: ${{ always() && steps.ingress.outputs.rule != '' }}
         run: |
-          az containerapp ingress access-restriction remove -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
-            --rule-name "${{ steps.ingress.outputs.rule }}" -o none
+          # Another change to the app can be under way (a setting, a restart; e.g. its owner's az containerapp update):
+          # Azure then refuses with ContainerAppOperationInProgress. Keep trying for 8 minutes rather than leave this
+          # runner's address admitted; a rule that's already gone counts as removed.
+          rule="${{ steps.ingress.outputs.rule }}"
+          # (8, not the 10 the job allows for this: the last az calls and the error below must fit too.)
+          deadline=$((SECONDS + 480))
+          while true; do
+            if names=$(az containerapp ingress access-restriction list -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" --query "[].name" -o tsv); then
+              grep -qxF "$rule" <<< "$names" || exit 0
+              az containerapp ingress access-restriction remove -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" --rule-name "$rule" -o none && exit 0
+            fi
+            (( SECONDS + 20 < deadline )) || break
+            echo "::warning::Couldn't remove $rule yet; trying again in 20 s."
+            sleep 20
+          done
+          echo "::error::Couldn't remove $rule from ${{ inputs.app-name }}'s IP restrictions. Remove it by hand: az containerapp ingress access-restriction remove -n ${{ inputs.app-name }} -g $RESOURCE_GROUP --rule-name $rule"
+          exit 1
 
       - name: Summary
         if: ${{ always() }}
