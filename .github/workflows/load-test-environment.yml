@@ -257,15 +257,18 @@ jobs:
         if: ${{ always() && steps.ingress.outputs.rule != '' }}
         run: |
           # Another change to the app can be under way (a setting, a restart; e.g. its owner's az containerapp update):
-          # Azure then refuses with ContainerAppOperationInProgress. Keep trying for 10 minutes rather than leave this
+          # Azure then refuses with ContainerAppOperationInProgress. Keep trying for 8 minutes rather than leave this
           # runner's address admitted; a rule that's already gone counts as removed.
           rule="${{ steps.ingress.outputs.rule }}"
-          for attempt in $(seq 1 30); do
+          # (8, not the 10 the job allows for this: the last az calls and the error below must fit too.)
+          deadline=$((SECONDS + 480))
+          while true; do
             if names=$(az containerapp ingress access-restriction list -g "$RESOURCE_GROUP" -n "$APP" --query "[].name" -o tsv); then
               grep -qxF "$rule" <<< "$names" || exit 0
               az containerapp ingress access-restriction remove -g "$RESOURCE_GROUP" -n "$APP" --rule-name "$rule" -o none && exit 0
             fi
-            echo "::warning::Couldn't remove $rule yet (try $attempt of 30); trying again in 20 s."
+            (( SECONDS + 20 < deadline )) || break
+            echo "::warning::Couldn't remove $rule yet; trying again in 20 s."
             sleep 20
           done
           echo "::error::Couldn't remove $rule from $APP's IP restrictions. Remove it by hand: az containerapp ingress access-restriction remove -g $RESOURCE_GROUP -n $APP --rule-name $rule"
