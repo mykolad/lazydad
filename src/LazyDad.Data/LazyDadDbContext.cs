@@ -1,9 +1,10 @@
 using LazyDad.Data.Entities;
+using Microsoft.AspNetCore.DataProtection.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 
 namespace LazyDad.Data;
 
-public class LazyDadDbContext : DbContext
+public class LazyDadDbContext : DbContext, IDataProtectionKeyContext
 {
     public LazyDadDbContext(DbContextOptions<LazyDadDbContext> options) : base(options) { }
 
@@ -11,6 +12,12 @@ public class LazyDadDbContext : DbContext
     public DbSet<SchedulerLock> SchedulerLocks => Set<SchedulerLock>();
     public DbSet<TopJoke> TopJokes => Set<TopJoke>();
     public DbSet<JokeProfile> JokeProfiles => Set<JokeProfile>();
+    public DbSet<Vote> Votes => Set<Vote>();
+    /// <summary>
+    /// ASP.NET Core's key ring, which encrypts the sign-in cookies. Kept here so both production apps (and every restart)
+    /// share it: a sign-in that starts in one region can finish in the other.
+    /// </summary>
+    public DbSet<DataProtectionKey> DataProtectionKeys => Set<DataProtectionKey>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -51,6 +58,19 @@ public class LazyDadDbContext : DbContext
             entity.Property(e => e.Version).HasMaxLength(100).IsRequired();
             // A Jev profile is ~30 floats, an embedding 512 (2 KB).
             entity.Property(e => e.Vector).HasMaxLength(8000).IsRequired();
+            entity.HasOne(e => e.Joke)
+                .WithMany()
+                .HasForeignKey(e => e.JokeId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<Vote>(entity =>
+        {
+            // One vote per joke and voter: a repeated request finds its own row instead of adding one.
+            entity.HasKey(e => new { e.JokeId, e.VoterKey });
+            entity.Property(e => e.VoterKey).HasMaxLength(Vote.VoterKeyLength).IsFixedLength();
+            // A voter's own votes: the ones on a feed page, or all of them to delete.
+            entity.HasIndex(e => e.VoterKey);
             entity.HasOne(e => e.Joke)
                 .WithMany()
                 .HasForeignKey(e => e.JokeId)

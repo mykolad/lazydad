@@ -83,6 +83,13 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   load test raises it): from `X-Forwarded-For` (set by the Container Apps
   ingress), or, for requests from Cloudflare's ranges, from `CF-Connecting-IP` (`CloudflareClientAddressMiddleware`;
   anyone can send that header, so only Cloudflare's count). Server-side dedupe needs sign-in, which doesn't exist yet.
+- **Sign-in for voting is in progress** (issues #68–#83, one PR each, in order; design and decisions in
+  `docs/design/sign-in-2026-10.md`).
+  Landed so far, unused by the page: the `Votes` table (`(JokeId, VoterKey)`, `Value`, `UpdatedAt`) and `VoteRepository`,
+  which changes a vote row only if it still holds the vote it read and the joke's `Up`/`Down` by the difference, in one
+  transaction (idempotent; a lost race reads again); `VoterKeys` (HMAC-SHA256 of `<provider>:<account id>` keyed with
+  `SignIn:VoterKeyPepper`, a Key Vault reference; empty = sign-in off; never store or log the account id itself); and
+  ASP.NET's `DataProtectionKeys` table for the shared cookie key ring.
 - One loop per enabled language runs concurrently via `Task.WhenAll`: a startup tick, then a delay to each regular
   due time. **Due times are fixed UTC times** (`TickSchedule`: every whole `IntervalHours` since midnight UTC, so
   00:00, 04:00, 08:00 … for 4 h), the same for every replica and unchanged by restarts. After a startup tick the
