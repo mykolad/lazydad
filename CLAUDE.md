@@ -83,7 +83,8 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   load test raises it): from `X-Forwarded-For` (set by the Container Apps
   ingress), or, for requests from Cloudflare's ranges, from `CF-Connecting-IP` (`CloudflareClientAddressMiddleware`;
   anyone can send that header, so only Cloudflare's count). Server-side dedupe needs sign-in, which doesn't exist yet.
-- **Sign-in for voting is in progress** (#24; design, decisions and the three-PR plan in `docs/design/sign-in-2026-10.md`).
+- **Sign-in for voting is in progress** (issues #68–#83, one PR each, in order; design and decisions in
+  `docs/design/sign-in-2026-10.md`).
   Landed so far, unused by the page: the `Votes` table (`(JokeId, VoterKey)`, `Value`, `UpdatedAt`) and `VoteRepository`,
   which changes a vote row only if it still holds the vote it read and the joke's `Up`/`Down` by the difference, in one
   transaction (idempotent; a lost race reads again); `VoterKeys` (HMAC-SHA256 of `<provider>:<account id>` keyed with
