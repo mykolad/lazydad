@@ -101,6 +101,15 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   lists each saved joke right away; the judge runs once every model is done. A model that errors or answers empty is
   asked again, up to `JokeGeneration:Attempts` (3) tries `RetryDelaySeconds` (30) apart; only the final outcome is
   counted (`lazydad_jokes_total`), so a joke saved on a later try isn't a failure.
+  **No joke twice:** a joke the site already has (`JokeText.Key`: the same letters and digits, ignoring case, punctuation,
+  quotes and apostrophes) isn't saved; the model is asked again at once, told which joke it repeated, within the same
+  tries (outcome `duplicate` if every try repeats one). The prompt's recent jokes are only the latest 20, and the old
+  model saved 53 copies weeks apart. Each joke stores `TextHash` (SHA-256 of its key, indexed with the language), so the
+  check is one index lookup however many jokes there are; a tick first fills any missing hashes. After saving, before
+  the judge sees the new jokes, `RemoveDuplicatesAsync` deletes later copies of the last day's jokes (through the date
+  and hash indexes; a full GROUP BY over the hash index on each process's first cleanup and then daily), keeping
+  the Top 3 copy, else the most-voted, else the oldest, never a Top 3 joke, with their profiles and votes; one replica
+  at a time, under a `duplicates:<language>` lease. The judge also gets one candidate per joke text.
 - **Top-N leaderboard** (`TopJokes` config, `TopJokeService`, `TopJokes` table): after
   each tick a reasoning "judge" model (`TopJokes:Judge`, e.g. `gpt-6-sol`) sees the
   current top N plus the new jokes and returns the new ranking as a JSON-schema
@@ -232,7 +241,8 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
   `revision` is the platform's `CONTAINER_APP_REVISION`, unique per rollout. Smoke tests wait for both; Traffic
   Manager's health checks expect its `200`.
 - `/status` returns the version, revision and this process's last scheduler tick per language
-  (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details).
+  (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details). It lists only jokes
+  that still exist (a saved one can be deleted later as a duplicate copy, by any replica); without the database, all.
 - **Monitoring:** a Grafana Cloud stack (free tier, `eu-north`) gets all three apps' telemetry, one service per app
   (`job="lazydad-app"`, `"lazydad-app-swedencentral"`, `"lazydad-app-staging"`), with the uptime check and email alerts
   on prod (per app, plus `LazyDadAppNotReporting` when an app sends nothing for 10 minutes). The dashboard is

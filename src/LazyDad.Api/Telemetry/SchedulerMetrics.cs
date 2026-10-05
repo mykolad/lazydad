@@ -31,7 +31,8 @@ public sealed class SchedulerMetrics
         ticks = meter.CreateCounter<long>("lazydad.scheduler.ticks", "{tick}",
             "Scheduler ticks by outcome: succeeded, failed, or skipped (another replica generated this period).");
         jokes = meter.CreateCounter<long>("lazydad.jokes", "{joke}",
-            "Jokes per model by outcome: saved, empty (the model returned no text), or failed (generating or saving it).");
+            "Jokes per model by outcome: saved, empty (the model returned no text), duplicate (every try repeated a joke the site " +
+            "already has), or failed (generating or saving it).");
         leaderboardUpdates = meter.CreateCounter<long>("lazydad.leaderboard.updates", "{update}",
             "Leaderboard updates after each tick that ran, by outcome: updated, unchanged, or failed.");
     }
@@ -49,7 +50,7 @@ public sealed class SchedulerMetrics
         foreach (var outcome in (string[])["updated", "unchanged", "failed"])
             leaderboardUpdates.Add(0, new("language", language), new("outcome", outcome));
         foreach (var model in models)
-            foreach (var outcome in (string[])["saved", "empty", "failed"])
+            foreach (var outcome in (string[])["saved", "empty", "duplicate", "failed"])
                 jokes.Add(0, new("language", language), new("model", model), new("outcome", outcome));
     }
 

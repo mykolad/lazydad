@@ -51,6 +51,18 @@ public sealed class JokeSchedulerServiceTests : IDisposable
             .Setup(r => r.AddAsync(It.IsAny<Joke>(), It.IsAny<CancellationToken>()))
             .Callback<Joke, CancellationToken>((joke, _) => { lock (saved) { joke.Id = saved.Count + 1; saved.Add(joke); } })
             .Returns(Task.CompletedTask);
+        // Every saved joke still exists, unless a test says another replica deleted one.
+        jokeRepositoryMock
+            .Setup(r => r.GetExistingIdsAsync(It.IsAny<IReadOnlyCollection<int>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyCollection<int> ids, CancellationToken _) => ids.ToList());
+        // This replica gets the duplicates cleanup's lease, and there are no duplicates to remove, unless a test says otherwise.
+        lockRepositoryMock
+            .Setup(l => l.TryAcquireAsync(It.Is<string>(k => k.StartsWith("duplicates:")), It.IsAny<string>(), It.IsAny<DateTime>(),
+                It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        jokeRepositoryMock
+            .Setup(r => r.RemoveDuplicatesAsync(It.IsAny<string>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
     }
 
     public void Dispose()
@@ -212,7 +224,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
                 .Where(m => m.Value == 0)
                 .Select(m => string.Join('/', tags.Select(t => m.Tags[t])))
                 .Order(StringComparer.Ordinal);
-        Assert.Equal(["fast/empty", "fast/failed", "fast/saved"], Zeros(jokes, "model", "outcome"));
+        Assert.Equal(["fast/duplicate", "fast/empty", "fast/failed", "fast/saved"], Zeros(jokes, "model", "outcome"));
         Assert.Equal(["failed", "skipped", "succeeded"], Zeros(ticks, "outcome"));
         Assert.Equal(["failed", "unchanged", "updated"], Zeros(leaderboard, "outcome"));
         // Recorded before the tick: the first measurement is a zero, and the tick then counts once.
@@ -502,7 +514,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         lockRepositoryMock.Verify(r => r.AcquireAsync(
             "jokes:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(), nextDue.AddMinutes(-5),
             It.IsAny<CancellationToken>()), Times.Once);
-        lockRepositoryMock.Verify(r => r.TryAcquireAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Never);
+        lockRepositoryMock.Verify(r => r.TryAcquireAsync("jokes:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -642,5 +654,265 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         Assert.Single(saved);
         Assert.True(Assert.Single(status.LastTicks).Succeeded);
         Assert.Equal(["Ukrainian/succeeded"], Measured(ticks, "language", "outcome"));
+    }
+
+    [Fact]
+    public async Task Tick_WhenAModelRepeatsAnExistingJoke_AsksAgainAtOnce_NamingIt_AndSavesTheNewOne()
+    {
+        const string old = "Чому гречка стала бухгалтеркою? Бо рахувала крупні витрати!";
+        jokeRepositoryMock.Setup(r => r.TextExistsAsync("Ukrainian", old, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        var prompts = new List<string>();
+        var client = new Mock<IChatClient>();
+        client
+            .Setup(c => c.GetResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions>(), It.IsAny<CancellationToken>()))
+            .Returns((IEnumerable<ChatMessage> messages, ChatOptions? _, CancellationToken _) =>
+            {
+                prompts.Add(messages.First().Text);
+                return Reply(prompts.Count == 1 ? old : "Новий жарт");
+            });
+        llmClientFactoryMock.Setup(f => f.CreateClient("AzureOpenAI", "fast")).Returns(client.Object);
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Equal("Новий жарт", Assert.Single(saved).Text);
+        Assert.Equal(2, prompts.Count);
+        Assert.DoesNotContain(old, prompts[0]);
+        Assert.Contains($"  * {old}", prompts[1]);
+    }
+
+    [Fact]
+    public async Task Tick_WhenAModelRepeatsExistingJokesEveryTry_SavesNothing_AndCountsADuplicate()
+    {
+        jokeRepositoryMock.Setup(r => r.TextExistsAsync("Ukrainian", It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        SetupModel("fast", () => Reply("Старий жарт"));
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+        using var jokes = Collect("lazydad.jokes");
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Empty(saved);
+        Assert.Equal(["fast/duplicate"], Measured(jokes, "model", "outcome"));
+    }
+
+    [Fact]
+    public async Task Tick_RemovesDuplicateJokes_AndAFailureThereDoesNotFailTheTick()
+    {
+        SetupModel("fast", () => Reply("Жарт"));
+        jokeRepositoryMock
+            .Setup(r => r.RemoveDuplicatesAsync("Ukrainian", It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("The database is busy."));
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        jokeRepositoryMock.Verify(r => r.RemoveDuplicatesAsync("Ukrainian", It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()), Times.Once);
+        Assert.True(Assert.Single(status.LastTicks).Succeeded);
+        Assert.Single(saved);
+    }
+
+    [Fact]
+    public async Task Tick_WhenATryFailedAndTheLastOneRepeatedAJoke_CountsTheFailure_NotADuplicate()
+    {
+        // "duplicate" means every try repeated a joke; a real failure among them is what's counted (and alerted).
+        var tries = 0;
+        SetupModel("fast", () => ++tries == 1
+            ? Task.FromException<ChatResponse>(new HttpRequestException("The model is unavailable."))
+            : Reply("Старий жарт"));
+        jokeRepositoryMock.Setup(r => r.TextExistsAsync("Ukrainian", "Старий жарт", It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+        using var jokes = Collect("lazydad.jokes");
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Equal(3, tries);
+        Assert.Empty(saved);
+        Assert.Equal(["fast/failed"], Measured(jokes, "model", "outcome"));
+    }
+
+    [Fact]
+    public async Task Tick_RemovesDuplicatesBeforeTheJudge_WhichSeesOnlyTheCopyThatWasKept()
+    {
+        SetupModel("fast", () => Reply("Жарт А"));
+        // Answers after "fast", so its joke is saved second (id 2), and the cleanup deletes it.
+        SetupModel("slow", async () => { await Task.Delay(300); return await Reply("Жарт А."); });
+        jokeRepositoryMock
+            .Setup(r => r.RemoveDuplicatesAsync("Ukrainian", It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([2]);
+        var judgePrompts = new List<string>();
+        var judge = new Mock<IChatClient>();
+        judge
+            .Setup(c => c.GetResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions>(), It.IsAny<CancellationToken>()))
+            .Returns((IEnumerable<ChatMessage> messages, ChatOptions? _, CancellationToken _) =>
+            {
+                judgePrompts.Add(string.Join("\n", messages.Select(m => m.Text)));
+                return Task.FromException<ChatResponse>(new HttpRequestException("Only the prompt matters here."));
+            });
+        llmClientFactoryMock.Setup(f => f.CreateClient("AzureOpenAI", "judge")).Returns(judge.Object);
+        topJokesOptions = new TopJokesOptions { Enabled = true, Judge = new LlmModelOptions { Provider = "AzureOpenAI", Model = "judge" } };
+        // A full leaderboard: the judge weighs it against this tick's new jokes only.
+        topJokeRepositoryMock
+            .Setup(r => r.GetByLanguageAsync("Ukrainian", It.IsAny<CancellationToken>()))
+            .ReturnsAsync([.. Enumerable.Range(1, 3).Select(rank => new TopJoke
+            {
+                Language = "Ukrainian", Rank = rank, JokeId = 100 + rank, Reason = "r", JudgeModel = "judge",
+                Joke = new Joke { Id = 100 + rank, Language = "Ukrainian", Model = "m", Text = $"Топ {rank}" },
+            })]);
+        var scheduler = CreateScheduler(Ukrainian("fast", "slow"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Equal(2, saved.Count);
+        var prompt = Assert.Single(judgePrompts);
+        Assert.Contains("Жарт А", prompt);
+        Assert.DoesNotContain("Жарт А.", prompt);
+        Assert.Equal([1], Assert.Single(status.LastTicks).Jokes.Select(j => j.Id));
+    }
+
+    [Fact]
+    public async Task Tick_WhileAnotherReplicaRemovesDuplicates_LeavesItToThatOne_AndReleasesItsOwnLeaseOtherwise()
+    {
+        SetupModel("fast", () => Reply("Жарт"));
+        lockRepositoryMock
+            .Setup(l => l.TryAcquireAsync("duplicates:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        jokeRepositoryMock.Verify(r => r.RemoveDuplicatesAsync(It.IsAny<string>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()), Times.Never);
+        lockRepositoryMock.Verify(l => l.ReleaseAsync("duplicates:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.Single(saved);
+    }
+
+    [Fact]
+    public async Task Tick_ReleasesTheDuplicatesLease_AfterTheCleanup()
+    {
+        SetupModel("fast", () => Reply("Жарт"));
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        jokeRepositoryMock.Verify(r => r.RemoveDuplicatesAsync("Ukrainian", It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()), Times.Once);
+        lockRepositoryMock.Verify(l => l.ReleaseAsync("duplicates:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Tick_WhenReleasingTheDuplicatesLeaseFails_StillLeavesOutTheDeletedCopies()
+    {
+        SetupModel("fast", () => Reply("Жарт А"));
+        // Answers after "fast", so its joke is saved second (id 2), and the cleanup deletes it.
+        SetupModel("slow", async () => { await Task.Delay(300); return await Reply("Жарт А."); });
+        jokeRepositoryMock
+            .Setup(r => r.RemoveDuplicatesAsync("Ukrainian", It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([2]);
+        lockRepositoryMock
+            .Setup(l => l.ReleaseAsync("duplicates:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("The database is busy."));
+        var scheduler = CreateScheduler(Ukrainian("fast", "slow"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        var tick = Assert.Single(status.LastTicks);
+        Assert.True(tick.Succeeded);
+        Assert.Equal([1], tick.Jokes.Select(j => j.Id));
+    }
+
+    [Fact]
+    public async Task Tick_LooksAtEveryJokeOnTheFirstCleanupOfTheProcess_ThenAtTheLastDays()
+    {
+        SetupModel("fast", () => Reply("Жарт"));
+        var since = new List<DateTime?>();
+        jokeRepositoryMock
+            .Setup(r => r.RemoveDuplicatesAsync("Ukrainian", It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .Callback<string, DateTime?, CancellationToken>((_, from, _) => since.Add(from))
+            .ReturnsAsync([]);
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+        var nextDue = TickSchedule.FirstDueAfterStartup(DateTime.UtcNow, TimeSpan.FromHours(1));
+
+        await scheduler.RunTickAsync(Ukrainian("fast"), true, nextDue, CancellationToken.None);
+        await scheduler.RunTickAsync(Ukrainian("fast"), true, nextDue, CancellationToken.None);
+
+        Assert.Equal(2, since.Count);
+        Assert.Null(since[0]);
+        Assert.InRange(since[1]!.Value, DateTime.UtcNow.AddDays(-1).AddMinutes(-1), DateTime.UtcNow.AddDays(-1).AddMinutes(1));
+        jokeRepositoryMock.Verify(r => r.FillTextHashesAsync("Ukrainian", It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task Tick_WhenItsFullPassWasSkipped_TriesTheFullPassAgainNextTick()
+    {
+        SetupModel("fast", () => Reply("Жарт"));
+        var since = new List<DateTime?>();
+        jokeRepositoryMock
+            .Setup(r => r.RemoveDuplicatesAsync("Ukrainian", It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .Callback<string, DateTime?, CancellationToken>((_, from, _) => since.Add(from))
+            .ReturnsAsync([]);
+        var leases = 0;
+        // Another replica holds the duplicates lease on this process's first cleanup only.
+        lockRepositoryMock
+            .Setup(l => l.TryAcquireAsync("duplicates:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => ++leases > 1);
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+        var nextDue = TickSchedule.FirstDueAfterStartup(DateTime.UtcNow, TimeSpan.FromHours(1));
+
+        await scheduler.RunTickAsync(Ukrainian("fast"), true, nextDue, CancellationToken.None);
+        await scheduler.RunTickAsync(Ukrainian("fast"), true, nextDue, CancellationToken.None);
+
+        Assert.Equal([null], since);
+    }
+
+    [Fact]
+    public async Task Tick_WhenAnotherReplicaDeletedASavedCopy_TheJudgeDoesNotSeeIt()
+    {
+        SetupModel("fast", () => Reply("Жарт А"));
+        SetupModel("slow", async () => { await Task.Delay(300); return await Reply("Жарт Б"); });
+        // Another replica's cleanup deleted joke 2 (slow's) as a later copy; this replica's own cleanup removed nothing.
+        jokeRepositoryMock
+            .Setup(r => r.GetExistingIdsAsync(It.IsAny<IReadOnlyCollection<int>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyCollection<int> ids, CancellationToken _) => ids.Where(id => id != 2).ToList());
+        var judgePrompts = new List<string>();
+        var judge = new Mock<IChatClient>();
+        judge
+            .Setup(c => c.GetResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions>(), It.IsAny<CancellationToken>()))
+            .Returns((IEnumerable<ChatMessage> messages, ChatOptions? _, CancellationToken _) =>
+            {
+                judgePrompts.Add(string.Join("\n", messages.Select(m => m.Text)));
+                return Task.FromException<ChatResponse>(new HttpRequestException("Only the prompt matters here."));
+            });
+        llmClientFactoryMock.Setup(f => f.CreateClient("AzureOpenAI", "judge")).Returns(judge.Object);
+        topJokesOptions = new TopJokesOptions { Enabled = true, Judge = new LlmModelOptions { Provider = "AzureOpenAI", Model = "judge" } };
+        topJokeRepositoryMock
+            .Setup(r => r.GetByLanguageAsync("Ukrainian", It.IsAny<CancellationToken>()))
+            .ReturnsAsync([.. Enumerable.Range(1, 3).Select(rank => new TopJoke
+            {
+                Language = "Ukrainian", Rank = rank, JokeId = 100 + rank, Reason = "r", JudgeModel = "judge",
+                Joke = new Joke { Id = 100 + rank, Language = "Ukrainian", Model = "m", Text = $"Топ {rank}" },
+            })]);
+        var scheduler = CreateScheduler(Ukrainian("fast", "slow"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        var prompt = Assert.Single(judgePrompts);
+        Assert.Contains("Жарт А", prompt);
+        Assert.DoesNotContain("Жарт Б", prompt);
     }
 }

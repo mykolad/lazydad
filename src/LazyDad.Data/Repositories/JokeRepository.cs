@@ -33,8 +33,94 @@ public class JokeRepository : IJokeRepository
     public async Task<Joke?> GetByIdAsync(int id, CancellationToken cancellationToken)
         => await context.Jokes.FindAsync([id], cancellationToken);
 
+    public async Task<bool> TextExistsAsync(string language, string text, CancellationToken cancellationToken)
+    {
+        var hash = JokeText.Hash(text);
+        return await context.Jokes.AnyAsync(j => j.Language == language && j.TextHash == hash, cancellationToken);
+    }
+
+    public async Task<int> FillTextHashesAsync(string language, CancellationToken cancellationToken)
+    {
+        const int batchSize = 500;
+        var filled = 0;
+        while (true)
+        {
+            var jokes = await context.Jokes.Where(j => j.Language == language && j.TextHash == null)
+                .OrderBy(j => j.Id).Take(batchSize).ToListAsync(cancellationToken);
+            if (jokes.Count == 0)
+                return filled;
+            foreach (var joke in jokes)
+                joke.TextHash = JokeText.Hash(joke.Text);
+            await context.SaveChangesAsync(cancellationToken);
+            context.ChangeTracker.Clear();
+            filled += jokes.Count;
+        }
+    }
+
+    public async Task<IReadOnlyList<int>> RemoveDuplicatesAsync(string language, DateTime? since, CancellationToken cancellationToken)
+    {
+        // The hashes to look at: those of the jokes saved since then (the date index), or, for a full pass, every hash
+        // the language has more than once (a GROUP BY over the hash index, in the database).
+        var jokesInLanguage = context.Jokes.Where(j => j.Language == language && j.TextHash != null);
+        var hashes = since is { } from
+            ? await jokesInLanguage.Where(j => j.GeneratedAt >= from).Select(j => j.TextHash!).Distinct().ToListAsync(cancellationToken)
+            : await jokesInLanguage.GroupBy(j => j.TextHash).Where(g => g.Count() > 1).Select(g => g.Key!).ToListAsync(cancellationToken);
+        if (hashes.Count == 0)
+            return [];
+
+        // Each hash's jokes: one lookup in the (language, text hash) index each.
+        var groups = new List<List<(int Id, DateTime GeneratedAt, int Votes)>>();
+        foreach (var hash in hashes)
+        {
+            var group = await context.Jokes
+                .Where(j => j.Language == language && j.TextHash == hash)
+                .Select(j => new { j.Id, j.GeneratedAt, Votes = j.Up + j.Down })
+                .ToListAsync(cancellationToken);
+            if (group.Count > 1)
+                groups.Add(group.Select(j => (j.Id, j.GeneratedAt, j.Votes)).ToList());
+        }
+        if (groups.Count == 0)
+            return [];
+
+        var groupIds = groups.SelectMany(g => g.Select(j => j.Id)).ToList();
+        var top = (await context.TopJokes.Where(t => groupIds.Contains(t.JokeId)).Select(t => t.JokeId).ToListAsync(cancellationToken)).ToHashSet();
+        var removed = new List<int>();
+        foreach (var group in groups)
+        {
+            var ranked = group
+                .OrderByDescending(j => top.Contains(j.Id))
+                .ThenByDescending(j => j.Votes)
+                .ThenBy(j => j.GeneratedAt)
+                .ThenBy(j => j.Id)
+                .ToList();
+            var keeper = ranked[0];
+            // Deleting a Top 3 joke would delete its slot too (cascade): a second copy in the Top 3 stays.
+            foreach (var copy in ranked.Skip(1).Where(j => !top.Contains(j.Id)))
+            {
+                // One statement re-checks what the choice was made from, so a change since then spares the copy instead of
+                // reversing the choice: the copy is still not in the Top 3 (another replica's tick may have promoted it),
+                // its vote count and the keeper's are still the ones read (a vote may have made it the most-voted, or the
+                // keeper lost its votes), and the keeper still exists. Its profiles and votes go with it (cascade).
+                var (keeperId, keeperVotes, copyVotes) = (keeper.Id, keeper.Votes, copy.Votes);
+                var deleted = await context.Jokes
+                    .Where(j => j.Id == copy.Id
+                        && j.Up + j.Down == copyVotes
+                        && !context.TopJokes.Any(t => t.JokeId == j.Id)
+                        && context.Jokes.Any(k => k.Id == keeperId && k.Up + k.Down == keeperVotes))
+                    .ExecuteDeleteAsync(cancellationToken);
+                if (deleted > 0)
+                    removed.Add(copy.Id);
+            }
+        }
+        return removed;
+    }
+
+    public async Task<List<int>> GetExistingIdsAsync(IReadOnlyCollection<int> ids, CancellationToken cancellationToken)
+        => ids.Count == 0 ? [] : await context.Jokes.Where(j => ids.Contains(j.Id)).Select(j => j.Id).ToListAsync(cancellationToken);
+
     public async Task AddAsync(Joke joke, CancellationToken cancellationToken)
     {
+        joke.TextHash = JokeText.Hash(joke.Text);
         context.Jokes.Add(joke);
         await context.SaveChangesAsync(cancellationToken);
     }

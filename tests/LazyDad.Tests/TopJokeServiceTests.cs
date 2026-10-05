@@ -216,4 +216,26 @@ public class TopJokeServiceTests
         Assert.All(saved, e => Assert.Null(e.Joke));
         llmClientFactoryMock.Verify(f => f.CreateClient(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
     }
+
+    [Fact]
+    public async Task UpdateAsync_NeverGivesTheJudgeTwoCopiesOfAJoke_KeepingTheOneAlreadyRanked()
+    {
+        SetupCurrentTop([MakeTop(1, MakeJoke(1)), MakeTop(2, MakeJoke(2)), MakeTop(3, MakeJoke(3))]);
+        // A copy of joke 2 (another text only in its punctuation and case), and a copy of a new joke.
+        var copyOfTwo = new Joke { Id = 10, Language = Language, Model = "m", Text = "JOKE  2!", GeneratedAt = DateTime.UtcNow };
+        var copyOfEleven = new Joke { Id = 12, Language = Language, Model = "m", Text = "joke 11.", GeneratedAt = DateTime.UtcNow };
+        var prompts = new List<string>();
+        chatClientMock
+            .Setup(c => c.GetResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions>(), It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<ChatMessage>, ChatOptions?, CancellationToken>((messages, _, _) => prompts.Add(string.Join("\n", messages.Select(m => m.Text))))
+            .ReturnsAsync(new ChatResponse([new ChatMessage(ChatRole.Assistant, """{"picks":[{"jokeId":1,"reason":"a"},{"jokeId":2,"reason":"b"},{"jokeId":3,"reason":"c"}]}""")]));
+
+        await CreateService().UpdateAsync(Language, [copyOfTwo, MakeJoke(11), copyOfEleven], CancellationToken.None);
+
+        var prompt = Assert.Single(prompts);
+        Assert.Contains("Joke 2", prompt);
+        Assert.Contains("Joke 11", prompt);
+        Assert.DoesNotContain("JOKE  2!", prompt);
+        Assert.DoesNotContain("joke 11.", prompt);
+    }
 }
