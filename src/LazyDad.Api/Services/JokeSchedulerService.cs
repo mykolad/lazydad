@@ -129,7 +129,6 @@ public class JokeSchedulerService : BackgroundService
                 saved.Select(j => new GeneratedJoke(j.Id, j.Model)).ToList(), leaderboard, null));
             metrics.RecordTick(language.Language, "succeeded");
             metrics.RecordLeaderboard(language.Language, leaderboard);
-            await RemoveDuplicatesAsync(language.Language, stoppingToken);
             await ProfileJokesAsync(stoppingToken);
             logger.LogDebug("Joke tick for '{Language}' completed.", language.Language);
         }
@@ -190,7 +189,10 @@ public class JokeSchedulerService : BackgroundService
         // slow model (a thinking one can take minutes) delays only its own joke, not the others'.
         var results = await Task.WhenAll(language.LlmModels.Select(async model =>
             await GenerateAsync(language, model, stoppingToken) is { } joke ? await SaveAsync(joke, stoppingToken) : null));
-        var saved = results.OfType<Joke>().ToList();
+        // Duplicates go before the judge sees the new jokes: two models can write the same joke in one tick, and the judge
+        // could put both copies in the Top 3, which the cleanup never deletes.
+        var removed = await RemoveDuplicatesAsync(language.Language, stoppingToken);
+        var saved = results.OfType<Joke>().Where(j => !removed.Contains(j.Id)).ToList();
 
         using var scope = scopeFactory.CreateScope();
         var topJokeService = scope.ServiceProvider.GetRequiredService<TopJokeService>();
@@ -224,7 +226,8 @@ public class JokeSchedulerService : BackgroundService
     /// apart, and the rare one two models write in the same tick (each checks only what's saved before it). /status lists
     /// only jokes that still exist, so a copy deleted here (or by another replica) drops off it. Nothing here fails the tick.
     /// </summary>
-    private async Task RemoveDuplicatesAsync(string language, CancellationToken stoppingToken)
+    /// <returns>The ids it deleted (none if it failed).</returns>
+    private async Task<IReadOnlyList<int>> RemoveDuplicatesAsync(string language, CancellationToken stoppingToken)
     {
         try
         {
@@ -235,6 +238,7 @@ public class JokeSchedulerService : BackgroundService
                 readCache.Invalidate();
                 logger.LogInformation("Removed {Count} duplicate '{Language}' joke(s).", removed.Count, language);
             }
+            return removed;
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -243,6 +247,7 @@ public class JokeSchedulerService : BackgroundService
         catch (Exception ex)
         {
             logger.LogError(ex, "Removing duplicate '{Language}' jokes failed; the next tick tries again.", language);
+            return [];
         }
     }
 

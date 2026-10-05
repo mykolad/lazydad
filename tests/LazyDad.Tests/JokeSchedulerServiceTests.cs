@@ -729,4 +729,45 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         Assert.Empty(saved);
         Assert.Equal(["fast/failed"], Measured(jokes, "model", "outcome"));
     }
+
+    [Fact]
+    public async Task Tick_RemovesDuplicatesBeforeTheJudge_WhichSeesOnlyTheCopyThatWasKept()
+    {
+        SetupModel("fast", () => Reply("Жарт А"));
+        // Answers after "fast", so its joke is saved second (id 2), and the cleanup deletes it.
+        SetupModel("slow", async () => { await Task.Delay(300); return await Reply("Жарт А."); });
+        jokeRepositoryMock
+            .Setup(r => r.RemoveDuplicatesAsync("Ukrainian", It.IsAny<CancellationToken>()))
+            .ReturnsAsync([2]);
+        var judgePrompts = new List<string>();
+        var judge = new Mock<IChatClient>();
+        judge
+            .Setup(c => c.GetResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions>(), It.IsAny<CancellationToken>()))
+            .Returns((IEnumerable<ChatMessage> messages, ChatOptions? _, CancellationToken _) =>
+            {
+                judgePrompts.Add(string.Join("\n", messages.Select(m => m.Text)));
+                return Task.FromException<ChatResponse>(new HttpRequestException("Only the prompt matters here."));
+            });
+        llmClientFactoryMock.Setup(f => f.CreateClient("AzureOpenAI", "judge")).Returns(judge.Object);
+        topJokesOptions = new TopJokesOptions { Enabled = true, Judge = new LlmModelOptions { Provider = "AzureOpenAI", Model = "judge" } };
+        // A full leaderboard: the judge weighs it against this tick's new jokes only.
+        topJokeRepositoryMock
+            .Setup(r => r.GetByLanguageAsync("Ukrainian", It.IsAny<CancellationToken>()))
+            .ReturnsAsync([.. Enumerable.Range(1, 3).Select(rank => new TopJoke
+            {
+                Language = "Ukrainian", Rank = rank, JokeId = 100 + rank, Reason = "r", JudgeModel = "judge",
+                Joke = new Joke { Id = 100 + rank, Language = "Ukrainian", Model = "m", Text = $"Топ {rank}" },
+            })]);
+        var scheduler = CreateScheduler(Ukrainian("fast", "slow"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Equal(2, saved.Count);
+        var prompt = Assert.Single(judgePrompts);
+        Assert.Contains("Жарт А", prompt);
+        Assert.DoesNotContain("Жарт А.", prompt);
+        Assert.Equal([1], Assert.Single(status.LastTicks).Jokes.Select(j => j.Id));
+    }
 }
