@@ -72,8 +72,9 @@ jobs:
   deploy:
     name: deploy (${{ inputs.app-name }})
     runs-on: ubuntu-latest
-    # Up to about 17 minutes per smoke-test attempt if every wait times out, and there can be two.
-    timeout-minutes: 45
+    # Up to about 17 minutes per smoke-test attempt if every wait times out, and there can be two; plus up to 10 for
+    # removing this runner from the IP restrictions while the app is busy, which must not be cut off.
+    timeout-minutes: 55
     environment:
       name: ${{ inputs.environment }}
       url: ${{ steps.app.outputs.url }}

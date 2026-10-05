@@ -53,7 +53,8 @@ jobs:
   set-up:
     if: ${{ !inputs.tear-down-only }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # Includes up to 10 minutes for removing this runner from the app's ingress while the app is busy.
+    timeout-minutes: 50
     environment:
       name: loadtest
       url: ${{ steps.ingress.outputs.url }}
