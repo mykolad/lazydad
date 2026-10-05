@@ -9,6 +9,14 @@ public interface IJokeRepository
     /// <summary>Returns the N most recent jokes for a language, newest first. Used to build the uniqueness prompt.</summary>
     Task<List<Joke>> GetRecentByLanguageAsync(string language, int count, CancellationToken cancellationToken);
     Task<Joke?> GetByIdAsync(int id, CancellationToken cancellationToken);
+    /// <summary>Whether a joke with the same text (see <see cref="JokeText"/>) already exists in <paramref name="language"/>.</summary>
+    Task<bool> TextExistsAsync(string language, string text, CancellationToken cancellationToken);
+    /// <summary>
+    /// Deletes the later copies of each joke in <paramref name="language"/> (see <see cref="JokeText"/>), keeping one per
+    /// group: the copy in the Top 3, else the most-voted, else the oldest. A Top 3 joke is never deleted. Their profiles and
+    /// votes go with them. Returns how many were deleted.
+    /// </summary>
+    Task<int> RemoveDuplicatesAsync(string language, CancellationToken cancellationToken);
     Task AddAsync(Joke joke, CancellationToken cancellationToken);
     Task<int> CountAsync(CancellationToken cancellationToken);
     /// <summary>

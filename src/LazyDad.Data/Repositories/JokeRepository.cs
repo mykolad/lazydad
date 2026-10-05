@@ -33,6 +33,43 @@ public class JokeRepository : IJokeRepository
     public async Task<Joke?> GetByIdAsync(int id, CancellationToken cancellationToken)
         => await context.Jokes.FindAsync([id], cancellationToken);
 
+    public async Task<bool> TextExistsAsync(string language, string text, CancellationToken cancellationToken)
+    {
+        // The comparison ignores punctuation and case, which SQL can't express simply; a language's texts are a few
+        // hundred kilobytes, read once per generated joke.
+        var key = JokeText.Key(text);
+        var texts = await context.Jokes.Where(j => j.Language == language).Select(j => j.Text).ToListAsync(cancellationToken);
+        return texts.Any(t => JokeText.Key(t) == key);
+    }
+
+    public async Task<int> RemoveDuplicatesAsync(string language, CancellationToken cancellationToken)
+    {
+        var jokes = await context.Jokes
+            .Where(j => j.Language == language)
+            .Select(j => new { j.Id, j.Text, j.GeneratedAt, Votes = j.Up + j.Down })
+            .ToListAsync(cancellationToken);
+        var top = (await context.TopJokes.Select(t => t.JokeId).ToListAsync(cancellationToken)).ToHashSet();
+
+        var copies = jokes
+            .GroupBy(j => JokeText.Key(j.Text))
+            .Where(g => g.Count() > 1)
+            .SelectMany(g => g
+                .OrderByDescending(j => top.Contains(j.Id))
+                .ThenByDescending(j => j.Votes)
+                .ThenBy(j => j.GeneratedAt)
+                .ThenBy(j => j.Id)
+                .Skip(1))
+            // Deleting a Top 3 joke would delete its slot too (cascade): a second copy in the Top 3 stays.
+            .Where(j => !top.Contains(j.Id))
+            .Select(j => j.Id)
+            .ToList();
+        if (copies.Count == 0)
+            return 0;
+
+        // Profiles and votes are deleted with them (cascade).
+        return await context.Jokes.Where(j => copies.Contains(j.Id)).ExecuteDeleteAsync(cancellationToken);
+    }
+
     public async Task AddAsync(Joke joke, CancellationToken cancellationToken)
     {
         context.Jokes.Add(joke);

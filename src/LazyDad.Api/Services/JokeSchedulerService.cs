@@ -129,6 +129,7 @@ public class JokeSchedulerService : BackgroundService
                 saved.Select(j => new GeneratedJoke(j.Id, j.Model)).ToList(), leaderboard, null));
             metrics.RecordTick(language.Language, "succeeded");
             metrics.RecordLeaderboard(language.Language, leaderboard);
+            await RemoveDuplicatesAsync(language.Language, stoppingToken);
             await ProfileJokesAsync(stoppingToken);
             logger.LogDebug("Joke tick for '{Language}' completed.", language.Language);
         }
@@ -219,6 +220,33 @@ public class JokeSchedulerService : BackgroundService
     }
 
     /// <summary>
+    /// Deletes later copies of the same joke (JokeRepository.RemoveDuplicatesAsync): the copies the old model saved weeks
+    /// apart, and the rare one two models write in the same tick (each checks only what's saved before it). Nothing here
+    /// fails the tick.
+    /// </summary>
+    private async Task RemoveDuplicatesAsync(string language, CancellationToken stoppingToken)
+    {
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var removed = await scope.ServiceProvider.GetRequiredService<IJokeRepository>().RemoveDuplicatesAsync(language, stoppingToken);
+            if (removed > 0)
+            {
+                readCache.Invalidate();
+                logger.LogInformation("Removed {Count} duplicate '{Language}' joke(s).", removed, language);
+            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Removing duplicate '{Language}' jokes failed; the next tick tries again.", language);
+        }
+    }
+
+    /// <summary>
     /// Profiles the jokes "you might also like" ranks by (JokeProfiler): this tick's jokes first, then a batch of older
     /// ones without a profile (the profiler takes its own lease, so two replicas never profile at once). Similar jokes
     /// are optional, so nothing here fails the tick: a failure waits for the next one.
@@ -274,16 +302,20 @@ public class JokeSchedulerService : BackgroundService
 
     /// <summary>
     /// Generates one joke with one model, trying up to <see cref="JokeGenerationOptions.Attempts"/> times when the model
-    /// fails or answers empty. Returns <c>null</c> once every try failed, so sibling models are unaffected; only that
-    /// final outcome is counted (a joke saved on a later try counts as saved).
+    /// fails, answers empty, or repeats a joke the site already has (then at once, told which joke it repeated). Returns
+    /// <c>null</c> once every try failed, so sibling models are unaffected; only that final outcome is counted (a joke saved
+    /// on a later try counts as saved).
     /// </summary>
     private async Task<Joke?> GenerateAsync(LanguageOptions language, LlmModelOptions model, CancellationToken stoppingToken)
     {
         // Own scope per model: parallel calls must not share a DbContext.
         using var scope = scopeFactory.CreateScope();
         var generationService = scope.ServiceProvider.GetRequiredService<JokeGenerationService>();
+        var jokeRepository = scope.ServiceProvider.GetRequiredService<IJokeRepository>();
         var attempts = options.Value.Attempts;
         var delay = TimeSpan.FromSeconds(options.Value.RetryDelaySeconds);
+        // This model's answers that were jokes the site already has: the next try is told to write another.
+        var repeated = new List<string>();
 
         for (var attempt = 1; ; attempt++)
         {
@@ -292,7 +324,23 @@ public class JokeSchedulerService : BackgroundService
                 logger.LogInformation("Generating joke for '{Language}' using {Model} (try {Attempt} of {Attempts})...",
                     language.Language, model.Model, attempt, attempts);
 
-                var draft = await generationService.GenerateAsync(language, model, stoppingToken);
+                var draft = await generationService.GenerateAsync(language, model, repeated, stoppingToken);
+
+                if (!string.IsNullOrWhiteSpace(draft.Text) && await jokeRepository.TextExistsAsync(language.Language, draft.Text, stoppingToken))
+                {
+                    repeated.Add(draft.Text);
+                    if (attempt == attempts)
+                    {
+                        metrics.RecordJoke(language.Language, model.Model, "duplicate");
+                        logger.LogWarning("{Model} repeated an existing '{Language}' joke on every try. Skipping: {Text}",
+                            model.Model, language.Language, draft.Text);
+                        return null;
+                    }
+                    // Not a failure to wait out: ask again at once, naming the joke it repeated.
+                    logger.LogInformation("{Model} repeated an existing '{Language}' joke; asking for another: {Text}",
+                        model.Model, language.Language, draft.Text);
+                    continue;
+                }
 
                 if (!string.IsNullOrWhiteSpace(draft.Text))
                 {

@@ -23,14 +23,17 @@ public class JokeGenerationService
     }
 
     /// <summary>The joke, and why it's funny (null if the model left it out). An empty text means the model returned nothing.</summary>
-    public async Task<JokeDraft> GenerateAsync(LanguageOptions language, LlmModelOptions model, CancellationToken cancellationToken)
+    /// <param name="repeated">This model's earlier answers in this tick that were jokes the site already has: the prompt
+    /// tells it, so the next try is a different joke.</param>
+    public async Task<JokeDraft> GenerateAsync(LanguageOptions language, LlmModelOptions model, IReadOnlyList<string> repeated,
+        CancellationToken cancellationToken)
     {
         var recentJokes = await jokeRepository.GetRecentByLanguageAsync(
             language.Language,
             options.Value.UniquenessSampleSize,
             cancellationToken);
 
-        var prompt = BuildSystemPrompt(language, recentJokes.Select(j => j.Text).ToList());
+        var prompt = BuildSystemPrompt(language, recentJokes.Select(j => j.Text).ToList(), repeated);
 
         using var chatClient = llmClientFactory.CreateClient(model.Provider, model.Model);
 
@@ -66,7 +69,7 @@ public class JokeGenerationService
             : explanation.Length <= MaxExplanationLength ? explanation : explanation[..MaxExplanationLength]);
     }
 
-    internal static string BuildSystemPrompt(LanguageOptions language, IReadOnlyList<string> recentJokes)
+    internal static string BuildSystemPrompt(LanguageOptions language, IReadOnlyList<string> recentJokes, IReadOnlyList<string> repeated)
     {
         var sb = new StringBuilder();
         // "Dad joke" names a style, not a subject. Without saying so, models writing in a language with no such term
@@ -94,9 +97,16 @@ public class JokeGenerationService
         {
             sb.AppendLine("- Do NOT repeat any of the following already-used jokes, and don't reuse their openings, characters or");
             sb.AppendLine("  structure (e.g. the same first words, or the same \"someone took X because they heard Y\" template):");
-            // One line each: a dialogue's lines are joined with " / ", so they don't read as rules or other jokes.
             foreach (var joke in recentJokes)
-                sb.AppendLine($"  * {string.Join(" / ", joke.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))}");
+                sb.AppendLine($"  * {OneLine(joke)}");
+        }
+
+        if (repeated.Count > 0)
+        {
+            // The recent jokes above are only the latest few; these are older jokes the model came up with again.
+            sb.AppendLine("- Your previous answer repeated a joke the site already has. Write a completely different joke, not these:");
+            foreach (var joke in repeated)
+                sb.AppendLine($"  * {OneLine(joke)}");
         }
 
         sb.AppendLine($"- Respond with the joke, then a line with only {Separator}, then one sentence in English (at most 200");
@@ -105,6 +115,9 @@ public class JokeGenerationService
 
         return sb.ToString();
     }
+
+    // One line each: a dialogue's lines are joined with " / ", so they don't read as rules or other jokes.
+    private static string OneLine(string joke) => string.Join(" / ", joke.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 }
 
 /// <summary>A generated joke before it's saved: its text and, if the model gave one, why it's funny.</summary>
