@@ -114,6 +114,26 @@ public sealed class VoteRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task SetAsync_SeveralTimesInOneContext_KeepsItsOtherChanges()
+    {
+        // One request (one scoped context): add, remove, add again, with an unrelated change pending.
+        await using var context = database.CreateContext();
+        var repository = new VoteRepository(context);
+        var pending = context.Jokes.Add(new Joke { Language = "Ukrainian", Model = "m", Text = "pending", GeneratedAt = Now });
+
+        await repository.SetAsync(jokeId, Alice, 1, Now, CancellationToken.None);
+        await repository.SetAsync(jokeId, Alice, 0, Now, CancellationToken.None);
+        var joke = await repository.SetAsync(jokeId, Alice, 1, Now, CancellationToken.None);
+
+        Assert.Equal((1, 0), (joke!.Up, joke.Down));
+        await AssertStateAsync(jokeId, 1, 0, [1]);
+        // Neither lost nor saved along with the votes: still the caller's to save.
+        Assert.Equal(EntityState.Added, pending.State);
+        await using var fresh = database.CreateContext();
+        Assert.False(await fresh.Jokes.AnyAsync(j => j.Text == "pending"));
+    }
+
+    [Fact]
     public async Task SetAsync_AnUnknownJoke_ReturnsNullAndStoresNothing()
     {
         Assert.Null(await SetAsync(jokeId + otherJokeId + 1, Alice, 1));

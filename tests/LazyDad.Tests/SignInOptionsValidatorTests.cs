@@ -16,8 +16,9 @@ public class SignInOptionsValidatorTests
         => Assert.True(Validate(Convert.ToBase64String(new byte[SignInOptions.MinPepperBytes])).Succeeded);
 
     [Theory]
+    [InlineData(" ")]
     [InlineData("not base64!")]
     [InlineData("c2hvcnQ=")]
-    public void Validate_RejectsAPepperThatIsNotBase64OrTooShort(string pepper)
+    public void Validate_RejectsAPepperThatIsBlankNotBase64OrTooShort(string pepper)
         => Assert.Contains(Validate(pepper).Failures!, f => f.Contains("VoterKeyPepper"));
 }

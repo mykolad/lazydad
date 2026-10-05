@@ -1,4 +1,5 @@
 using System.Data;
+using System.Data.Common;
 using LazyDad.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -41,7 +42,6 @@ public class VoteRepository : IVoteRepository
     // changed the row in between, nothing is written and the caller reads again, so the counts never move twice.
     private async Task<(bool Settled, Joke? Joke)> TrySetAsync(int jokeId, byte[] voterKey, short value, DateTime now, CancellationToken cancellationToken)
     {
-        context.ChangeTracker.Clear();
         if (!await context.Jokes.AnyAsync(j => j.Id == jokeId, cancellationToken))
             return (true, null);
 
@@ -66,15 +66,18 @@ public class VoteRepository : IVoteRepository
         return (true, await ReadJokeAsync(jokeId, cancellationToken));
     }
 
+    // Plain SQL rather than Add + SaveChanges: SaveChanges would also save whatever else the caller's context has
+    // pending, inside this transaction. Like the other writes here, it leaves the change tracker alone.
     private async Task<bool> TryInsertAsync(int jokeId, byte[] voterKey, short value, DateTime now, CancellationToken cancellationToken)
     {
-        context.Votes.Add(new Vote { JokeId = jokeId, VoterKey = voterKey, Value = value, UpdatedAt = now });
         try
         {
-            await context.SaveChangesAsync(cancellationToken);
+            await context.Database.ExecuteSqlAsync(
+                $"INSERT INTO Votes (JokeId, VoterKey, Value, UpdatedAt) VALUES ({jokeId}, {voterKey}, {value}, {now})",
+                cancellationToken);
             return true;
         }
-        catch (DbUpdateException)
+        catch (DbException)
         {
             // The primary key: the same voter's other request inserted first. Read again (a different failure shows
             // up there, or as running out of attempts).

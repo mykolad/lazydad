@@ -14,5 +14,6 @@ public class SignInOptions
     /// </summary>
     public string VoterKeyPepper { get; set; } = string.Empty;
 
-    public bool Enabled => !string.IsNullOrWhiteSpace(VoterKeyPepper);
+    // Only empty means off: a value of spaces is a mistake, so it goes to the validator and fails startup.
+    public bool Enabled => !string.IsNullOrEmpty(VoterKeyPepper);
 }
