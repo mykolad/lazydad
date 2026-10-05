@@ -130,19 +130,18 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
     [Fact]
     public async Task Me_WhenSignedOut_SaysSo_AndIsNeverCached()
     {
-        // The new revision: the old one, still serving during the swap, has no /me.
-        await target.PollAsync<JsonElement>(async () =>
+        // Polls /me itself: while the old revision still answers some requests, it has no /me (404), so a revision
+        // check on another endpoint first wouldn't make this request land on the new one.
+        var (cacheControl, me) = await target.PollAsync<(string CacheControl, JsonElement Me)>(async () =>
         {
-            var json = await target.GetJsonAsync("healthz");
-            return target.ExpectedRevision is null || json.GetProperty("revision").GetString() == target.ExpectedRevision ? json : null;
-        }, SmokeTarget.ColdStartTimeout, $"revision '{target.ExpectedRevision}'");
+            using var response = await target.Client.GetAsync("me");
+            if (response.StatusCode != HttpStatusCode.OK)
+                return null;
+            return (response.Headers.CacheControl?.ToString() ?? "", JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.Clone());
+        }, SmokeTarget.ColdStartTimeout, "/me to answer");
 
-        using var response = await target.Client.GetAsync("me");
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Contains("no-store", response.Headers.CacheControl?.ToString() ?? "");
-        using var me = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        Assert.False(me.RootElement.GetProperty("signedIn").GetBoolean());
+        Assert.Contains("no-store", cacheControl);
+        Assert.False(me.GetProperty("signedIn").GetBoolean());
     }
 
     [Fact]
