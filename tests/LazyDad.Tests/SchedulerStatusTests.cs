@@ -73,4 +73,18 @@ public class SchedulerStatusTests
         Assert.Equal(SchedulerStatus.SavedJokesKept, status.SavedJokes.Count);
         Assert.All(reads, count => Assert.InRange(count, 1, SchedulerStatus.SavedJokesKept));
     }
+
+    [Fact]
+    public void ForgetJokes_DropsThemFromTheSavedJokesAndTheLastTick()
+    {
+        var status = new SchedulerStatus();
+        status.RecordSavedJoke(new SavedJoke("Ukrainian", 1, "fast", DateTime.UtcNow));
+        status.RecordSavedJoke(new SavedJoke("Ukrainian", 2, "slow", DateTime.UtcNow));
+        status.Record(new TickStatus("Ukrainian", DateTime.UtcNow, true, [new GeneratedJoke(1, "fast"), new GeneratedJoke(2, "slow")], "unchanged", null));
+
+        status.ForgetJokes([2]);
+
+        Assert.Equal([1], status.SavedJokes.Select(j => j.Id));
+        Assert.Equal([1], Assert.Single(status.LastTicks).Jokes.Select(j => j.Id));
+    }
 }

@@ -1,7 +1,9 @@
 using LazyDad.Data;
 using LazyDad.Data.Entities;
 using LazyDad.Data.Repositories;
+using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace LazyDad.Tests;
 
@@ -9,7 +11,7 @@ namespace LazyDad.Tests;
 /// The same joke saved twice: <see cref="JokeText"/>, and the repository's check and cleanup, against a real database
 /// (SQLite in memory, or SQL Server with the migrations in CI; see TestDatabase), so the cascades are real.
 /// </summary>
-public sealed class JokeDuplicatesTests : IDisposable
+public sealed class JokeDuplicatesRepositoryTests : IDisposable
 {
     private static readonly DateTime Start = new(2026, 7, 1, 0, 0, 0, DateTimeKind.Utc);
 
@@ -72,11 +74,11 @@ public sealed class JokeDuplicatesTests : IDisposable
             await context.SaveChangesAsync();
         }
 
-        int removed;
+        IReadOnlyList<int> removed;
         await using (var context = CreateContext())
             removed = await new JokeRepository(context).RemoveDuplicatesAsync("Ukrainian", CancellationToken.None);
 
-        Assert.Equal(2, removed);
+        Assert.Equal([later, latest], removed.Order());
         Assert.Equal([oldest, other, english], RemainingIds());
         await using var verify = CreateContext();
         Assert.Empty(await verify.JokeProfiles.ToListAsync());
@@ -127,7 +129,47 @@ public sealed class JokeDuplicatesTests : IDisposable
         Add("Другий жарт.", 1);
 
         await using var context = CreateContext();
-        Assert.Equal(0, await new JokeRepository(context).RemoveDuplicatesAsync("Ukrainian", CancellationToken.None));
+        Assert.Empty(await new JokeRepository(context).RemoveDuplicatesAsync("Ukrainian", CancellationToken.None));
         Assert.Equal(2, RemainingIds().Count);
+    }
+
+    [Fact]
+    public async Task RemoveDuplicatesAsync_SparesACopyPromotedToTheTopThreeWhileItRan()
+    {
+        var oldest = Add("Чому дерун став водієм? Бо тримався тертого шляху!", 0);
+        var promoted = Add("Чому дерун став водієм? Бо тримався тертого шляху.", 10);
+        // Another replica's tick puts the later copy in the Top 3 just before this delete runs.
+        var promotion = new BeforeDelete(() =>
+        {
+            using var other = CreateContext();
+            other.TopJokes.Add(new TopJoke { Language = "Ukrainian", Rank = 1, JokeId = promoted, Reason = "r", JudgeModel = "j", SelectedAt = Start });
+            other.SaveChanges();
+        });
+
+        IReadOnlyList<int> removed;
+        await using (var context = database.CreateContext([promotion]))
+            removed = await new JokeRepository(context).RemoveDuplicatesAsync("Ukrainian", CancellationToken.None);
+
+        Assert.True(promotion.Ran);
+        Assert.Empty(removed);
+        Assert.Equal([oldest, promoted], RemainingIds());
+        await using var verify = CreateContext();
+        Assert.Equal(1, await verify.TopJokes.CountAsync());
+    }
+
+    private sealed class BeforeDelete(Action action) : DbCommandInterceptor
+    {
+        public bool Ran { get; private set; }
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken)
+        {
+            if (!Ran && command.CommandText.TrimStart().StartsWith("DELETE", StringComparison.OrdinalIgnoreCase))
+            {
+                Ran = true;
+                action();
+            }
+            return ValueTask.FromResult(result);
+        }
     }
 }

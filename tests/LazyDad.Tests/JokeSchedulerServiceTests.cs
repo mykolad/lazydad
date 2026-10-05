@@ -51,6 +51,10 @@ public sealed class JokeSchedulerServiceTests : IDisposable
             .Setup(r => r.AddAsync(It.IsAny<Joke>(), It.IsAny<CancellationToken>()))
             .Callback<Joke, CancellationToken>((joke, _) => { lock (saved) { joke.Id = saved.Count + 1; saved.Add(joke); } })
             .Returns(Task.CompletedTask);
+        // No duplicates to remove unless a test says otherwise.
+        jokeRepositoryMock
+            .Setup(r => r.RemoveDuplicatesAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
     }
 
     public void Dispose()
@@ -703,5 +707,25 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         jokeRepositoryMock.Verify(r => r.RemoveDuplicatesAsync("Ukrainian", It.IsAny<CancellationToken>()), Times.Once);
         Assert.True(Assert.Single(status.LastTicks).Succeeded);
         Assert.Single(saved);
+    }
+
+    [Fact]
+    public async Task Tick_WhenTwoModelsWroteTheSameJoke_StatusListsOnlyTheCopyThatWasKept()
+    {
+        SetupModel("fast", () => Reply("Той самий жарт"));
+        SetupModel("slow", () => Reply("Той самий жарт."));
+        // The cleanup deletes the later copy (id 2: saves are numbered in order).
+        jokeRepositoryMock
+            .Setup(r => r.RemoveDuplicatesAsync("Ukrainian", It.IsAny<CancellationToken>()))
+            .ReturnsAsync([2]);
+        var scheduler = CreateScheduler(Ukrainian("fast", "slow"));
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await StartupTicksDoneAsync();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Equal(2, saved.Count);
+        Assert.Equal([1], status.SavedJokes.Select(j => j.Id));
+        Assert.Equal([1], Assert.Single(status.LastTicks).Jokes.Select(j => j.Id));
     }
 }

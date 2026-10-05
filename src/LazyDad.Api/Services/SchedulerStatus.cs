@@ -55,6 +55,28 @@ public class SchedulerStatus
     }
 
     public const int SavedJokesKept = 20;
+
+    /// <summary>
+    /// Drops jokes that were deleted (duplicate copies): /status lists only jokes that exist, which the deploy's smoke
+    /// tests check.
+    /// </summary>
+    public void ForgetJokes(IReadOnlyCollection<int> ids)
+    {
+        if (ids.Count == 0)
+            return;
+        lock (savedJokesLock)
+        {
+            var kept = savedJokes.Where(j => !ids.Contains(j.Id)).ToList();
+            savedJokes.Clear();
+            foreach (var joke in kept)
+                savedJokes.Enqueue(joke);
+        }
+        foreach (var (language, tick) in lastTicks)
+        {
+            if (tick.Jokes.Any(j => ids.Contains(j.Id)))
+                lastTicks.TryUpdate(language, tick with { Jokes = tick.Jokes.Where(j => !ids.Contains(j.Id)).ToList() }, tick);
+        }
+    }
 }
 
 /// <param name="Leaderboard">

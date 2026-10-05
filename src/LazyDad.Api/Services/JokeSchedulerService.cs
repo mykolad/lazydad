@@ -230,10 +230,12 @@ public class JokeSchedulerService : BackgroundService
         {
             using var scope = scopeFactory.CreateScope();
             var removed = await scope.ServiceProvider.GetRequiredService<IJokeRepository>().RemoveDuplicatesAsync(language, stoppingToken);
-            if (removed > 0)
+            if (removed.Count > 0)
             {
+                // A copy this tick saved (two models wrote the same joke) is gone: /status must not list it.
+                status.ForgetJokes(removed);
                 readCache.Invalidate();
-                logger.LogInformation("Removed {Count} duplicate '{Language}' joke(s).", removed, language);
+                logger.LogInformation("Removed {Count} duplicate '{Language}' joke(s).", removed.Count, language);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

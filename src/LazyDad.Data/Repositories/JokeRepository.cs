@@ -42,7 +42,7 @@ public class JokeRepository : IJokeRepository
         return texts.Any(t => JokeText.Key(t) == key);
     }
 
-    public async Task<int> RemoveDuplicatesAsync(string language, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<int>> RemoveDuplicatesAsync(string language, CancellationToken cancellationToken)
     {
         var jokes = await context.Jokes
             .Where(j => j.Language == language)
@@ -64,10 +64,16 @@ public class JokeRepository : IJokeRepository
             .Select(j => j.Id)
             .ToList();
         if (copies.Count == 0)
-            return 0;
+            return [];
 
-        // Profiles and votes are deleted with them (cascade).
-        return await context.Jokes.Where(j => copies.Contains(j.Id)).ExecuteDeleteAsync(cancellationToken);
+        // The Top 3 is checked again in the delete itself: another replica's tick may have promoted a copy since it was
+        // read above (startup ticks run on every replica), and deleting it would delete its slot. Profiles and votes are
+        // deleted with them (cascade).
+        await context.Jokes
+            .Where(j => copies.Contains(j.Id) && !context.TopJokes.Any(t => t.JokeId == j.Id))
+            .ExecuteDeleteAsync(cancellationToken);
+        var kept = await context.Jokes.Where(j => copies.Contains(j.Id)).Select(j => j.Id).ToListAsync(cancellationToken);
+        return copies.Except(kept).ToList();
     }
 
     public async Task AddAsync(Joke joke, CancellationToken cancellationToken)

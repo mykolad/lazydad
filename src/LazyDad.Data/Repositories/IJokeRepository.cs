@@ -14,9 +14,9 @@ public interface IJokeRepository
     /// <summary>
     /// Deletes the later copies of each joke in <paramref name="language"/> (see <see cref="JokeText"/>), keeping one per
     /// group: the copy in the Top 3, else the most-voted, else the oldest. A Top 3 joke is never deleted. Their profiles and
-    /// votes go with them. Returns how many were deleted.
+    /// votes go with them. Returns the ids it deleted.
     /// </summary>
-    Task<int> RemoveDuplicatesAsync(string language, CancellationToken cancellationToken);
+    Task<IReadOnlyList<int>> RemoveDuplicatesAsync(string language, CancellationToken cancellationToken);
     Task AddAsync(Joke joke, CancellationToken cancellationToken);
     Task<int> CountAsync(CancellationToken cancellationToken);
     /// <summary>
