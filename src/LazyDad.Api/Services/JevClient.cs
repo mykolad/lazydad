@@ -120,15 +120,31 @@ public sealed class JevClient : IJevClient
                 throw new HttpRequestException($"Jev answered {(int)response.StatusCode}: {Shorten(body)}", null, response.StatusCode);
             }
 
-            var answer = JsonNode.Parse(body)!;
+            // Counted as succeeded only once the answer is read: a 2xx with a body we can't use made no profile.
+            JsonNode answer;
+            float[] profile;
+            try
+            {
+                answer = JsonNode.Parse(body) ?? throw new FormatException("Jev answered with an empty body.");
+                var answers = answer["answers"] ?? throw new FormatException("Jev's answer has no answers.");
+                profile =
+                [
+                    .. Probabilities(answers["topic"] ?? throw new FormatException("Jev's answer has no topic."), JevQuestions.Topics),
+                    .. Probabilities(answers["wordplay"] ?? throw new FormatException("Jev's answer has no wordplay."), JevQuestions.Wordplay),
+                ];
+            }
+            catch (Exception ex) when (ex is FormatException or System.Text.Json.JsonException or InvalidOperationException)
+            {
+                metrics.RecordJevRequest("failed");
+                throw new FormatException($"Jev's answer couldn't be read: {Shorten(body)}", ex);
+            }
+
             metrics.RecordJevRequest("succeeded");
             if (answer["usage"]?["cost_usd"]?.GetValue<double>() is { } cost)
                 metrics.RecordJevCost(cost);
             if (answer["usage"]?["credits_remaining_usd"]?.GetValue<double>() is { } credits)
                 metrics.RecordJevCredits(credits);
-
-            var answers = answer["answers"]!;
-            return [.. Probabilities(answers["topic"]!, JevQuestions.Topics), .. Probabilities(answers["wordplay"]!, JevQuestions.Wordplay)];
+            return profile;
         }
     }
 
@@ -137,8 +153,9 @@ public sealed class JevClient : IJevClient
 
     private static IEnumerable<float> Probabilities(JsonNode answer, IReadOnlyList<KeyValuePair<string, string>> options)
     {
-        var probabilities = answer["probabilities"]!.AsObject();
-        return options.Select(o => probabilities[o.Key]?.GetValue<float>() ?? 0f);
+        var probabilities = (answer["probabilities"] ?? throw new FormatException("Jev's answer has no probabilities.")).AsObject();
+        // Read now, inside the caller's try: a lazy sequence would fail later, outside it.
+        return options.Select(o => probabilities[o.Key]?.GetValue<float>() ?? 0f).ToArray();
     }
 
     private static string Shorten(string body) => body.Length <= 500 ? body : $"{body[..500]}…";

@@ -181,7 +181,7 @@ public sealed class JokeProfilerTests : IDisposable
     }
 
     [Fact]
-    public async Task ProfileAsync_ReleasesTheLease_EvenWhenSavingFails()
+    public async Task ProfileAsync_WhenSavingFails_CountsAFailure_AndStillReleasesTheLease()
     {
         Lacking(JokeProfile.JevKind, MakeJoke(1, null));
         jevMock.Setup(j => j.ProfileAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync([1f]);
@@ -189,8 +189,11 @@ public sealed class JokeProfilerTests : IDisposable
             .Setup(r => r.SaveAsync(It.IsAny<JokeProfile>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("The database is busy."));
 
+        using var profiles = new MetricCollector<long>(Meters, LazyDadTelemetry.Name, "lazydad.joke.profiles");
+
         await Assert.ThrowsAsync<InvalidOperationException>(() => CreateProfiler().ProfileAsync(CancellationToken.None));
 
+        Assert.Equal("jev/failed", Assert.Single(profiles.GetMeasurementSnapshot(), m => m.Value != 0) is var m ? $"{m.Tags["kind"]}/{m.Tags["outcome"]}" : null);
         locksMock.Verify(l => l.ReleaseAsync(JokeProfiler.LeaseKey, It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 }

@@ -85,6 +85,20 @@ public sealed class JevClientTests : IDisposable
         Assert.Equal(outcome, Assert.Single(requests.GetMeasurementSnapshot(), m => m.Value != 0).Tags["outcome"]);
     }
 
+    [Theory]
+    [InlineData("not json")]
+    [InlineData("{\"usage\":{\"cost_usd\":0.0002}}")]
+    [InlineData("{\"answers\":{\"topic\":{\"probabilities\":{}}}}")]
+    public async Task ProfileAsync_WhenTheAnswerCantBeRead_ThrowsAndCountsAFailure(string body)
+    {
+        handler.Reply = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
+        using var requests = new MetricCollector<long>(Meters, LazyDadTelemetry.Name, "lazydad.jev.requests");
+
+        await Assert.ThrowsAsync<FormatException>(() => CreateClient().ProfileAsync("joke", CancellationToken.None));
+
+        Assert.Equal("failed", Assert.Single(requests.GetMeasurementSnapshot(), m => m.Value != 0).Tags["outcome"]);
+    }
+
     private static int Index(IReadOnlyList<KeyValuePair<string, string>> options, string key)
         => options.Select((o, i) => (o.Key, i)).Single(x => x.Key == key).i;
 

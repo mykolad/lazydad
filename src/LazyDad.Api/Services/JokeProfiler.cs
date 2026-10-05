@@ -193,14 +193,23 @@ public sealed class JokeProfiler : IJokeProfiler
 
     private async Task SaveAsync(int jokeId, string kind, string version, float[] vector, CancellationToken cancellationToken)
     {
-        await profiles.SaveAsync(new JokeProfile
+        try
         {
-            JokeId = jokeId,
-            Kind = kind,
-            Version = version,
-            Vector = ToBytes(vector),
-            CreatedAt = time.GetUtcNow().UtcDateTime,
-        }, cancellationToken);
+            await profiles.SaveAsync(new JokeProfile
+            {
+                JokeId = jokeId,
+                Kind = kind,
+                Version = version,
+                Vector = ToBytes(vector),
+                CreatedAt = time.GetUtcNow().UtcDateTime,
+            }, cancellationToken);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Counted, so LazyDadProfileFailed fires for a profile that couldn't be stored too; the scheduler logs the error.
+            metrics.RecordProfile(kind, "failed");
+            throw;
+        }
         metrics.RecordProfile(kind, "saved");
     }
 
