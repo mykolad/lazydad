@@ -58,7 +58,7 @@ public class JokeGenerationServiceTests
             .ReturnsAsync(new ChatResponse([new ChatMessage(ChatRole.Assistant, expectedJoke)]));
 
         var service = CreateService();
-        var result = await service.GenerateAsync(ukrainianLanguage, defaultModel, CancellationToken.None);
+        var result = await service.GenerateAsync(ukrainianLanguage, defaultModel, [], CancellationToken.None);
 
         Assert.Equal(new JokeDraft(expectedJoke, null), result);
     }
@@ -78,7 +78,7 @@ public class JokeGenerationServiceTests
             .ReturnsAsync(new ChatResponse([new ChatMessage(ChatRole.Assistant,
                 "— Чому годинник пішов?\r\n— Бо мав багато часу!\r\n---\r\n\"Пішов\" means both \"left\" and \"started running\".")]));
 
-        var result = await CreateService().GenerateAsync(ukrainianLanguage, defaultModel, CancellationToken.None);
+        var result = await CreateService().GenerateAsync(ukrainianLanguage, defaultModel, [], CancellationToken.None);
 
         Assert.Equal("— Чому годинник пішов?\n— Бо мав багато часу!", result.Text);
         Assert.Equal("\"Пішов\" means both \"left\" and \"started running\".", result.Explanation);
@@ -105,7 +105,7 @@ public class JokeGenerationServiceTests
     [Fact]
     public void BuildSystemPrompt_AsksForTheExplanationAfterTheSeparator()
     {
-        var prompt = JokeGenerationService.BuildSystemPrompt(ukrainianLanguage, []);
+        var prompt = JokeGenerationService.BuildSystemPrompt(ukrainianLanguage, [], []);
 
         Assert.Contains($"a line with only {JokeGenerationService.Separator}", prompt);
     }
@@ -133,7 +133,7 @@ public class JokeGenerationServiceTests
             .ReturnsAsync(new ChatResponse([new ChatMessage(ChatRole.Assistant, "A new joke")]));
 
         var service = CreateService();
-        await service.GenerateAsync(ukrainianLanguage, defaultModel, CancellationToken.None);
+        await service.GenerateAsync(ukrainianLanguage, defaultModel, [], CancellationToken.None);
 
         Assert.NotNull(capturedMessages);
         var systemPrompt = capturedMessages.First().Text;
@@ -144,7 +144,7 @@ public class JokeGenerationServiceTests
     [Fact]
     public void BuildSystemPrompt_WithNoRecentJokes_DoesNotIncludeExclusionList()
     {
-        var prompt = JokeGenerationService.BuildSystemPrompt(ukrainianLanguage, []);
+        var prompt = JokeGenerationService.BuildSystemPrompt(ukrainianLanguage, [], []);
 
         Assert.DoesNotContain("already-used", prompt);
     }
@@ -154,7 +154,7 @@ public class JokeGenerationServiceTests
     {
         var jokes = new List<string> { "First joke", "Second joke" };
 
-        var prompt = JokeGenerationService.BuildSystemPrompt(ukrainianLanguage, jokes);
+        var prompt = JokeGenerationService.BuildSystemPrompt(ukrainianLanguage, jokes, []);
 
         Assert.Contains("First joke", prompt);
         Assert.Contains("Second joke", prompt);
@@ -164,7 +164,7 @@ public class JokeGenerationServiceTests
     [Fact]
     public void BuildSystemPrompt_TreatsADadJokeAsAStyle_AndAsksForVariety()
     {
-        var prompt = JokeGenerationService.BuildSystemPrompt(ukrainianLanguage, ["Тато взяв гарбуз на збори, бо чув, що там ділитимуть гарбузи."]);
+        var prompt = JokeGenerationService.BuildSystemPrompt(ukrainianLanguage, ["Тато взяв гарбуз на збори, бо чув, що там ділитимуть гарбузи."], []);
 
         Assert.Contains("a style of humour, not a subject", prompt);
         Assert.Contains("Don't make a father", prompt);
@@ -176,7 +176,7 @@ public class JokeGenerationServiceTests
     [Fact]
     public void BuildSystemPrompt_ListsARecentDialogueOnOneLine()
     {
-        var prompt = JokeGenerationService.BuildSystemPrompt(ukrainianLanguage, ["— Чому ти спізнився?\r\n— Годинник відстає!"]);
+        var prompt = JokeGenerationService.BuildSystemPrompt(ukrainianLanguage, ["— Чому ти спізнився?\r\n— Годинник відстає!"], []);
 
         Assert.Contains("  * — Чому ти спізнився? / — Годинник відстає!", prompt);
     }
@@ -184,8 +184,21 @@ public class JokeGenerationServiceTests
     [Fact]
     public void BuildSystemPrompt_IncludesPromptHint()
     {
-        var prompt = JokeGenerationService.BuildSystemPrompt(ukrainianLanguage, []);
+        var prompt = JokeGenerationService.BuildSystemPrompt(ukrainianLanguage, [], []);
 
         Assert.Contains(ukrainianLanguage.PromptHint, prompt);
     }
+
+    [Fact]
+    public void BuildSystemPrompt_NamesTheJokesTheModelRepeated_AndAsksForADifferentOne()
+    {
+        var prompt = JokeGenerationService.BuildSystemPrompt(ukrainianLanguage, [], ["Чому гречка стала бухгалтеркою?\nБо рахувала крупні витрати!"]);
+
+        Assert.Contains("repeated a joke the site already has", prompt);
+        Assert.Contains("  * Чому гречка стала бухгалтеркою? / Бо рахувала крупні витрати!", prompt);
+    }
+
+    [Fact]
+    public void BuildSystemPrompt_WithoutRepeats_SaysNothingAboutThem()
+        => Assert.DoesNotContain("repeated a joke", JokeGenerationService.BuildSystemPrompt(ukrainianLanguage, [], []));
 }

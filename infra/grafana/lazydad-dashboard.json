@@ -145,7 +145,7 @@
     },
     {
       "type": "timeseries", "title": "Jokes, by model and outcome", "id": 22, "gridPos": { "h": 8, "w": 8, "x": 8, "y": 23 }, "interval": "1h",
-      "description": "saved, empty (the model returned no text), or failed (generating or saving it).",
+      "description": "saved, empty (the model returned no text), duplicate (every try repeated a joke the site already has), or failed (generating or saving it).",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1, "stacking": { "mode": "normal" } } }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },

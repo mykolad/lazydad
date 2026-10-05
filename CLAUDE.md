@@ -91,7 +91,7 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
     it still holds the vote it read and the joke's `Up`/`Down` by the difference, in one transaction (idempotent; a lost
     race reads again);
   - `VoterKeys`: HMAC-SHA256 of `<provider>:<account id>` keyed with `SignIn:VoterKeyPepper` (a Key Vault reference per
-    app, `VoterKeyPepper` / `VoterKeyPepperStaging`; runbook section 7, step 6). Empty = sign-in off. Never store or log
+    app, `VoterKeyPepper` / `VoterKeyPepperStaging`; runbook section 7, step 7). Empty = sign-in off. Never store or log
     the account id, a claim or a voter key;
   - the cookie (`SignInSetup`): `__Host-lazydad`, HttpOnly, Secure, `SameSite=Lax`, a session cookie for now, holding
     exactly the voter key and the provider (`SignInPrincipal`; any other cookie is rejected). With a Key Vault key
@@ -116,6 +116,15 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   lists each saved joke right away; the judge runs once every model is done. A model that errors or answers empty is
   asked again, up to `JokeGeneration:Attempts` (3) tries `RetryDelaySeconds` (30) apart; only the final outcome is
   counted (`lazydad_jokes_total`), so a joke saved on a later try isn't a failure.
+  **No joke twice:** a joke the site already has (`JokeText.Key`: the same letters and digits, ignoring case, punctuation,
+  quotes and apostrophes) isn't saved; the model is asked again at once, told which joke it repeated, within the same
+  tries (outcome `duplicate` if every try repeats one). The prompt's recent jokes are only the latest 20, and the old
+  model saved 53 copies weeks apart. Each joke stores `TextHash` (SHA-256 of its key, indexed with the language), so the
+  check is one index lookup however many jokes there are; a tick first fills any missing hashes. After saving, before
+  the judge sees the new jokes, `RemoveDuplicatesAsync` deletes later copies of the last day's jokes (through the date
+  and hash indexes; a full GROUP BY over the hash index on each process's first cleanup and then daily), keeping
+  the Top 3 copy, else the most-voted, else the oldest, never a Top 3 joke, with their profiles and votes; one replica
+  at a time, under a `duplicates:<language>` lease. The judge also gets one candidate per joke text.
 - **Top-N leaderboard** (`TopJokes` config, `TopJokeService`, `TopJokes` table): after
   each tick a reasoning "judge" model (`TopJokes:Judge`, e.g. `gpt-6-sol`) sees the
   current top N plus the new jokes and returns the new ranking as a JSON-schema
@@ -218,8 +227,9 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
   only knew the key.
 - **Container Apps** (Consumption, 0.25 vCPU / 0.5 GiB each, the smallest size), production in **two regions**:
   - `lazydad-app` (prod, environment `lazydad-cae`, West Europe) and `lazydad-app-swedencentral` (prod, environment
-    `lazydad-cae-swedencentral`, Sweden Central, next to the database): **exactly one replica each** (min = max = 1), no
-    health probes yet. Same image, same settings, same database; the scheduler lease makes one of them run each batch
+    `lazydad-cae-swedencentral`, Sweden Central, next to the database): **exactly one replica each** (min = max = 1),
+    with startup, liveness and readiness probes on `/healthz` (no database check: both regions share the database;
+    runbook section 7, step 6), like staging. Same image, same settings, same database; the scheduler lease makes one of them run each batch
     (each app's startup tick still runs). The vote rate limit is per replica.
     Public address: **`lazydad.fyi`**, through Cloudflare's proxy (Free plan: DDoS protection, bot settings, a rate-limit
     rule on votes) to **Azure Traffic Manager** (`lazydad-traffic`, weighted 1:1, HTTPS health checks on each app's
@@ -254,8 +264,9 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
   `revision` is the platform's `CONTAINER_APP_REVISION`, unique per rollout. Smoke tests wait for both; Traffic
   Manager's health checks expect its `200`.
 - `/status` returns the version, revision and this process's last scheduler tick per language
-  (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details), and whether the
-  sign-in cookies' key ring works (`signIn.keyRing`).
+  (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details). It lists only jokes
+  that still exist (a saved one can be deleted later as a duplicate copy, by any replica); without the database, all.
+  It also says whether the sign-in cookies' key ring works (`signIn.keyRing`).
 - **Monitoring:** a Grafana Cloud stack (free tier, `eu-north`) gets all three apps' telemetry, one service per app
   (`job="lazydad-app"`, `"lazydad-app-swedencentral"`, `"lazydad-app-staging"`), with the uptime check and email alerts
   on prod (per app, plus `LazyDadAppNotReporting` when an app sends nothing for 10 minutes). The dashboard is

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.ClientModel;
 using System.Diagnostics;
 using LazyDad.Api.Configuration;
@@ -185,11 +186,16 @@ public class JokeSchedulerService : BackgroundService
 
     private async Task<(IReadOnlyList<Joke> Saved, string Leaderboard)> GenerateAndPersistAsync(LanguageOptions language, CancellationToken stoppingToken)
     {
+        // Before the models answer: the check for a repeat looks jokes up by their text hash, so every joke needs one.
+        await FillTextHashesAsync(language.Language, stoppingToken);
         // All models for the language are queried in parallel, and each joke is saved as soon as its model answers: a
         // slow model (a thinking one can take minutes) delays only its own joke, not the others'.
         var results = await Task.WhenAll(language.LlmModels.Select(async model =>
             await GenerateAsync(language, model, stoppingToken) is { } joke ? await SaveAsync(joke, stoppingToken) : null));
-        var saved = results.OfType<Joke>().ToList();
+        // Duplicates go before the judge sees the new jokes: two models can write the same joke in one tick, and the judge
+        // could put both copies in the Top 3, which the cleanup never deletes.
+        var removed = await RemoveDuplicatesAsync(language.Language, stoppingToken);
+        var saved = await StillThereAsync(results.OfType<Joke>().Where(j => !removed.Contains(j.Id)).ToList(), stoppingToken);
 
         using var scope = scopeFactory.CreateScope();
         var topJokeService = scope.ServiceProvider.GetRequiredService<TopJokeService>();
@@ -216,6 +222,96 @@ public class JokeSchedulerService : BackgroundService
         }
 
         return (saved, leaderboard);
+    }
+
+    /// <summary>
+    /// Deletes later copies of the same joke (JokeRepository.RemoveDuplicatesAsync): the copies the old model saved weeks
+    /// apart, and the rare one two models write in the same tick (each checks only what's saved before it). /status lists
+    /// only jokes that still exist, so a copy deleted here (or by another replica) drops off it. Nothing here fails the tick.
+    /// </summary>
+    /// <returns>The ids it deleted (none if it failed, or another replica was cleaning).</returns>
+    private async Task<IReadOnlyList<int>> RemoveDuplicatesAsync(string language, CancellationToken stoppingToken)
+    {
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            // One replica at a time (startup ticks overlap): two cleanups choosing from different snapshots could each
+            // delete a different copy and leave none. Another replica cleaning now means this one has nothing to add.
+            var locks = scope.ServiceProvider.GetRequiredService<ISchedulerLockRepository>();
+            var lockKey = $"duplicates:{language}";
+            var now = DateTime.UtcNow;
+            if (!await locks.TryAcquireAsync(lockKey, instanceId, now, now + DuplicatesLeaseLength, stoppingToken))
+                return [];
+            try
+            {
+                // Normally only the jokes saved lately: a copy can only come from them (each joke is checked before it's
+                // saved), and the window covers a tick another replica's cleanup skipped. A full pass (one GROUP BY over
+                // the hash index, in the database) on this process's first cleanup and then once a day catches what the
+                // window can't see: copies from before the hashes, or ones a skipped or failed cleanup left. Recorded only
+                // once it ran, so a skipped or failed one is simply tried again next tick.
+                var fullPass = !lastFullPass.TryGetValue(language, out var last) || now - last >= FullPassInterval;
+                DateTime? since = fullPass ? null : now - DuplicatesWindow;
+                var removed = await scope.ServiceProvider.GetRequiredService<IJokeRepository>().RemoveDuplicatesAsync(language, since, stoppingToken);
+                if (fullPass)
+                    lastFullPass[language] = now;
+                if (removed.Count > 0)
+                {
+                    readCache.Invalidate();
+                    logger.LogInformation("Removed {Count} duplicate '{Language}' joke(s).", removed.Count, language);
+                }
+                return removed;
+            }
+            finally
+            {
+                // Best-effort: a failure here mustn't lose the ids above (the judge must not see deleted jokes), and the
+                // lease runs out on its own in DuplicatesLeaseLength.
+                try
+                {
+                    await locks.ReleaseAsync(lockKey, instanceId, DateTime.UtcNow, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Couldn't release the '{LockKey}' lease; it runs out on its own.", lockKey);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Removing duplicate '{Language}' jokes failed; the next tick tries again.", language);
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// The tick's jokes that still exist: another replica's cleanup may have deleted one as a later copy (startup ticks
+    /// overlap), and the judge mustn't rank a deleted joke (its slot couldn't be saved). A deletion in the moment between
+    /// this and the leaderboard's write fails only that update, which the next tick makes again. If the database can't
+    /// say, all of them.
+    /// </summary>
+    private async Task<IReadOnlyList<Joke>> StillThereAsync(IReadOnlyList<Joke> jokes, CancellationToken stoppingToken)
+    {
+        if (jokes.Count == 0)
+            return jokes;
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var existing = (await scope.ServiceProvider.GetRequiredService<IJokeRepository>()
+                .GetExistingIdsAsync(jokes.Select(j => j.Id).ToList(), stoppingToken)).ToHashSet();
+            return jokes.Where(j => existing.Contains(j.Id)).ToList();
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Couldn't check which of the tick's jokes still exist; the judge sees all of them.");
+            return jokes;
+        }
     }
 
     /// <summary>
@@ -274,16 +370,23 @@ public class JokeSchedulerService : BackgroundService
 
     /// <summary>
     /// Generates one joke with one model, trying up to <see cref="JokeGenerationOptions.Attempts"/> times when the model
-    /// fails or answers empty. Returns <c>null</c> once every try failed, so sibling models are unaffected; only that
-    /// final outcome is counted (a joke saved on a later try counts as saved).
+    /// fails, answers empty, or repeats a joke the site already has (then at once, told which joke it repeated). Returns
+    /// <c>null</c> once every try failed, so sibling models are unaffected; only that final outcome is counted (a joke saved
+    /// on a later try counts as saved).
     /// </summary>
     private async Task<Joke?> GenerateAsync(LanguageOptions language, LlmModelOptions model, CancellationToken stoppingToken)
     {
         // Own scope per model: parallel calls must not share a DbContext.
         using var scope = scopeFactory.CreateScope();
         var generationService = scope.ServiceProvider.GetRequiredService<JokeGenerationService>();
+        var jokeRepository = scope.ServiceProvider.GetRequiredService<IJokeRepository>();
         var attempts = options.Value.Attempts;
         var delay = TimeSpan.FromSeconds(options.Value.RetryDelaySeconds);
+        // This model's answers that were jokes the site already has: the next try is told to write another.
+        var repeated = new List<string>();
+        // A try that failed or came back empty: if the last try then repeats a joke, that's what's counted (and alerted),
+        // not "duplicate", which means every try repeated one.
+        string? problem = null;
 
         for (var attempt = 1; ; attempt++)
         {
@@ -292,7 +395,23 @@ public class JokeSchedulerService : BackgroundService
                 logger.LogInformation("Generating joke for '{Language}' using {Model} (try {Attempt} of {Attempts})...",
                     language.Language, model.Model, attempt, attempts);
 
-                var draft = await generationService.GenerateAsync(language, model, stoppingToken);
+                var draft = await generationService.GenerateAsync(language, model, repeated, stoppingToken);
+
+                if (!string.IsNullOrWhiteSpace(draft.Text) && await jokeRepository.TextExistsAsync(language.Language, draft.Text, stoppingToken))
+                {
+                    repeated.Add(draft.Text);
+                    if (attempt == attempts)
+                    {
+                        metrics.RecordJoke(language.Language, model.Model, problem ?? "duplicate");
+                        logger.LogWarning("{Model} saved no '{Language}' joke: its last try repeated an existing one ({Text}); " +
+                            "an earlier try: {Problem}.", model.Model, language.Language, draft.Text, problem ?? "duplicate");
+                        return null;
+                    }
+                    // Not a failure to wait out: ask again at once, naming the joke it repeated.
+                    logger.LogInformation("{Model} repeated an existing '{Language}' joke; asking for another: {Text}",
+                        model.Model, language.Language, draft.Text);
+                    continue;
+                }
 
                 if (!string.IsNullOrWhiteSpace(draft.Text))
                 {
@@ -313,6 +432,7 @@ public class JokeSchedulerService : BackgroundService
                         language.Language, model.Model);
                     return null;
                 }
+                problem ??= "empty";
                 logger.LogWarning("LLM returned an empty response for '{Language}' ({Model}); trying again in {Delay} s.",
                     language.Language, model.Model, delay.TotalSeconds);
             }
@@ -331,6 +451,7 @@ public class JokeSchedulerService : BackgroundService
                         language.Language, model.Model, ProviderResponse(ex));
                     return null;
                 }
+                problem = "failed";
                 logger.LogWarning(ex, "Failed to generate joke for '{Language}' ({Model}); trying again in {Delay} s. Provider response: {ProviderResponse}",
                     language.Language, model.Model, delay.TotalSeconds, ProviderResponse(ex));
             }
@@ -361,4 +482,37 @@ public class JokeSchedulerService : BackgroundService
     }
 
     private const int MaxLoggedResponseLength = 2000;
+
+    // Far longer than a cleanup takes (a few index lookups and a delete or two); it only runs out on its own if the process dies.
+    private static readonly TimeSpan DuplicatesLeaseLength = TimeSpan.FromMinutes(5);
+    // The jokes a regular cleanup looks at: a day's, several ticks, so one skipped while another replica cleaned is covered.
+    private static readonly TimeSpan DuplicatesWindow = TimeSpan.FromDays(1);
+    // How often each process looks at every joke for copies (and on its first cleanup).
+    private static readonly TimeSpan FullPassInterval = TimeSpan.FromDays(1);
+    // When this process last ran a full duplicates pass, per language.
+    private readonly ConcurrentDictionary<string, DateTime> lastFullPass = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Gives the language's jokes without a text hash one (rows from before it existed, or saved by a revision without
+    /// it); their copies are found by the next full duplicates pass. Nothing here fails the tick: the check before saving
+    /// then misses those jokes until the next tick.
+    /// </summary>
+    private async Task FillTextHashesAsync(string language, CancellationToken stoppingToken)
+    {
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var filled = await scope.ServiceProvider.GetRequiredService<IJokeRepository>().FillTextHashesAsync(language, stoppingToken);
+            if (filled > 0)
+                logger.LogInformation("Gave {Count} '{Language}' joke(s) their text hash.", filled, language);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Filling '{Language}' jokes' text hashes failed; the next tick tries again.", language);
+        }
+    }
 }

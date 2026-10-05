@@ -61,7 +61,8 @@ What it all looks like at the end:
 ## Before you start
 
 You need the Azure CLI (`az login` as an Owner of the subscription), the GitHub CLI (`gh auth login` as the repo's
-owner) and a clone of the repository: run everything from its root.
+owner), `jq` for the bash blocks (on Windows: `winget install jqlang.jq`) and a
+clone of the repository: run everything from its root.
 
 Each command block is bash (Git Bash on Windows). Under it, a collapsed **PowerShell 7** version does the same, or a
 note says the bash commands run unchanged. Both use the same variable names, except `$PID` and `$ENV`, which
@@ -255,7 +256,7 @@ unique data. Section 12 shows how to preview a purge, and how to roll back by ha
 ## 3. Key Vault
 
 It holds only what really is a secret: the Grafana Cloud write tokens (section 11), the Jev keys (section 7, step 5), the sign-in
-peppers and the keys that protect the sign-in cookies (section 7, step 6) and the origin certificate for
+peppers and the keys that protect the sign-in cookies (section 7, step 7) and the origin certificate for
 `lazydad.fyi` with its private key (section 10). The AI endpoint and the database connection strings contain no
 credentials, so they're plain app settings. Access goes through Azure roles (RBAC), per secret where it matters: each
 app can read only its own token, and only production's identity reads the certificate.
@@ -872,7 +873,57 @@ both profiles (about a day for 1,200 jokes); each is asked once (about $0.0002 a
 dashboard's "Similar jokes" row shows the requests, the credits left and which method ranked the suggestions; the
 alerts `LazyDadJevCreditsLow` and `LazyDadProfileFailed` (section 11) say when to top up or look.
 
-**6. Sign-in: the voter-key peppers and the cookies' key ring.** Readers sign in to vote (`docs/design/sign-in-2026-10.md`).
+**6. Health probes.** Traffic Manager checks each prod app's `/healthz` from outside and leaves out a region that stops
+answering, but only the platform can restart a replica that's stuck (running, no longer answering). `/healthz` doesn't
+touch the database, so the probes only ask "is the process alive and serving":
+
+| Probe | What it does | Setting |
+|---|---|---|
+| Startup | gives a new replica time to start before the others apply | every 10 s, up to 30 failures (5 minutes) |
+| Liveness | restarts the container when it stops answering | every 30 s, after 3 failures in a row (~1.5 minutes) |
+| Readiness | sends traffic only to a replica that answers | every 10 s, after 3 failures |
+
+None of them checks the database: both regions share it, so a database blip would take both apps out, where today the
+read cache still serves. Every restart runs a startup tick (an extra batch of jokes), which is why liveness waits for 3
+failures. The CLI has no flags for probes, so this patches the app's container definition through the API (a new
+revision, keeping every setting). Staging first; then each prod app on its own, never while a deploy runs (Azure
+refuses a second change to an app mid-operation). Deploys change only the image, so the probes stay.
+
+```bash
+probes='[
+  {"type": "Startup",   "httpGet": {"path": "/healthz", "port": 8080}, "periodSeconds": 10, "timeoutSeconds": 5, "failureThreshold": 30},
+  {"type": "Liveness",  "httpGet": {"path": "/healthz", "port": 8080}, "periodSeconds": 30, "timeoutSeconds": 5, "failureThreshold": 3},
+  {"type": "Readiness", "httpGet": {"path": "/healthz", "port": 8080}, "periodSeconds": 10, "timeoutSeconds": 5, "failureThreshold": 3}]'
+APP=lazydad-app-staging   # then lazydad-app, then lazydad-app-swedencentral
+URL="https://management.azure.com$(az containerapp show -g $RG -n $APP --query id -o tsv)?api-version=2024-03-01"
+az rest --method get --url "$URL" \
+  | jq --argjson probes "$probes" '{properties: {template: {containers: [.properties.template.containers[0] + {probes: $probes}]}}}' > probes.json
+az rest --method patch --url "$URL" --body @probes.json -o none
+az containerapp show -g $RG -n $APP --query "properties.template.containers[0].probes[].type" -o tsv
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$probes = @(
+  @{ type = 'Startup';   httpGet = @{ path = '/healthz'; port = 8080 }; periodSeconds = 10; timeoutSeconds = 5; failureThreshold = 30 },
+  @{ type = 'Liveness';  httpGet = @{ path = '/healthz'; port = 8080 }; periodSeconds = 30; timeoutSeconds = 5; failureThreshold = 3 },
+  @{ type = 'Readiness'; httpGet = @{ path = '/healthz'; port = 8080 }; periodSeconds = 10; timeoutSeconds = 5; failureThreshold = 3 })
+$APP = 'lazydad-app-staging'   # then lazydad-app, then lazydad-app-swedencentral
+$URL = "https://management.azure.com$(az containerapp show -g $RG -n $APP --query id -o tsv)?api-version=2024-03-01"
+$container = (az rest --method get --url $URL | ConvertFrom-Json).properties.template.containers[0]
+$container | Add-Member -NotePropertyName probes -NotePropertyValue $probes -Force
+@{ properties = @{ template = @{ containers = @($container) } } } | ConvertTo-Json -Depth 20 | Set-Content probes.json
+az rest --method patch --url $URL --body '@probes.json' -o none
+az containerapp show -g $RG -n $APP --query 'properties.template.containers[0].probes[].type' -o tsv
+```
+
+</details>
+
+The new revision should turn `Healthy` within a minute (`az containerapp revision list -g $RG -n $APP -o table`); the
+environment's system logs (Log Analytics, `ContainerAppSystemLogs_CL`) record any probe failure.
+
+**7. Sign-in: the voter-key peppers and the cookies' key ring.** Readers sign in to vote (`docs/design/sign-in-2026-10.md`).
 A vote belongs to a voter key, an HMAC of the provider and the provider's account id keyed with the **pepper**, so the
 database never holds an account id. The sign-in cookies are encrypted with ASP.NET's key ring, kept in the database
 (`DataProtectionKeys`, so both production apps share it); each key in the ring is wrapped with a **Key Vault key**, so a
@@ -1393,7 +1444,7 @@ send nothing. What goes out, and what doesn't:
   (`joke tick`), with its lease, LLM calls (model, duration, tokens) and SQL commands under it.
 - **Metrics:** requests (rate, errors, latency per route), rate-limited votes, LLM duration and tokens per model
   (`gen_ai_client_*`), SQL, .NET runtime, and the scheduler's own counters: `lazydad_scheduler_ticks_total`
-  (outcome `succeeded`/`failed`/`skipped`), `lazydad_jokes_total` (per model, `saved`/`empty`/`failed`),
+  (outcome `succeeded`/`failed`/`skipped`), `lazydad_jokes_total` (per model, `saved`/`empty`/`duplicate`/`failed`),
   `lazydad_leaderboard_updates_total`.
 - **Logs:** everything the app logs through `ILogger`, linked to its trace. That includes model output the app logs
   on purpose: each saved joke's text, and the judge's raw answer when it's invalid (to debug it). It's only about
