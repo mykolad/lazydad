@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.ClientModel;
 using System.Diagnostics;
 using LazyDad.Api.Configuration;
@@ -186,14 +187,14 @@ public class JokeSchedulerService : BackgroundService
     private async Task<(IReadOnlyList<Joke> Saved, string Leaderboard)> GenerateAndPersistAsync(LanguageOptions language, CancellationToken stoppingToken)
     {
         // Before the models answer: the check for a repeat looks jokes up by their text hash, so every joke needs one.
-        var hashesFilled = await FillTextHashesAsync(stoppingToken);
+        await FillTextHashesAsync(language.Language, stoppingToken);
         // All models for the language are queried in parallel, and each joke is saved as soon as its model answers: a
         // slow model (a thinking one can take minutes) delays only its own joke, not the others'.
         var results = await Task.WhenAll(language.LlmModels.Select(async model =>
             await GenerateAsync(language, model, stoppingToken) is { } joke ? await SaveAsync(joke, stoppingToken) : null));
         // Duplicates go before the judge sees the new jokes: two models can write the same joke in one tick, and the judge
         // could put both copies in the Top 3, which the cleanup never deletes.
-        var removed = await RemoveDuplicatesAsync(language.Language, fullPass: hashesFilled, stoppingToken);
+        var removed = await RemoveDuplicatesAsync(language.Language, stoppingToken);
         var saved = results.OfType<Joke>().Where(j => !removed.Contains(j.Id)).ToList();
 
         using var scope = scopeFactory.CreateScope();
@@ -229,11 +230,7 @@ public class JokeSchedulerService : BackgroundService
     /// only jokes that still exist, so a copy deleted here (or by another replica) drops off it. Nothing here fails the tick.
     /// </summary>
     /// <returns>The ids it deleted (none if it failed, or another replica was cleaning).</returns>
-    /// <param name="fullPass">
-    /// Every joke, not just the last <see cref="DuplicatesWindow"/>'s: when jokes just got their text hashes, so their copies
-    /// were never looked for (the first tick after the hashes came, or rows a previous revision saved without one).
-    /// </param>
-    private async Task<IReadOnlyList<int>> RemoveDuplicatesAsync(string language, bool fullPass, CancellationToken stoppingToken)
+    private async Task<IReadOnlyList<int>> RemoveDuplicatesAsync(string language, CancellationToken stoppingToken)
     {
         try
         {
@@ -248,9 +245,15 @@ public class JokeSchedulerService : BackgroundService
             try
             {
                 // Normally only the jokes saved lately: a copy can only come from them (each joke is checked before it's
-                // saved), and the window covers a tick another replica's cleanup skipped.
+                // saved), and the window covers a tick another replica's cleanup skipped. A full pass (one GROUP BY over
+                // the hash index, in the database) on this process's first cleanup and then once a day catches what the
+                // window can't see: copies from before the hashes, or ones a skipped or failed cleanup left. Recorded only
+                // once it ran, so a skipped or failed one is simply tried again next tick.
+                var fullPass = !lastFullPass.TryGetValue(language, out var last) || now - last >= FullPassInterval;
                 DateTime? since = fullPass ? null : now - DuplicatesWindow;
                 var removed = await scope.ServiceProvider.GetRequiredService<IJokeRepository>().RemoveDuplicatesAsync(language, since, stoppingToken);
+                if (fullPass)
+                    lastFullPass[language] = now;
                 if (removed.Count > 0)
                 {
                     readCache.Invalidate();
@@ -456,21 +459,24 @@ public class JokeSchedulerService : BackgroundService
     private static readonly TimeSpan DuplicatesLeaseLength = TimeSpan.FromMinutes(5);
     // The jokes a regular cleanup looks at: a day's, several ticks, so one skipped while another replica cleaned is covered.
     private static readonly TimeSpan DuplicatesWindow = TimeSpan.FromDays(1);
+    // How often each process looks at every joke for copies (and on its first cleanup).
+    private static readonly TimeSpan FullPassInterval = TimeSpan.FromDays(1);
+    // When this process last ran a full duplicates pass, per language.
+    private readonly ConcurrentDictionary<string, DateTime> lastFullPass = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Gives jokes without a text hash one (rows from before it existed, or saved by a revision without it). Returns
-    /// whether it filled any, which calls for a full duplicates pass. Nothing here fails the tick: the check before saving
+    /// Gives the language's jokes without a text hash one (rows from before it existed, or saved by a revision without
+    /// it); their copies are found by the next full duplicates pass. Nothing here fails the tick: the check before saving
     /// then misses those jokes until the next tick.
     /// </summary>
-    private async Task<bool> FillTextHashesAsync(CancellationToken stoppingToken)
+    private async Task FillTextHashesAsync(string language, CancellationToken stoppingToken)
     {
         try
         {
             using var scope = scopeFactory.CreateScope();
-            var filled = await scope.ServiceProvider.GetRequiredService<IJokeRepository>().FillTextHashesAsync(stoppingToken);
+            var filled = await scope.ServiceProvider.GetRequiredService<IJokeRepository>().FillTextHashesAsync(language, stoppingToken);
             if (filled > 0)
-                logger.LogInformation("Gave {Count} joke(s) their text hash.", filled);
-            return filled > 0;
+                logger.LogInformation("Gave {Count} '{Language}' joke(s) their text hash.", filled, language);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -478,8 +484,7 @@ public class JokeSchedulerService : BackgroundService
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Filling jokes' text hashes failed; the next tick tries again.");
-            return false;
+            logger.LogError(ex, "Filling '{Language}' jokes' text hashes failed; the next tick tries again.", language);
         }
     }
 }

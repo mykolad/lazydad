@@ -831,7 +831,7 @@ public sealed class JokeSchedulerServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Tick_LooksForDuplicatesAmongTheLastDaysJokes_OrAllAfterFillingTextHashes()
+    public async Task Tick_LooksAtEveryJokeOnTheProcesssFirstCleanup_ThenAtTheLastDays()
     {
         SetupModel("fast", () => Reply("Жарт"));
         var since = new List<DateTime?>();
@@ -842,15 +842,35 @@ public sealed class JokeSchedulerServiceTests : IDisposable
         var scheduler = CreateScheduler(Ukrainian("fast"));
         var nextDue = TickSchedule.FirstDueAfterStartup(DateTime.UtcNow, TimeSpan.FromHours(1));
 
-        // Nothing to fill: a regular cleanup looks at the last day's jokes.
         await scheduler.RunTickAsync(Ukrainian("fast"), true, nextDue, CancellationToken.None);
-        // Jokes just got their hashes: their copies were never looked for, so every joke.
-        jokeRepositoryMock.Setup(r => r.FillTextHashesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1265);
         await scheduler.RunTickAsync(Ukrainian("fast"), true, nextDue, CancellationToken.None);
 
         Assert.Equal(2, since.Count);
-        Assert.InRange(since[0]!.Value, DateTime.UtcNow.AddDays(-1).AddMinutes(-1), DateTime.UtcNow.AddDays(-1).AddMinutes(1));
-        Assert.Null(since[1]);
-        jokeRepositoryMock.Verify(r => r.FillTextHashesAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
+        Assert.Null(since[0]);
+        Assert.InRange(since[1]!.Value, DateTime.UtcNow.AddDays(-1).AddMinutes(-1), DateTime.UtcNow.AddDays(-1).AddMinutes(1));
+        jokeRepositoryMock.Verify(r => r.FillTextHashesAsync("Ukrainian", It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task Tick_WhenItsFullPassWasSkipped_TriesTheFullPassAgainNextTick()
+    {
+        SetupModel("fast", () => Reply("Жарт"));
+        var since = new List<DateTime?>();
+        jokeRepositoryMock
+            .Setup(r => r.RemoveDuplicatesAsync("Ukrainian", It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .Callback<string, DateTime?, CancellationToken>((_, from, _) => since.Add(from))
+            .ReturnsAsync([]);
+        var leases = 0;
+        // Another replica holds the duplicates lease on this process's first cleanup only.
+        lockRepositoryMock
+            .Setup(l => l.TryAcquireAsync("duplicates:Ukrainian", It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => ++leases > 1);
+        var scheduler = CreateScheduler(Ukrainian("fast"));
+        var nextDue = TickSchedule.FirstDueAfterStartup(DateTime.UtcNow, TimeSpan.FromHours(1));
+
+        await scheduler.RunTickAsync(Ukrainian("fast"), true, nextDue, CancellationToken.None);
+        await scheduler.RunTickAsync(Ukrainian("fast"), true, nextDue, CancellationToken.None);
+
+        Assert.Equal([null], since);
     }
 }

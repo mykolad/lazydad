@@ -1359,7 +1359,7 @@ send nothing. What goes out, and what doesn't:
   (`joke tick`), with its lease, LLM calls (model, duration, tokens) and SQL commands under it.
 - **Metrics:** requests (rate, errors, latency per route), rate-limited votes, LLM duration and tokens per model
   (`gen_ai_client_*`), SQL, .NET runtime, and the scheduler's own counters: `lazydad_scheduler_ticks_total`
-  (outcome `succeeded`/`failed`/`skipped`), `lazydad_jokes_total` (per model, `saved`/`empty`/`failed`),
+  (outcome `succeeded`/`failed`/`skipped`), `lazydad_jokes_total` (per model, `saved`/`empty`/`duplicate`/`failed`),
   `lazydad_leaderboard_updates_total`.
 - **Logs:** everything the app logs through `ILogger`, linked to its trace. That includes model output the app logs
   on purpose: each saved joke's text, and the judge's raw answer when it's invalid (to debug it). It's only about

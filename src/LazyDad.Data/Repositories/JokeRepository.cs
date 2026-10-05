@@ -39,13 +39,14 @@ public class JokeRepository : IJokeRepository
         return await context.Jokes.AnyAsync(j => j.Language == language && j.TextHash == hash, cancellationToken);
     }
 
-    public async Task<int> FillTextHashesAsync(CancellationToken cancellationToken)
+    public async Task<int> FillTextHashesAsync(string language, CancellationToken cancellationToken)
     {
         const int batchSize = 500;
         var filled = 0;
         while (true)
         {
-            var jokes = await context.Jokes.Where(j => j.TextHash == null).OrderBy(j => j.Id).Take(batchSize).ToListAsync(cancellationToken);
+            var jokes = await context.Jokes.Where(j => j.Language == language && j.TextHash == null)
+                .OrderBy(j => j.Id).Take(batchSize).ToListAsync(cancellationToken);
             if (jokes.Count == 0)
                 return filled;
             foreach (var joke in jokes)

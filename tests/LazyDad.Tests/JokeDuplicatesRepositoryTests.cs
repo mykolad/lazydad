@@ -213,22 +213,24 @@ public sealed class JokeDuplicatesRepositoryTests : IDisposable
     }
 
     [Fact]
-    public async Task FillTextHashesAsync_GivesEveryJokeWithoutOneItsHash_AndAddAsyncSetsIt()
+    public async Task FillTextHashesAsync_GivesTheLanguagesJokesWithoutOneTheirHash_AndAddAsyncSetsIt()
     {
         var old = Add("Старий жарт!", 0, withHash: false);
+        var english = Add("Old joke!", 0, language: "English", withHash: false);
         Add("Новіший жарт!", 1);
         await using (var context = CreateContext())
             await new JokeRepository(context).AddAsync(new Joke { Language = "Ukrainian", Model = "m", Text = "Новий жарт!", GeneratedAt = Start }, CancellationToken.None);
 
         int filled;
         await using (var context = CreateContext())
-            filled = await new JokeRepository(context).FillTextHashesAsync(CancellationToken.None);
+            filled = await new JokeRepository(context).FillTextHashesAsync("Ukrainian", CancellationToken.None);
 
         Assert.Equal(1, filled);
         await using var verify = CreateContext();
-        Assert.All(await verify.Jokes.ToListAsync(), j => Assert.Equal(JokeText.Hash(j.Text), j.TextHash));
+        Assert.All(await verify.Jokes.Where(j => j.Language == "Ukrainian").ToListAsync(), j => Assert.Equal(JokeText.Hash(j.Text), j.TextHash));
+        Assert.Null((await verify.Jokes.SingleAsync(j => j.Id == english)).TextHash);
         Assert.True(await new JokeRepository(verify).TextExistsAsync("Ukrainian", "старий жарт", CancellationToken.None));
-        Assert.Equal(0, await new JokeRepository(verify).FillTextHashesAsync(CancellationToken.None));
+        Assert.Equal(0, await new JokeRepository(verify).FillTextHashesAsync("Ukrainian", CancellationToken.None));
         Assert.Contains(old, RemainingIds());
     }
 

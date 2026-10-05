@@ -107,7 +107,7 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   model saved 53 copies weeks apart. Each joke stores `TextHash` (SHA-256 of its key, indexed with the language), so the
   check is one index lookup however many jokes there are; a tick first fills any missing hashes. After saving, before
   the judge sees the new jokes, `RemoveDuplicatesAsync` deletes later copies of the last day's jokes (through the date
-  and hash indexes; a full GROUP BY pass only right after filling hashes, which removed the old copies once), keeping
+  and hash indexes; a full GROUP BY over the hash index on each process's first cleanup and then daily), keeping
   the Top 3 copy, else the most-voted, else the oldest, never a Top 3 joke, with their profiles and votes; one replica
   at a time, under a `duplicates:<language>` lease. The judge also gets one candidate per joke text.
 - **Top-N leaderboard** (`TopJokes` config, `TopJokeService`, `TopJokes` table): after
