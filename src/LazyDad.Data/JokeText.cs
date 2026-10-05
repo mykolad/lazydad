@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace LazyDad.Data;
@@ -21,4 +22,9 @@ public static class JokeText
         }
         return key.ToString();
     }
+
+    /// <summary>SHA-256 of <see cref="Key"/>: 32 bytes, short enough to index (a key can be as long as the joke).</summary>
+    public static byte[] Hash(string text) => SHA256.HashData(Encoding.UTF8.GetBytes(Key(text)));
+
+    public const int HashLength = 32;
 }

@@ -104,10 +104,12 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   **No joke twice:** a joke the site already has (`JokeText.Key`: the same letters and digits, ignoring case, punctuation,
   quotes and apostrophes) isn't saved; the model is asked again at once, told which joke it repeated, within the same
   tries (outcome `duplicate` if every try repeats one). The prompt's recent jokes are only the latest 20, and the old
-  model saved 53 copies weeks apart. After each tick, `RemoveDuplicatesAsync` deletes later copies (keeping the Top 3
-  copy, else the most-voted, else the oldest; never a Top 3 joke; one replica at a time, under a `duplicates:<language>`
-  lease), with their profiles and votes, before the judge sees the new jokes: the old copies on
-  the first tick, and later only the rare joke two models write in the same tick.
+  model saved 53 copies weeks apart. Each joke stores `TextHash` (SHA-256 of its key, indexed with the language), so the
+  check is one index lookup however many jokes there are; a tick first fills any missing hashes. After saving, before
+  the judge sees the new jokes, `RemoveDuplicatesAsync` deletes later copies of the last day's jokes (through the date
+  and hash indexes; a full GROUP BY pass only right after filling hashes, which removed the old copies once), keeping
+  the Top 3 copy, else the most-voted, else the oldest, never a Top 3 joke, with their profiles and votes; one replica
+  at a time, under a `duplicates:<language>` lease. The judge also gets one candidate per joke text.
 - **Top-N leaderboard** (`TopJokes` config, `TopJokeService`, `TopJokes` table): after
   each tick a reasoning "judge" model (`TopJokes:Judge`, e.g. `gpt-6-sol`) sees the
   current top N plus the new jokes and returns the new ranking as a JSON-schema

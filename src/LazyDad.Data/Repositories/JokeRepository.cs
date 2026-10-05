@@ -35,24 +35,55 @@ public class JokeRepository : IJokeRepository
 
     public async Task<bool> TextExistsAsync(string language, string text, CancellationToken cancellationToken)
     {
-        // The comparison ignores punctuation and case, which SQL can't express simply; a language's texts are a few
-        // hundred kilobytes, read once per generated joke.
-        var key = JokeText.Key(text);
-        var texts = await context.Jokes.Where(j => j.Language == language).Select(j => j.Text).ToListAsync(cancellationToken);
-        return texts.Any(t => JokeText.Key(t) == key);
+        var hash = JokeText.Hash(text);
+        return await context.Jokes.AnyAsync(j => j.Language == language && j.TextHash == hash, cancellationToken);
     }
 
-    public async Task<IReadOnlyList<int>> RemoveDuplicatesAsync(string language, CancellationToken cancellationToken)
+    public async Task<int> FillTextHashesAsync(CancellationToken cancellationToken)
     {
-        var jokes = await context.Jokes
-            .Where(j => j.Language == language)
-            .Select(j => new { j.Id, j.Text, j.GeneratedAt, Votes = j.Up + j.Down })
-            .ToListAsync(cancellationToken);
-        var top = (await context.TopJokes.Select(t => t.JokeId).ToListAsync(cancellationToken)).ToHashSet();
+        const int batchSize = 500;
+        var filled = 0;
+        while (true)
+        {
+            var jokes = await context.Jokes.Where(j => j.TextHash == null).OrderBy(j => j.Id).Take(batchSize).ToListAsync(cancellationToken);
+            if (jokes.Count == 0)
+                return filled;
+            foreach (var joke in jokes)
+                joke.TextHash = JokeText.Hash(joke.Text);
+            await context.SaveChangesAsync(cancellationToken);
+            context.ChangeTracker.Clear();
+            filled += jokes.Count;
+        }
+    }
 
-        var copies = jokes
-            .GroupBy(j => JokeText.Key(j.Text))
-            .Where(g => g.Count() > 1)
+    public async Task<IReadOnlyList<int>> RemoveDuplicatesAsync(string language, DateTime? since, CancellationToken cancellationToken)
+    {
+        // The hashes to look at: those of the jokes saved since then (the date index), or, for a full pass, every hash
+        // the language has more than once (a GROUP BY over the hash index, in the database).
+        var jokesInLanguage = context.Jokes.Where(j => j.Language == language && j.TextHash != null);
+        var hashes = since is { } from
+            ? await jokesInLanguage.Where(j => j.GeneratedAt >= from).Select(j => j.TextHash!).Distinct().ToListAsync(cancellationToken)
+            : await jokesInLanguage.GroupBy(j => j.TextHash).Where(g => g.Count() > 1).Select(g => g.Key!).ToListAsync(cancellationToken);
+        if (hashes.Count == 0)
+            return [];
+
+        // Each hash's jokes: one lookup in the (language, text hash) index each.
+        var groups = new List<List<(int Id, DateTime GeneratedAt, int Votes)>>();
+        foreach (var hash in hashes)
+        {
+            var group = await context.Jokes
+                .Where(j => j.Language == language && j.TextHash == hash)
+                .Select(j => new { j.Id, j.GeneratedAt, Votes = j.Up + j.Down })
+                .ToListAsync(cancellationToken);
+            if (group.Count > 1)
+                groups.Add(group.Select(j => (j.Id, j.GeneratedAt, j.Votes)).ToList());
+        }
+        if (groups.Count == 0)
+            return [];
+
+        var groupIds = groups.SelectMany(g => g.Select(j => j.Id)).ToList();
+        var top = (await context.TopJokes.Where(t => groupIds.Contains(t.JokeId)).Select(t => t.JokeId).ToListAsync(cancellationToken)).ToHashSet();
+        var copies = groups
             .SelectMany(g => g
                 .OrderByDescending(j => top.Contains(j.Id))
                 .ThenByDescending(j => j.Votes)
@@ -87,6 +118,7 @@ public class JokeRepository : IJokeRepository
 
     public async Task AddAsync(Joke joke, CancellationToken cancellationToken)
     {
+        joke.TextHash = JokeText.Hash(joke.Text);
         context.Jokes.Add(joke);
         await context.SaveChangesAsync(cancellationToken);
     }

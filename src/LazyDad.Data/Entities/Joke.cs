@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace LazyDad.Data.Entities;
 
 public class Joke
@@ -16,4 +18,10 @@ public class Joke
     public int Up { get; set; }
     /// <summary>Anonymous "not funny" votes.</summary>
     public int Down { get; set; }
+    /// <summary>
+    /// <see cref="JokeText.Hash"/> of the text: indexed with the language, so "is this joke already here" and finding a
+    /// joke's copies are index lookups. Null only until the scheduler fills it (rows from before it existed).
+    /// </summary>
+    [JsonIgnore]
+    public byte[]? TextHash { get; set; }
 }

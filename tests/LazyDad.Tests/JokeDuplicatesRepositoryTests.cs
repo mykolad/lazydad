@@ -21,10 +21,10 @@ public sealed class JokeDuplicatesRepositoryTests : IDisposable
 
     private LazyDadDbContext CreateContext() => database.CreateContext();
 
-    private int Add(string text, int daysLater, int up = 0, string language = "Ukrainian")
+    private int Add(string text, int daysLater, int up = 0, string language = "Ukrainian", bool withHash = true)
     {
         using var context = CreateContext();
-        var joke = new Joke { Language = language, Model = "gpt-5.3-chat", Text = text, GeneratedAt = Start.AddDays(daysLater), Up = up };
+        var joke = new Joke { Language = language, Model = "gpt-5.3-chat", Text = text, GeneratedAt = Start.AddDays(daysLater), Up = up, TextHash = withHash ? JokeText.Hash(text) : null };
         context.Jokes.Add(joke);
         context.SaveChanges();
         return joke.Id;
@@ -76,7 +76,7 @@ public sealed class JokeDuplicatesRepositoryTests : IDisposable
 
         IReadOnlyList<int> removed;
         await using (var context = CreateContext())
-            removed = await new JokeRepository(context).RemoveDuplicatesAsync("Ukrainian", CancellationToken.None);
+            removed = await new JokeRepository(context).RemoveDuplicatesAsync("Ukrainian", null, CancellationToken.None);
 
         Assert.Equal([later, latest], removed.Order());
         Assert.Equal([oldest, other, english], RemainingIds());
@@ -92,7 +92,7 @@ public sealed class JokeDuplicatesRepositoryTests : IDisposable
         var voted = Add("Чому узвар став програмістом? Бо компотував файли.", 10, up: 3);
 
         await using (var context = CreateContext())
-            await new JokeRepository(context).RemoveDuplicatesAsync("Ukrainian", CancellationToken.None);
+            await new JokeRepository(context).RemoveDuplicatesAsync("Ukrainian", null, CancellationToken.None);
 
         Assert.Equal([voted], RemainingIds());
         Assert.DoesNotContain(oldest, RemainingIds());
@@ -113,7 +113,7 @@ public sealed class JokeDuplicatesRepositoryTests : IDisposable
         }
 
         await using (var context = CreateContext())
-            await new JokeRepository(context).RemoveDuplicatesAsync("Ukrainian", CancellationToken.None);
+            await new JokeRepository(context).RemoveDuplicatesAsync("Ukrainian", null, CancellationToken.None);
 
         // The Top 3 copies win over the oldest, and a second Top 3 copy stays too, so no slot is lost.
         Assert.Equal([topOne, topTwo], RemainingIds());
@@ -139,7 +139,7 @@ public sealed class JokeDuplicatesRepositoryTests : IDisposable
         Add("Другий жарт.", 1);
 
         await using var context = CreateContext();
-        Assert.Empty(await new JokeRepository(context).RemoveDuplicatesAsync("Ukrainian", CancellationToken.None));
+        Assert.Empty(await new JokeRepository(context).RemoveDuplicatesAsync("Ukrainian", null, CancellationToken.None));
         Assert.Equal(2, RemainingIds().Count);
     }
 
@@ -158,7 +158,7 @@ public sealed class JokeDuplicatesRepositoryTests : IDisposable
 
         IReadOnlyList<int> removed;
         await using (var context = database.CreateContext([promotion]))
-            removed = await new JokeRepository(context).RemoveDuplicatesAsync("Ukrainian", CancellationToken.None);
+            removed = await new JokeRepository(context).RemoveDuplicatesAsync("Ukrainian", null, CancellationToken.None);
 
         Assert.True(promotion.Ran);
         Assert.Empty(removed);
@@ -181,7 +181,7 @@ public sealed class JokeDuplicatesRepositoryTests : IDisposable
 
         IReadOnlyList<int> removed;
         await using (var context = database.CreateContext([vote]))
-            removed = await new JokeRepository(context).RemoveDuplicatesAsync("Ukrainian", CancellationToken.None);
+            removed = await new JokeRepository(context).RemoveDuplicatesAsync("Ukrainian", null, CancellationToken.None);
 
         Assert.True(vote.Ran);
         Assert.Empty(removed);
@@ -202,5 +202,50 @@ public sealed class JokeDuplicatesRepositoryTests : IDisposable
             }
             return ValueTask.FromResult(result);
         }
+    }
+
+    [Fact]
+    public void Hash_IsTheSameForTheSameJoke_AndDiffersOtherwise()
+    {
+        Assert.Equal(JokeText.Hash("Бо рахувала витрати!"), JokeText.Hash("бо рахувала витрати."));
+        Assert.NotEqual(JokeText.Hash("Бо рахувала витрати"), JokeText.Hash("Бо рахувала прибутки"));
+        Assert.Equal(JokeText.HashLength, JokeText.Hash("x").Length);
+    }
+
+    [Fact]
+    public async Task FillTextHashesAsync_GivesEveryJokeWithoutOneItsHash_AndAddAsyncSetsIt()
+    {
+        var old = Add("Старий жарт!", 0, withHash: false);
+        Add("Новіший жарт!", 1);
+        await using (var context = CreateContext())
+            await new JokeRepository(context).AddAsync(new Joke { Language = "Ukrainian", Model = "m", Text = "Новий жарт!", GeneratedAt = Start }, CancellationToken.None);
+
+        int filled;
+        await using (var context = CreateContext())
+            filled = await new JokeRepository(context).FillTextHashesAsync(CancellationToken.None);
+
+        Assert.Equal(1, filled);
+        await using var verify = CreateContext();
+        Assert.All(await verify.Jokes.ToListAsync(), j => Assert.Equal(JokeText.Hash(j.Text), j.TextHash));
+        Assert.True(await new JokeRepository(verify).TextExistsAsync("Ukrainian", "старий жарт", CancellationToken.None));
+        Assert.Equal(0, await new JokeRepository(verify).FillTextHashesAsync(CancellationToken.None));
+        Assert.Contains(old, RemainingIds());
+    }
+
+    [Fact]
+    public async Task RemoveDuplicatesAsync_Since_LooksOnlyAtCopiesOfJokesSavedSinceThen()
+    {
+        // An old pair nobody saved lately, and a joke with a fresh copy.
+        var oldA = Add("Старий жарт!", 0);
+        var oldB = Add("Старий жарт.", 1);
+        var original = Add("Відомий жарт!", 2);
+        var freshCopy = Add("Відомий жарт.", 30);
+
+        IReadOnlyList<int> removed;
+        await using (var context = CreateContext())
+            removed = await new JokeRepository(context).RemoveDuplicatesAsync("Ukrainian", Start.AddDays(29), CancellationToken.None);
+
+        Assert.Equal([freshCopy], removed);
+        Assert.Equal([oldA, oldB, original], RemainingIds());
     }
 }
