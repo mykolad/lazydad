@@ -10,11 +10,14 @@ public class SignInOptionsValidatorTests
     private const string KeyId = "https://lazydad-kv.vault.azure.net/keys/DataProtection";
     private static readonly string Pepper = Convert.ToBase64String(new byte[SignInOptions.MinPepperBytes]);
 
-    private static ValidateOptionsResult Validate(string pepper, string keyId, string environment)
+    private static ValidateOptionsResult Validate(SignInOptions options, string keyId, string environment)
         => new SignInOptionsValidator(
                 Options.Create(new KeyRingOptions { KeyVaultKeyId = keyId }),
                 Mock.Of<IHostEnvironment>(e => e.EnvironmentName == environment))
-            .Validate(null, new SignInOptions { VoterKeyPepper = pepper });
+            .Validate(null, options);
+
+    private static ValidateOptionsResult Validate(string pepper, string keyId, string environment)
+        => Validate(new SignInOptions { VoterKeyPepper = pepper }, keyId, environment);
 
     private static ValidateOptionsResult Validate(string pepper) => Validate(pepper, KeyId, Environments.Production);
 
@@ -48,4 +51,20 @@ public class SignInOptionsValidatorTests
     [InlineData("https://lazydad-kv.vault.azure.net/keys/DataProtection?api-version=7.4")]
     public void Validate_RejectsAKeyIdThatIsNotAKeyVaultKey(string keyId)
         => Assert.Contains(Validate(Pepper, keyId, Environments.Development).Failures!, f => f.Contains("KeyVaultKeyId"));
+
+    [Theory]
+    [InlineData("client-id", "", true)]
+    [InlineData("", "client-secret", true)]
+    [InlineData("client-id", "", false)]
+    [InlineData("", "client-secret", false)]
+    public void Validate_AGitHubClientIdAndSecret_GoTogether_EvenWithSignInOff(string clientId, string clientSecret, bool signInOn)
+    {
+        var options = new SignInOptions
+        {
+            VoterKeyPepper = signInOn ? Pepper : "",
+            GitHub = new() { ClientId = clientId, ClientSecret = clientSecret },
+        };
+
+        Assert.Contains(Validate(options, KeyId, Environments.Production).Failures!, f => f.Contains("SignIn:GitHub"));
+    }
 }

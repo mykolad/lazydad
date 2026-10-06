@@ -49,8 +49,8 @@ What it all looks like at the end:
 
 | Identity | Kind | Signs in as it | Roles |
 |---|---|---|---|
-| `lazydad-production` | user-assigned | both prod apps; both prod environments, to read the certificate | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeaders`, `JevApiKey`, `VoterKeyPepper` and `lazydad-fyi-origin`; `Key Vault Crypto Service Encryption User` on the `DataProtection` key; read/write in `lazydad-db` |
-| `lazydad-app-staging` | system-assigned | the staging app | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeadersStaging`, `JevApiKeyStaging` and `VoterKeyPepperStaging`; `Key Vault Crypto Service Encryption User` on the `DataProtectionStaging` key; read/write in `lazydad-db-staging` |
+| `lazydad-production` | user-assigned | both prod apps; both prod environments, to read the certificate | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeaders`, `JevApiKey`, `VoterKeyPepper`, `GitHubClientSecret` and `lazydad-fyi-origin`; `Key Vault Crypto Service Encryption User` on the `DataProtection` key; read/write in `lazydad-db` |
+| `lazydad-app-staging` | system-assigned | the staging app | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeadersStaging`, `JevApiKeyStaging`, `VoterKeyPepperStaging` and `GitHubClientSecretStaging`; `Key Vault Crypto Service Encryption User` on the `DataProtectionStaging` key; read/write in `lazydad-db-staging` |
 | `lazydad-acr-pull` | user-assigned | all three apps, to pull images | `Container Registry Repository Reader` (all repositories) |
 | `lazydad-github-cd` | user-assigned | GitHub's `production` environment | `Container Registry Repository Writer` on `lazydad`, `Reader` on `lazydad-preview`, `Reader` on the registry; `Contributor` on both prod apps; `LazyDad Deployer`; `LazyDad Service Tag Reader`; migrations in `lazydad-db` |
 | `lazydad-github-staging` | user-assigned | GitHub's `staging` environment (branch previews too) | `Container Registry Repository Writer` on `lazydad-preview` only, `Reader` on the registry; `Contributor` on `lazydad-app-staging`; `LazyDad Deployer`; migrations in `lazydad-db-staging` |
@@ -256,7 +256,8 @@ unique data. Section 12 shows how to preview a purge, and how to roll back by ha
 ## 3. Key Vault
 
 It holds only what really is a secret: the Grafana Cloud write tokens (section 11), the Jev keys (section 7, step 5), the sign-in
-peppers and the keys that protect the sign-in cookies (section 7, step 7) and the origin certificate for
+peppers and the keys that protect the sign-in cookies (section 7, step 7), the sign-in providers' client secrets (section
+7, step 8) and the origin certificate for
 `lazydad.fyi` with its private key (section 10). The AI endpoint and the database connection strings contain no
 credentials, so they're plain app settings. Access goes through Azure roles (RBAC), per secret where it matters: each
 app can read only its own token, and only production's identity reads the certificate.
@@ -1006,6 +1007,96 @@ A pepper that isn't base64 of at least 32 bytes, or sign-in without the key id, 
 old one keeps serving). Each start then checks the key ring in the background (one value encrypted and decrypted, which
 the first time also makes its first key): `/status` shows `signIn.keyRing` as `ok`, or `failed` when the app can't use
 its key (a missing role, a wrong key id). Without a pepper, sign-in is off (`off`). The smoke tests require `ok`.
+
+**8. Sign in with GitHub.** One OAuth app per environment: an app can hold several redirect URIs, but staging's secret
+(which branch previews can read) must not be able to sign anyone in to production. GitHub has no CLI for them: on
+github.com, **Settings → Developer settings → OAuth Apps → New OAuth App**, twice:
+
+| | Production | Staging |
+|---|---|---|
+| Application name | `LazyDad` | `LazyDad (staging)` |
+| Homepage URL | `https://lazydad.fyi` | staging's address (below) |
+| Application description | below | `Test environment for LazyDad (lazydad.fyi). Not for public use.` |
+| Redirect URI | `https://lazydad.fyi/signin-github`, the only one | staging's address + `/signin-github`, the only one |
+| Allow wildcard matching | off | off |
+| Enable Device Flow | off (the site never uses it, and it would let anyone start a sign-in in the app's name) | off |
+| Expire user access tokens | on (the app reads the profile once and drops the token) | on |
+
+Production's description, shown on GitHub's consent page: "LazyDad is a site of AI-generated dad jokes. Sign in with
+GitHub so you can vote on jokes, one vote per account per joke. LazyDad only gets your public profile and keeps none of
+it: no name, email or username, just an anonymous key so your votes count once." After registering, **Upload new logo**
+(`src/LazyDad.Api/wwwroot/icon-512.png`, the sloth) on the app's page.
+
+Staging's address is `https://$(az containerapp show -g $RG -n lazydad-app-staging --query properties.configuration.ingress.fqdn -o tsv)`.
+The app asks for no scopes, so GitHub's consent page only says it reads the reader's public profile; the app keeps
+nothing from it but the voter key (from the numeric account id). For each app, **Generate a new client secret** and
+put it in Key Vault straight away (it's shown once); the client id isn't secret.
+
+```bash
+read -rsp "Production client secret: " SECRET; echo
+az keyvault secret set --vault-name lazydad-kv -n GitHubClientSecret        --value "$SECRET" -o none
+read -rsp "Staging client secret: " SECRET; echo
+az keyvault secret set --vault-name lazydad-kv -n GitHubClientSecretStaging --value "$SECRET" -o none
+unset SECRET
+
+KV_ID=$(az keyvault show -n lazydad-kv --query id -o tsv)
+PROD=$(az identity show -g $RG -n lazydad-production --query principalId -o tsv)
+STAGING=$(az containerapp show -g $RG -n lazydad-app-staging --query identity.principalId -o tsv)
+az role assignment create --assignee-object-id $PROD --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets User" --scope "$KV_ID/secrets/GitHubClientSecret" -o none
+az role assignment create --assignee-object-id $STAGING --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets User" --scope "$KV_ID/secrets/GitHubClientSecretStaging" -o none
+
+# A few minutes later, each app's settings: staging first (a new production revision runs an extra batch).
+APP=lazydad-app-staging; SUFFIX=Staging; IDENTITY=system; CLIENT_ID=<staging's client id>
+# then: APP=lazydad-app; SUFFIX=; IDENTITY=$(az identity show -g $RG -n lazydad-production --query id -o tsv); CLIENT_ID=<production's>
+# and:  APP=lazydad-app-swedencentral, the same otherwise
+az containerapp secret set -g $RG -n $APP \
+  --secrets "github-client-secret=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/GitHubClientSecret$SUFFIX,identityref:$IDENTITY" -o none
+az containerapp update -g $RG -n $APP --set-env-vars \
+  SignIn__GitHub__ClientId=$CLIENT_ID SignIn__GitHub__ClientSecret=secretref:github-client-secret -o none
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$SECRET = Read-Host 'Production client secret' -MaskInput
+az keyvault secret set --vault-name lazydad-kv -n GitHubClientSecret        --value $SECRET -o none
+$SECRET = Read-Host 'Staging client secret' -MaskInput
+az keyvault secret set --vault-name lazydad-kv -n GitHubClientSecretStaging --value $SECRET -o none
+Remove-Variable SECRET
+
+$KV_ID   = az keyvault show -n lazydad-kv --query id -o tsv
+$PROD    = az identity show -g $RG -n lazydad-production --query principalId -o tsv
+$STAGING = az containerapp show -g $RG -n lazydad-app-staging --query identity.principalId -o tsv
+az role assignment create --assignee-object-id $PROD --assignee-principal-type ServicePrincipal `
+  --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/GitHubClientSecret" -o none
+az role assignment create --assignee-object-id $STAGING --assignee-principal-type ServicePrincipal `
+  --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/GitHubClientSecretStaging" -o none
+
+# A few minutes later, each app's settings: staging first (a new production revision runs an extra batch).
+$APP = 'lazydad-app-staging'; $SUFFIX = 'Staging'; $IDENTITY = 'system'; $CLIENT_ID = '<staging''s client id>'
+# then: $APP = 'lazydad-app'; $SUFFIX = ''; $IDENTITY = az identity show -g $RG -n lazydad-production --query id -o tsv; $CLIENT_ID = '<production''s>'
+# and:  $APP = 'lazydad-app-swedencentral', the same otherwise
+az containerapp secret set -g $RG -n $APP `
+  --secrets "github-client-secret=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/GitHubClientSecret$SUFFIX,identityref:$IDENTITY" -o none
+az containerapp update -g $RG -n $APP --set-env-vars `
+  "SignIn__GitHub__ClientId=$CLIENT_ID" SignIn__GitHub__ClientSecret=secretref:github-client-secret -o none
+```
+
+</details>
+
+A client id without its secret (or the other way round) stops the new revision at startup; with neither, GitHub is off
+and `/auth/signin/github` answers `404`. To check by hand, open `/auth/signin/github` on the app, approve on GitHub's
+page, and `/me` shows `{"signedIn": true, "provider": "github"}` (staging admits only your IP; for production, use
+`https://lazydad.fyi`). A failed sign-in lands on `/?signin=failed`; `lazydad_signins_total{provider="github"}` counts
+it. Replacing an OAuth app keeps every voter (the account id is the reader's GitHub id, the same for every app); only
+the client id and secret change.
+
+**A new client secret** (GitHub's don't expire, but one may leak): generate a second one on the OAuth app's page, put it
+in Key Vault as above, then restart each of that environment's apps so they read it (`az containerapp revision restart
+-g $RG -n $APP --revision $(az containerapp show -g $RG -n $APP --query properties.latestReadyRevisionName -o tsv)`; a
+production restart runs an extra batch), sign in once to check, and delete the old secret on GitHub.
 
 ## 8. Database users
 

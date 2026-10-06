@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using AspNet.Security.OAuth.GitHub;
 using LazyDad.Api.Controllers;
 using LazyDad.Api.SignIn;
 using LazyDad.Api.Telemetry;
@@ -9,6 +10,7 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -41,26 +43,25 @@ public sealed class SignInTests : IAsyncDisposable
         database.Dispose();
     }
 
-    private async Task<WebApplication> StartAsync(string environment, string pepper, string keyId)
-        => await StartAsync(environment, pepper, keyId, keyRingInDatabase: false);
+    private Task<WebApplication> StartAsync(string environment, string pepper, string keyId)
+        => StartAsync(environment, Settings(pepper, keyId), _ => { });
 
-    // keyRingInDatabase: as production keeps it (a Key Vault key id configured), but with the keys left unencrypted, so
-    // the test needs no Key Vault.
-    private async Task<WebApplication> StartAsync(string environment, string pepper, string keyId, bool keyRingInDatabase)
+    private static Dictionary<string, string?> Settings(string pepper, string keyId) => new()
+    {
+        ["SignIn:VoterKeyPepper"] = pepper,
+        ["DataProtection:KeyVaultKeyId"] = keyId,
+    };
+
+    private async Task<WebApplication> StartAsync(string environment, Dictionary<string, string?> settings, Action<IServiceCollection> configure)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = environment });
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         builder.Logging.ClearProviders();
-        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["SignIn:VoterKeyPepper"] = pepper,
-            ["DataProtection:KeyVaultKeyId"] = keyId,
-        });
+        builder.Configuration.AddInMemoryCollection(settings);
         builder.Services.AddDbContext<LazyDadDbContext>(database.Configure);
         builder.Services.AddControllers().AddApplicationPart(typeof(SignInController).Assembly);
         builder.AddSignIn();
-        if (keyRingInDatabase)
-            builder.Services.PostConfigure<KeyManagementOptions>(options => options.XmlEncryptor = null);
+        configure(builder.Services);
         var app = builder.Build();
         apps.Add(app);
         app.Services.GetRequiredService<SignInMetrics>();
@@ -72,8 +73,11 @@ public sealed class SignInTests : IAsyncDisposable
 
     private Task<WebApplication> StartDevelopmentAsync() => StartAsync(Environments.Development, Pepper, "");
 
+    // As production keeps the key ring (a Key Vault key id configured), but with the keys left unencrypted, so the test
+    // needs no Key Vault.
     private Task<WebApplication> StartWithTheKeyRingInTheDatabaseAsync()
-        => StartAsync(Environments.Development, Pepper, KeyId, keyRingInDatabase: true);
+        => StartAsync(Environments.Development, Settings(Pepper, KeyId),
+            services => services.PostConfigure<KeyManagementOptions>(options => options.XmlEncryptor = null));
 
     private HttpClient Client(WebApplication app)
     {
@@ -173,6 +177,7 @@ public sealed class SignInTests : IAsyncDisposable
     [Theory]
     [InlineData("x")]
     [InlineData("microsoft")]
+    [InlineData("github")]
     public async Task SignIn_WithAProviderThatIsNotEnabled_IsNotFound(string provider)
     {
         var client = Client(await StartDevelopmentAsync());
@@ -314,5 +319,106 @@ public sealed class SignInTests : IAsyncDisposable
             .Order()
             .ToList();
         Assert.Equal([("dev", SignInMetrics.Completed), ("dev", SignInMetrics.Started)], counted);
+    }
+
+    private async Task<(HttpClient Client, WebApplication App, FakeGitHub GitHub)> StartWithGitHubAsync()
+    {
+        var gitHub = new FakeGitHub();
+        var settings = Settings(Pepper, "");
+        settings["SignIn:GitHub:ClientId"] = FakeGitHub.ClientId;
+        settings["SignIn:GitHub:ClientSecret"] = FakeGitHub.ClientSecret;
+        var app = await StartAsync(Environments.Development, settings,
+            services => services.Configure<GitHubAuthenticationOptions>(SignInProviders.GitHub, options => options.BackchannelHttpHandler = gitHub));
+        return (Client(app), app, gitHub);
+    }
+
+    // Starts a sign-in with GitHub: where it sends the reader, and the correlation cookie the callback needs.
+    private static async Task<(Uri Authorize, string Correlation)> StartGitHubSignInAsync(HttpClient client, string returnUrl)
+    {
+        using var response = await GetAsync(client, $"auth/signin/github?returnUrl={Uri.EscapeDataString(returnUrl)}", null);
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        var correlation = Assert.Single(response.Headers.GetValues("Set-Cookie"), c => c.StartsWith(".AspNetCore.Correlation.", StringComparison.Ordinal));
+        return (response.Headers.Location!, correlation.Split(';')[0]);
+    }
+
+    // GitHub sends the reader back with these query parameters.
+    private static async Task<HttpResponseMessage> GitHubCallbackAsync(HttpClient client, string correlation, string query)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"signin-github?{query}");
+        request.Headers.Add("Cookie", correlation);
+        return await client.SendAsync(request);
+    }
+
+    private static string State(Uri authorize) => QueryHelpers.ParseQuery(authorize.Query)["state"].ToString();
+
+    [Fact]
+    public async Task SignIn_WithGitHub_SendsTheReaderToGitHub_WithPkceAndNoScopes()
+    {
+        var (client, _, _) = await StartWithGitHubAsync();
+
+        var (authorize, _) = await StartGitHubSignInAsync(client, "/");
+
+        Assert.Equal("https://github.com/login/oauth/authorize", authorize.GetLeftPart(UriPartial.Path));
+        var query = QueryHelpers.ParseQuery(authorize.Query);
+        Assert.Equal(FakeGitHub.ClientId, query["client_id"].ToString());
+        Assert.Equal(new Uri(client.BaseAddress!, "signin-github").AbsoluteUri, query["redirect_uri"].ToString());
+        Assert.Equal("S256", query["code_challenge_method"].ToString());
+        Assert.Equal("", query["scope"].ToString());
+    }
+
+    [Fact]
+    public async Task SignIn_WithGitHub_KeepsOnlyTheVoterKey_AndReturnsToThePage()
+    {
+        var (client, app, gitHub) = await StartWithGitHubAsync();
+        using var signIns = new MetricCollector<long>(app.Services.GetRequiredService<System.Diagnostics.Metrics.IMeterFactory>(),
+            LazyDadTelemetry.Name, "lazydad.signins");
+        var (authorize, correlation) = await StartGitHubSignInAsync(client, "/j/5");
+
+        using var response = await GitHubCallbackAsync(client, correlation, $"code=the-code&state={Uri.EscapeDataString(State(authorize))}");
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Equal("/j/5", response.Headers.Location!.OriginalString);
+        Assert.Equal("the-code", gitHub.TokenRequest["code"]);
+        Assert.NotEmpty(gitHub.TokenRequest["code_verifier"]);
+
+        // The account id is GitHub's numeric id; the login, name and email are dropped.
+        var cookie = CookieValue(response);
+        var claims = Tickets(app).Unprotect(cookie)!.Principal.Claims.Select(c => (c.Type, c.Value)).Order().ToList();
+        var voterKey = app.Services.GetRequiredService<VoterKeys>().For(SignInProviders.GitHub, "12345");
+        Assert.Equal([(SignInPrincipal.ProviderClaim, "github"), (SignInPrincipal.VoterClaim, Convert.ToBase64String(voterKey))], claims);
+        Assert.Equal("github", (await MeAsync(client, cookie)).GetProperty("provider").GetString());
+
+        var counted = signIns.GetMeasurementSnapshot().Where(m => m.Value > 0).Select(m => (string)m.Tags["outcome"]!).Order().ToList();
+        Assert.Equal([SignInMetrics.Completed, SignInMetrics.Started], counted);
+    }
+
+    [Fact]
+    public async Task SignIn_WithGitHub_WithoutAnAccountId_Fails()
+    {
+        var (client, _, gitHub) = await StartWithGitHubAsync();
+        gitHub.User = """{"login": "alice"}""";
+        var (authorize, correlation) = await StartGitHubSignInAsync(client, "/");
+
+        using var response = await GitHubCallbackAsync(client, correlation, $"code=the-code&state={Uri.EscapeDataString(State(authorize))}");
+
+        Assert.Equal(SignInEvents.FailedRedirect, response.Headers.Location!.OriginalString);
+        Assert.DoesNotContain(response.Headers.GetValues("Set-Cookie"), c => c.StartsWith($"{SignInSetup.CookieName}=", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("error=access_denied")]
+    [InlineData("code=the-code")]
+    public async Task SignIn_WithGitHub_WhenTheReaderCancelsOrTheCallbackIsForged_ReturnsToThePage(string query)
+    {
+        // access_denied: the reader said no on GitHub's page. A callback with the right state but no correlation cookie
+        // didn't start in this browser.
+        var (client, _, _) = await StartWithGitHubAsync();
+        var (authorize, correlation) = await StartGitHubSignInAsync(client, "/");
+        var cookie = query.StartsWith("error", StringComparison.Ordinal) ? correlation : "other=1";
+
+        using var response = await GitHubCallbackAsync(client, cookie, $"{query}&state={Uri.EscapeDataString(State(authorize))}");
+
+        Assert.Equal(SignInEvents.FailedRedirect, response.Headers.Location!.OriginalString);
+        Assert.False((await MeAsync(client, null)).GetProperty("signedIn").GetBoolean());
     }
 }

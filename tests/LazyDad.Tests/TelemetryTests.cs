@@ -83,7 +83,8 @@ public class TelemetryTests
         {
             http.DefaultRequestHeaders.UserAgent.ParseAdd("FingerprintBrowser/1.0");
             http.DefaultRequestHeaders.Add("Cookie", "__Host-lazydad=SignInCookieValue");
-            Assert.Equal("ok", await http.GetStringAsync("/probe"));
+            // As a provider's callback (/signin-github?code=…&state=…) arrives.
+            Assert.Equal("ok", await http.GetStringAsync("/probe?code=SignInCodeValue&state=SignInStateValue"));
             Assert.Equal("healthy", await http.GetStringAsync("/healthz"));
         }
         Assert.True(app.Services.GetRequiredService<TracerProvider>().ForceFlush());
@@ -111,6 +112,8 @@ public class TelemetryTests
         // Nothing about who's signed in: not the cookie, not a voter key.
         Assert.DoesNotContain("SignInCookieValue", traces);
         Assert.DoesNotContain("VoterKey", traces);
+        Assert.DoesNotContain("SignInCodeValue", traces);
+        Assert.DoesNotContain("SignInStateValue", traces);
         Assert.DoesNotContain("/healthz", traces);
         Assert.Contains("Probe says hello-otlp", collector.Body("/otlp/v1/logs"));
         Assert.Contains("http.server.request.duration", collector.Body("/otlp/v1/metrics"));
