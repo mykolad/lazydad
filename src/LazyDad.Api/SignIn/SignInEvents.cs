@@ -7,6 +7,9 @@ namespace LazyDad.Api.SignIn;
 /// <summary>
 /// What every remote provider's handler does when its callback arrives, so the cookie never holds more than
 /// <see cref="SignInPrincipal"/> allows. A provider passes how to find its account id in what it sent.
+/// Not used yet: the first remote provider, Microsoft (https://github.com/mykolad/lazydad/issues/70), wires its handler's
+/// <c>OnTicketReceived</c> and <c>OnRemoteFailure</c> here, and so do Google, GitHub, Telegram and Facebook
+/// (https://github.com/mykolad/lazydad/issues/76 to https://github.com/mykolad/lazydad/issues/79).
 /// </summary>
 public static class SignInEvents
 {

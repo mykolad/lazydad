@@ -13,21 +13,16 @@ namespace LazyDad.Api.Controllers;
 [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
 public class SignInController : ControllerBase
 {
-    /// <summary>The Development provider's account when none is given (<c>?account=</c> picks another, to vote as several readers).</summary>
-    public const string DevelopmentAccount = "dev";
-
     /// <summary>The header the page's own requests that change something send (see <see cref="SignOutOfSite"/>).</summary>
     public const string RequestHeader = "X-LazyDad";
     public const string RequestHeaderValue = "1";
 
     private readonly EnabledSignInProviders providers;
-    private readonly VoterKeys voterKeys;
     private readonly SignInMetrics metrics;
 
-    public SignInController(EnabledSignInProviders providers, VoterKeys voterKeys, SignInMetrics metrics)
+    public SignInController(EnabledSignInProviders providers, SignInMetrics metrics)
     {
         this.providers = providers;
-        this.voterKeys = voterKeys;
         this.metrics = metrics;
     }
 
@@ -36,22 +31,15 @@ public class SignInController : ControllerBase
     /// this site is followed; anything else goes to the home page.
     /// </summary>
     [HttpGet("auth/signin/{provider}")]
-    public async Task<IActionResult> StartSignIn(string provider, [FromQuery] string? returnUrl, [FromQuery] string? account)
+    public IActionResult StartSignIn(string provider, [FromQuery] string? returnUrl)
     {
         if (!providers.Contains(provider))
             return NotFound();
         var target = Url.IsLocalUrl(returnUrl) ? returnUrl : "/";
         metrics.Record(provider, SignInMetrics.Started);
 
-        if (provider == SignInProviders.Development)
-        {
-            var principal = SignInPrincipal.Create(provider,
-                voterKeys.For(provider, string.IsNullOrWhiteSpace(account) ? DevelopmentAccount : account));
-            await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal);
-            return LocalRedirect(target);
-        }
-
-        // A remote provider: its handler (named after it) takes over, and its callback signs the reader in (SignInEvents).
+        // Every provider is an authentication scheme named after it, and its handler takes over: a remote one sends the
+        // reader to the provider, whose callback signs them in (SignInEvents); Development's signs them in at once.
         return Challenge(new AuthenticationProperties { RedirectUri = target }, provider);
     }
 

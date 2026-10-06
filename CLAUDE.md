@@ -103,8 +103,9 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   - `SignInController`: `GET /auth/signin/{provider}?returnUrl=` (local URLs only; 404 for a provider that isn't
     enabled), `POST /auth/signout`, `GET /me` → `{signedIn, provider}`, all `no-store`. Providers are authentication
     schemes named after them; their callbacks go through `SignInEvents` (only the voter key survives;
-    `lazydad_signins_total{provider, outcome}`, `completed` counted once the cookie is written). No real provider yet: only `dev`, in Development (`?account=` picks
-    the made-up account, to vote as several readers).
+    `lazydad_signins_total{provider, outcome}`, `completed` counted once the cookie is written). `EnabledSignInProviders` lists the registered provider schemes, so
+    the controller has one path for all. No real provider yet: only `dev` (`DevelopmentSignInHandler`, in Development:
+    signs in at once; `?account=` picks the made-up account, to vote as several readers).
 - One loop per enabled language runs concurrently via `Task.WhenAll`: a startup tick, then a delay to each regular
   due time. **Due times are fixed UTC times** (`TickSchedule`: every whole `IntervalHours` since midnight UTC, so
   00:00, 04:00, 08:00 … for 4 h), the same for every replica and unchanged by restarts. After a startup tick the

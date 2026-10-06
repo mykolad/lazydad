@@ -2,6 +2,7 @@ using Azure.Identity;
 using LazyDad.Api.Configuration;
 using LazyDad.Api.Telemetry;
 using LazyDad.Data;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Options;
@@ -33,11 +34,7 @@ public static class SignInSetup
         services.Configure<KeyRingOptions>(builder.Configuration.GetSection(KeyRingOptions.SectionName));
         services.AddSingleton<VoterKeys>();
 
-        var options = builder.Configuration.GetSection(SignInOptions.SectionName).Get<SignInOptions>() ?? new SignInOptions();
-        var providers = new List<string>();
-        if (options.Enabled && builder.Environment.IsDevelopment())
-            providers.Add(SignInProviders.Development);
-        services.AddSingleton(new EnabledSignInProviders(providers));
+        services.AddSingleton<EnabledSignInProviders>();
         services.AddSingleton<SignInMetrics>();
         services.AddSingleton<KeyRingCheck>();
 
@@ -53,7 +50,7 @@ public static class SignInSetup
                 .PersistKeysToDbContext<LazyDadDbContext>()
                 .ProtectKeysWithAzureKeyVault(keyId, new DefaultAzureCredential());
 
-        services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+        var authentication = services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
             .AddCookie(cookie =>
             {
                 cookie.Cookie.Name = CookieName;
@@ -92,5 +89,11 @@ public static class SignInSetup
                     return Task.CompletedTask;
                 };
             });
+
+        // Each provider is an authentication scheme named after it (EnabledSignInProviders lists them). The remote ones
+        // come with their issues (#70, #76–#79); Development's signs in at once, only in Development.
+        var options = builder.Configuration.GetSection(SignInOptions.SectionName).Get<SignInOptions>() ?? new SignInOptions();
+        if (options.Enabled && builder.Environment.IsDevelopment())
+            authentication.AddScheme<AuthenticationSchemeOptions, DevelopmentSignInHandler>(SignInProviders.Development, null);
     }
 }

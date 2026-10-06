@@ -1,6 +1,7 @@
 using LazyDad.Api.Configuration;
 using LazyDad.Api.SignIn;
 using LazyDad.Data;
+using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -30,11 +31,11 @@ public sealed class KeyRingCheckTests : IDisposable
             .AddDataProtection().SetApplicationName(SignInSetup.ApplicationName).PersistKeysToDbContext<LazyDadDbContext>()
             .Services.BuildServiceProvider();
         var check = Check(services.GetRequiredService<IDataProtectionProvider>(), On);
-        Assert.Equal(KeyRingCheck.Pending, check.State);
+        Assert.Equal(KeyRingState.Pending, check.State);
 
         await check.RunAsync(CancellationToken.None);
 
-        Assert.Equal(KeyRingCheck.Ok, check.State);
+        Assert.Equal(KeyRingState.Ok, check.State);
         await using var context = database.CreateContext();
         Assert.Single(await context.DataProtectionKeys.ToListAsync());
     }
@@ -49,7 +50,7 @@ public sealed class KeyRingCheckTests : IDisposable
 
         await check.RunAsync(CancellationToken.None);
 
-        Assert.Equal(KeyRingCheck.Failed, check.State);
+        Assert.Equal(KeyRingState.Failed, check.State);
     }
 
     [Fact]
@@ -60,6 +61,39 @@ public sealed class KeyRingCheckTests : IDisposable
 
         await check.RunAsync(CancellationToken.None);
 
-        Assert.Equal(KeyRingCheck.Off, check.State);
+        Assert.Equal(KeyRingState.Off, check.State);
+    }
+
+    [Fact]
+    public async Task AResult_IsSetOnlyOnce()
+    {
+        // A second run (say, after the ring stops working) doesn't turn an "ok" into "failed", or back.
+        var provider = new FailsAfterFirstUse();
+        var check = Check(provider, On);
+
+        await check.RunAsync(CancellationToken.None);
+        await check.RunAsync(CancellationToken.None);
+
+        Assert.Equal(2, provider.Uses);
+        Assert.Equal(KeyRingState.Ok, check.State);
+    }
+
+    [Theory]
+    [InlineData(KeyRingState.Off, "off")]
+    [InlineData(KeyRingState.Pending, "pending")]
+    [InlineData(KeyRingState.Ok, "ok")]
+    [InlineData(KeyRingState.Failed, "failed")]
+    public void State_ShowsOnStatusByItsName(KeyRingState state, string name)
+        // What /status (and the smoke tests reading it) see.
+        => Assert.Equal($$"""{"keyRing":"{{name}}"}""", JsonSerializer.Serialize(new { keyRing = state }));
+
+    private sealed class FailsAfterFirstUse : IDataProtectionProvider
+    {
+        private readonly IDataProtectionProvider working = new EphemeralDataProtectionProvider();
+
+        public int Uses { get; private set; }
+
+        public IDataProtector CreateProtector(string purpose)
+            => ++Uses == 1 ? working.CreateProtector(purpose) : throw new InvalidOperationException("403 from Key Vault");
     }
 }
