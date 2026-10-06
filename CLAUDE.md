@@ -296,6 +296,14 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
   repository, applied in two phases around each rollout; `previous-<env>`
   keeps what served before the latest rollout from the purge, for a manual rollback).
 
+## Pull requests
+
+- **Every change to an open PR is a new commit on top.** Don't amend, squash or force-push commits that are already
+  pushed: whoever is reviewing or has the branch checked out keeps a stable history. Squashing, if wanted, happens at
+  merge.
+- **To bring a PR up to date with `master`, merge `master` into its branch** (a merge commit); don't rebase. `master`
+  requires branches to be up to date before merging.
+
 ## Building and testing
 
 ```
