@@ -1008,15 +1008,24 @@ old one keeps serving). Each start then checks the key ring in the background (o
 the first time also makes its first key): `/status` shows `signIn.keyRing` as `ok`, or `failed` when the app can't use
 its key (a missing role, a wrong key id). Without a pepper, sign-in is off (`off`). The smoke tests require `ok`.
 
-**8. Sign in with GitHub.** One OAuth app per environment, since an OAuth app has one callback URL. GitHub has no CLI
-for them: on github.com, **Settings → Developer settings → OAuth Apps → New OAuth App**, twice:
+**8. Sign in with GitHub.** One OAuth app per environment: an app can hold several redirect URIs, but staging's secret
+(which branch previews can read) must not be able to sign anyone in to production. GitHub has no CLI for them: on
+github.com, **Settings → Developer settings → OAuth Apps → New OAuth App**, twice:
 
 | | Production | Staging |
 |---|---|---|
 | Application name | `LazyDad` | `LazyDad (staging)` |
 | Homepage URL | `https://lazydad.fyi` | staging's address (below) |
-| Authorization callback URL | `https://lazydad.fyi/signin-github` | staging's address + `/signin-github` |
-| Enable Device Flow | off | off |
+| Application description | below | `Test environment for LazyDad (lazydad.fyi). Not for public use.` |
+| Redirect URI | `https://lazydad.fyi/signin-github`, the only one | staging's address + `/signin-github`, the only one |
+| Allow wildcard matching | off | off |
+| Enable Device Flow | off (the site never uses it, and it would let anyone start a sign-in in the app's name) | off |
+| Expire user access tokens | on (the app reads the profile once and drops the token) | on |
+
+Production's description, shown on GitHub's consent page: "LazyDad is a site of AI-generated dad jokes. Sign in with
+GitHub so you can vote on jokes, one vote per account per joke. LazyDad only gets your public profile and keeps none of
+it: no name, email or username, just an anonymous key so your votes count once." After registering, **Upload new logo**
+(`src/LazyDad.Api/wwwroot/icon-512.png`, the sloth) on the app's page.
 
 Staging's address is `https://$(az containerapp show -g $RG -n lazydad-app-staging --query properties.configuration.ingress.fqdn -o tsv)`.
 The app asks for no scopes, so GitHub's consent page only says it reads the reader's public profile; the app keeps
