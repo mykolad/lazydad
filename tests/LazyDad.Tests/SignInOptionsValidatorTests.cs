@@ -53,11 +53,17 @@ public class SignInOptionsValidatorTests
         => Assert.Contains(Validate(Pepper, keyId, Environments.Development).Failures!, f => f.Contains("KeyVaultKeyId"));
 
     [Theory]
-    [InlineData("client-id", "")]
-    [InlineData("", "client-secret")]
-    public void Validate_AGitHubClientIdAndSecret_GoTogether(string clientId, string clientSecret)
+    [InlineData("client-id", "", true)]
+    [InlineData("", "client-secret", true)]
+    [InlineData("client-id", "", false)]
+    [InlineData("", "client-secret", false)]
+    public void Validate_AGitHubClientIdAndSecret_GoTogether_EvenWithSignInOff(string clientId, string clientSecret, bool signInOn)
     {
-        var options = new SignInOptions { VoterKeyPepper = Pepper, GitHub = new() { ClientId = clientId, ClientSecret = clientSecret } };
+        var options = new SignInOptions
+        {
+            VoterKeyPepper = signInOn ? Pepper : "",
+            GitHub = new() { ClientId = clientId, ClientSecret = clientSecret },
+        };
 
         Assert.Contains(Validate(options, KeyId, Environments.Production).Failures!, f => f.Contains("SignIn:GitHub"));
     }
