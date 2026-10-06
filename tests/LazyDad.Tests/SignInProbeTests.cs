@@ -120,21 +120,93 @@ public sealed class SignInProbeTests : IDisposable
     }
 
     [Fact]
-    public void StateGauge_ShowsEachProbedProvidersState_AndNothingForTheOthers()
+    public void StateGauge_ShowsEachProbedProvidersState_AndZeroForTheOthers()
     {
         services.GetRequiredService<SignInMetrics>();
         using var gauge = new MetricCollector<int>(services.GetRequiredService<IMeterFactory>(), LazyDadTelemetry.Name, "lazydad.signin.provider.state");
         var status = services.GetRequiredService<SignInProviderStatus>();
 
         gauge.RecordObservableInstruments();
-        Assert.Empty(gauge.GetMeasurementSnapshot());   // pending: no state yet
+        Assert.Empty(gauge.GetMeasurementSnapshot());   // pending, and the others off: no state yet
 
         status.Set(SignInProviders.GitHub, ProviderState.Unreachable);
+        Assert.Equal([("github", "invalid", 0), ("github", "unreachable", 1), ("github", "valid", 0)], Observe(gauge));
+
+        // Recovered: the old state drops to 0 at once, so an alert on it ends with the recovery.
+        status.Set(SignInProviders.GitHub, ProviderState.Valid);
+        Assert.Equal([("github", "invalid", 0), ("github", "unreachable", 0), ("github", "valid", 1)], Observe(gauge));
+    }
+
+    private static List<(string, string, int)> Observe(MetricCollector<int> gauge)
+    {
+        gauge.Clear();
         gauge.RecordObservableInstruments();
-        var measured = Assert.Single(gauge.GetMeasurementSnapshot());
-        Assert.Equal(1, measured.Value);
-        Assert.Equal("github", measured.Tags["provider"]);
-        Assert.Equal("unreachable", measured.Tags["state"]);
+        return gauge.GetMeasurementSnapshot().Select(m => ((string)m.Tags["provider"]!, (string)m.Tags["state"]!, m.Value)).Order().ToList();
+    }
+
+    [Fact]
+    public async Task BackchannelTiming_IncludesTheBody()
+    {
+        using var calls = new MetricCollector<double>(services.GetRequiredService<IMeterFactory>(), LazyDadTelemetry.Name, "lazydad.signin.provider.duration");
+        var delay = TimeSpan.FromMilliseconds(200);
+        using var client = TimedClient(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new SlowStream(delay)) });
+
+        using var response = await client.GetAsync("https://api.github.com/user");
+
+        var call = Assert.Single(calls.GetMeasurementSnapshot());
+        Assert.Equal(SignInBackchannel.UserInfo, call.Tags["operation"]);
+        Assert.Equal(SignInBackchannel.Ok, call.Tags["outcome"]);
+        Assert.True(call.Value >= delay.TotalSeconds * 0.9, $"Timed {call.Value} s, the body alone took {delay.TotalSeconds} s.");
+    }
+
+    [Fact]
+    public async Task BackchannelTiming_ABodyThatBreaks_IsUnreachable()
+    {
+        using var calls = new MetricCollector<double>(services.GetRequiredService<IMeterFactory>(), LazyDadTelemetry.Name, "lazydad.signin.provider.duration");
+        using var client = TimedClient(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new BrokenStream()) });
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => client.GetAsync("https://github.com/login/oauth/access_token"));
+
+        var call = Assert.Single(calls.GetMeasurementSnapshot());
+        Assert.Equal(SignInBackchannel.Token, call.Tags["operation"]);
+        Assert.Equal(SignInBackchannel.Unreachable, call.Tags["outcome"]);
+    }
+
+    // GitHub's back channel as SignInSetup builds it, over a fixed answer.
+    private HttpClient TimedClient(HttpResponseMessage answer)
+        => new(new SignInBackchannel.Timing(SignInProviders.GitHub,
+            uri => uri.Host == "github.com" ? SignInBackchannel.Token : SignInBackchannel.UserInfo,
+            services.GetRequiredService<SignInMetrics>()) { InnerHandler = new Fixed(answer) });
+
+    private sealed class Fixed(HttpResponseMessage answer) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => Task.FromResult(answer);
+    }
+
+    // A body that arrives late.
+    private sealed class SlowStream(TimeSpan delay) : MemoryStream("""{"id": 1}"""u8.ToArray())
+    {
+        private bool waited;
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken)
+        {
+            if (!waited)
+            {
+                waited = true;
+                await Task.Delay(delay, cancellationToken);
+            }
+            return await base.ReadAsync(buffer, cancellationToken);
+        }
+    }
+
+    // A connection that drops halfway through the body.
+    private sealed class BrokenStream : MemoryStream
+    {
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken)
+            => ValueTask.FromException<int>(new IOException("The connection was reset."));
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => Task.FromException<int>(new IOException("The connection was reset."));
     }
 
     [Fact]

@@ -20,6 +20,8 @@ public sealed class SignInMetrics
     // Seconds: a provider usually answers in a tenth of a second or so; the probe gives up after 10.
     private static readonly IReadOnlyList<double> DurationBuckets = [0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
 
+    private static readonly ProviderState[] ProbedStates = [ProviderState.Valid, ProviderState.Invalid, ProviderState.Unreachable];
+
     private readonly Counter<long> signIns;
     private readonly Histogram<double> providerCalls;
 
@@ -32,12 +34,15 @@ public sealed class SignInMetrics
             "The app's calls to a sign-in provider, by provider, operation (token, userinfo, other, probe) and outcome " +
             "(ok, error, unreachable; a probe's: valid, invalid, unreachable).",
             tags: null, advice: new InstrumentAdvice<double> { HistogramBucketBoundaries = DurationBuckets });
-        // 1 for each probed provider's current state; nothing before its first probe or for a provider that's off.
+        // Each probed provider's states, 1 for its current one and 0 for the others; nothing before its first probe or for
+        // a provider that's off. The zeros matter: a series that just stops keeps its last value for a few minutes in
+        // Prometheus, so an "invalid" 1 would outlive the recovery (and LazyDadSignInProviderDown with it).
         meter.CreateObservableGauge("lazydad.signin.provider.state",
             () => status.All
                 .Where(p => p.Value is not (ProviderState.Off or ProviderState.Pending))
-                .Select(p => new Measurement<int>(1, new("provider", p.Key), new("state", p.Value.ToString().ToLowerInvariant()))),
-            "{provider}", "Each sign-in provider's state from its last probe: valid, invalid or unreachable.");
+                .SelectMany(p => ProbedStates.Select(state => new Measurement<int>(state == p.Value ? 1 : 0,
+                    new("provider", p.Key), new("state", state.ToString().ToLowerInvariant())))),
+            "{provider}", "Each sign-in provider's state from its last probe: 1 for valid, invalid or unreachable, 0 for the others.");
         foreach (var provider in providers.Names)
             foreach (var outcome in Outcomes)
                 signIns.Add(0, new("provider", provider), new("outcome", outcome));

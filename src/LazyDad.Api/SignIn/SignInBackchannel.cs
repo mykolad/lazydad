@@ -25,6 +25,9 @@ public static class SignInBackchannel
     /// <summary>A request the probe sends: it times itself, with its own outcome.</summary>
     public static readonly HttpRequestOptionsKey<bool> IsProbe = new("lazydad.signin.probe");
 
+    /// <summary>The most a provider's answer may be (as the OAuth handlers' own back channel allows).</summary>
+    public const int MaxResponseBytes = 10 * 1024 * 1024;
+
     public static string ClientName(string provider) => $"signin-{provider}";
 
     public static string Outcome(HttpResponseMessage response)
@@ -43,14 +46,19 @@ public static class SignInBackchannel
 
             var name = operation(request.RequestUri!);
             var started = Stopwatch.GetTimestamp();
+            HttpResponseMessage? response = null;
             try
             {
-                var response = await base.SendAsync(request, cancellationToken);
+                response = await base.SendAsync(request, cancellationToken);
+                // The whole answer, not just its headers: HttpClient would read the body after this returns, so a slow or
+                // broken body would otherwise count as a quick "ok". Buffered here, HttpClient's own read is a no-op.
+                await response.Content.LoadIntoBufferAsync(MaxResponseBytes, cancellationToken);
                 metrics.RecordProviderCall(provider, name, Outcome(response), Stopwatch.GetElapsedTime(started));
                 return response;
             }
-            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or IOException)
             {
+                response?.Dispose();
                 metrics.RecordProviderCall(provider, name, Unreachable, Stopwatch.GetElapsedTime(started));
                 throw;
             }

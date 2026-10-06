@@ -134,7 +134,7 @@ public static class SignInSetup
                 // What the handler's own back channel would have: GitHub's API refuses a request without a user agent.
                 client.DefaultRequestHeaders.UserAgent.ParseAdd("LazyDad (+https://lazydad.fyi)");
                 client.Timeout = TimeSpan.FromSeconds(30);
-                client.MaxResponseContentBufferSize = 10 * 1024 * 1024;
+                client.MaxResponseContentBufferSize = SignInBackchannel.MaxResponseBytes;
             })
             // The handler keeps its client for the app's lifetime, so connections are renewed instead (DNS changes).
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(15) })
