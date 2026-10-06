@@ -14,6 +14,22 @@ public class SignInOptions
     /// </summary>
     public string VoterKeyPepper { get; set; } = string.Empty;
 
+    /// <summary>Sign in with GitHub: an OAuth app per environment. Off while its client id is empty.</summary>
+    public OAuthClientOptions GitHub { get; set; } = new();
+
     // Only empty means off: a value of spaces is a mistake, so it goes to the validator and fails startup.
     public bool Enabled => !string.IsNullOrEmpty(VoterKeyPepper);
+}
+
+/// <summary>
+/// An OAuth app's registration at a provider. The secret is a Key Vault reference in Azure (e.g.
+/// <c>GitHubClientSecret</c>, <c>GitHubClientSecretStaging</c>).
+/// </summary>
+public class OAuthClientOptions
+{
+    public string ClientId { get; set; } = string.Empty;
+    public string ClientSecret { get; set; } = string.Empty;
+
+    // The validator fails startup when only one of them is set: that's a lost setting, not "off".
+    public bool Configured => ClientId.Length > 0;
 }

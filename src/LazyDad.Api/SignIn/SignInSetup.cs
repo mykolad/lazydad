@@ -4,8 +4,10 @@ using LazyDad.Api.Telemetry;
 using LazyDad.Data;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OAuth;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Options;
+using System.Security.Claims;
 
 namespace LazyDad.Api.SignIn;
 
@@ -90,10 +92,34 @@ public static class SignInSetup
                 };
             });
 
-        // Each provider is an authentication scheme named after it (EnabledSignInProviders lists them). The remote ones
-        // come with their issues (#70, #76–#79); Development's signs in at once, only in Development.
+        // Each provider is an authentication scheme named after it (EnabledSignInProviders lists them), registered only
+        // while sign-in is on and the provider is configured. The rest come with their issues (#70, #76, #78, #79);
+        // Development's signs in at once, only in Development.
         var options = builder.Configuration.GetSection(SignInOptions.SectionName).Get<SignInOptions>() ?? new SignInOptions();
-        if (options.Enabled && builder.Environment.IsDevelopment())
+        if (!options.Enabled)
+            return;
+        if (builder.Environment.IsDevelopment())
             authentication.AddScheme<AuthenticationSchemeOptions, DevelopmentSignInHandler>(SignInProviders.Development, null);
+        if (options.GitHub.Configured)
+            authentication.AddGitHub(SignInProviders.GitHub, github =>
+            {
+                Remote(github, SignInProviders.GitHub, options.GitHub);
+                // No scopes: the public profile is enough, and its numeric id is the account id (never the login, which
+                // the reader can change). GitHub ids are public, which is why the voter key is keyed with the pepper.
+                github.Scope.Clear();
+                github.Events.OnTicketReceived = context
+                    => SignInEvents.OnTicketReceived(context, SignInProviders.GitHub, p => p.FindFirstValue(ClaimTypes.NameIdentifier));
+            });
+    }
+
+    /// <summary>What every OAuth provider shares: its registration, PKCE, no tokens kept, failures back to the page.</summary>
+    private static void Remote(OAuthOptions remote, string provider, OAuthClientOptions client)
+    {
+        remote.ClientId = client.ClientId;
+        remote.ClientSecret = client.ClientSecret;
+        remote.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+        remote.UsePkce = true;
+        remote.SaveTokens = false;
+        remote.Events.OnRemoteFailure = context => SignInEvents.OnRemoteFailure(context, provider);
     }
 }

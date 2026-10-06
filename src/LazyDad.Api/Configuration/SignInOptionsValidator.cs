@@ -34,6 +34,15 @@ public class SignInOptionsValidator : IValidateOptions<SignInOptions>
             errors.Add($"Sign-in is on, so {KeyRingOptions.SectionName}:KeyVaultKeyId must name the Key Vault key that protects " +
                 "the cookies' key ring (only Development may leave it unprotected).");
 
+        Client(errors, "GitHub", options.GitHub);
+
         return errors.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(errors);
+    }
+
+    // A client id without its secret (or the other way round) is a setting that went missing.
+    private static void Client(List<string> errors, string provider, OAuthClientOptions client)
+    {
+        if (client.ClientId.Length > 0 != client.ClientSecret.Length > 0)
+            errors.Add($"{SignInOptions.SectionName}:{provider} needs both ClientId and ClientSecret, or neither.");
     }
 }

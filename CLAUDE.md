@@ -85,7 +85,7 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   load test raises it): from `X-Forwarded-For` (set by the Container Apps
   ingress), or, for requests from Cloudflare's ranges, from `CF-Connecting-IP` (`CloudflareClientAddressMiddleware`;
   anyone can send that header, so only Cloudflare's count). Server-side dedupe needs sign-in, which doesn't exist yet.
-- **Sign-in for voting is in progress** (issues #68–#83, one PR each, in order; design and decisions in
+- **Sign-in for voting is in progress** (issues #68–#83, one PR each, in the design's order; design and decisions in
   `docs/design/sign-in-2026-10.md`). Landed so far, unused by the page:
   - the `Votes` table (`(JokeId, VoterKey)`, `Value`, `UpdatedAt`) and `VoteRepository`, which changes a vote row only if
     it still holds the vote it read and the joke's `Up`/`Down` by the difference, in one transaction (idempotent; a lost
@@ -104,8 +104,14 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
     enabled), `POST /auth/signout`, `GET /me` → `{signedIn, provider}`, all `no-store`. Providers are authentication
     schemes named after them; their callbacks go through `SignInEvents` (only the voter key survives;
     `lazydad_signins_total{provider, outcome}`, `completed` counted once the cookie is written). `EnabledSignInProviders` lists the registered provider schemes, so
-    the controller has one path for all. No real provider yet: only `dev` (`DevelopmentSignInHandler`, in Development:
-    signs in at once; `?account=` picks the made-up account, to vote as several readers).
+    the controller has one path for all. A provider's scheme exists only while sign-in is on and the provider is
+    configured;
+  - **GitHub** (`AspNet.Security.OAuth.GitHub`, `/signin-github`): no scopes, PKCE, the account id is the numeric `id`
+    (never the login, which can change). `SignIn:GitHub:ClientId` and `ClientSecret` (a Key Vault reference per app,
+    `GitHubClientSecret` / `GitHubClientSecretStaging`; one OAuth app per environment; runbook section 7, step 8): both
+    or neither, empty = off. Signing in works by hand at `/auth/signin/github`; the page has no button yet (#72);
+  - `dev` (`DevelopmentSignInHandler`, in Development only: signs in at once; `?account=` picks the made-up account, to
+    vote as several readers).
 - One loop per enabled language runs concurrently via `Task.WhenAll`: a startup tick, then a delay to each regular
   due time. **Due times are fixed UTC times** (`TickSchedule`: every whole `IntervalHours` since midnight UTC, so
   00:00, 04:00, 08:00 … for 4 h), the same for every replica and unchanged by restarts. After a startup tick the
