@@ -153,10 +153,10 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
         var keyRing = await target.PollAsync<JsonElement>(async () =>
         {
             var json = await target.GetJsonAsync("status");
-            var isExpectedRevision = target.ExpectedRevision is null || json.GetProperty("revision").GetString() == target.ExpectedRevision;
-            return isExpectedRevision && json.TryGetProperty("signIn", out var signIn)
-                && signIn.GetProperty("keyRing").GetString() != "pending" ? signIn.GetProperty("keyRing") : null;
-        }, SmokeTarget.ColdStartTimeout, $"revision '{target.ExpectedRevision}' to finish its key ring check");
+            return target.IsFromTheProcessUnderTest(json) && json.TryGetProperty("signIn", out var signIn)
+                && signIn.GetProperty("keyRing").GetString() != "pending" ? signIn.GetProperty("keyRing").Clone() : null;
+        }, SmokeTarget.ColdStartTimeout, $"revision '{target.ExpectedRevision}' to finish its key ring check" +
+            (target.NotProcess is null ? "" : $", from a process other than {target.NotProcess}"));
 
         Assert.Equal("ok", keyRing.GetString());
     }
@@ -177,10 +177,10 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
         var providers = await target.PollAsync<JsonElement>(async () =>
         {
             var json = await target.GetJsonAsync("status");
-            var isExpectedRevision = target.ExpectedRevision is null || json.GetProperty("revision").GetString() == target.ExpectedRevision;
-            return isExpectedRevision && json.TryGetProperty("signIn", out var signIn) && signIn.TryGetProperty("providers", out var states)
+            return target.IsFromTheProcessUnderTest(json) && json.TryGetProperty("signIn", out var signIn) && signIn.TryGetProperty("providers", out var states)
                 && states.EnumerateObject().All(p => p.Value.GetString() != "pending") ? states.Clone() : null;
-        }, SmokeTarget.ColdStartTimeout, $"revision '{target.ExpectedRevision}' to probe its sign-in providers");
+        }, SmokeTarget.ColdStartTimeout, $"revision '{target.ExpectedRevision}' to probe its sign-in providers" +
+            (target.NotProcess is null ? "" : $", from a process other than {target.NotProcess}"));
 
         using var noRedirects = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { BaseAddress = target.Client.BaseAddress };
         foreach (var provider in providers.EnumerateObject().Where(p => p.Value.GetString() != "off"))
