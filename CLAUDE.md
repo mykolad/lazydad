@@ -70,7 +70,9 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   Changing a Jev question or option means a new `JevQuestions.QuestionSet` (every joke is profiled again).
 - **API for the page:** `GET /jokes/feed?sort=new|top&limit=(≤ 50)[&after=<next>]` → `{total, items, next}` (keyset cursor, so new jokes don't shift pages);
   `GET /jokes/summary` → `{count, nextBatchAt}`; `POST /jokes/{id}/vote {value, previous}` → `{up, down}`;
-  `GET /jokes/{id}` (cached like the feed); `GET /jokes/{id}/similar?limit=(≤ 12)` → the most similar jokes.
+  `GET /jokes/{id}` (cached like the feed); `GET /jokes/{id}/similar?limit=(≤ 12)` → the most similar jokes;
+  `GET /me` → `{signedIn, provider}`, `GET /auth/signin/{provider}?returnUrl=`, `POST /auth/signout` (never cached; sign-out
+  only with the page's `X-LazyDad: 1` header, which another site's form can't send).
 - **Read cache** (`JokeReadCache`, `ReadCache:Seconds`, 30 by default, 0 = off): the joke count, the Top 3, each joke by id, the
   similarity index and each feed page (by sort, cursor and size) are kept in memory per replica (at most 20,000 rows), since every visitor reads
   the same ones and the load test found the database to be the first limit (`docs/performance.md`, the history of
@@ -84,12 +86,26 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   ingress), or, for requests from Cloudflare's ranges, from `CF-Connecting-IP` (`CloudflareClientAddressMiddleware`;
   anyone can send that header, so only Cloudflare's count). Server-side dedupe needs sign-in, which doesn't exist yet.
 - **Sign-in for voting is in progress** (issues #68–#83, one PR each, in order; design and decisions in
-  `docs/design/sign-in-2026-10.md`).
-  Landed so far, unused by the page: the `Votes` table (`(JokeId, VoterKey)`, `Value`, `UpdatedAt`) and `VoteRepository`,
-  which changes a vote row only if it still holds the vote it read and the joke's `Up`/`Down` by the difference, in one
-  transaction (idempotent; a lost race reads again); `VoterKeys` (HMAC-SHA256 of `<provider>:<account id>` keyed with
-  `SignIn:VoterKeyPepper`, a Key Vault reference; empty = sign-in off; never store or log the account id itself); and
-  ASP.NET's `DataProtectionKeys` table for the shared cookie key ring.
+  `docs/design/sign-in-2026-10.md`). Landed so far, unused by the page:
+  - the `Votes` table (`(JokeId, VoterKey)`, `Value`, `UpdatedAt`) and `VoteRepository`, which changes a vote row only if
+    it still holds the vote it read and the joke's `Up`/`Down` by the difference, in one transaction (idempotent; a lost
+    race reads again);
+  - `VoterKeys`: HMAC-SHA256 of `<provider>:<account id>` keyed with `SignIn:VoterKeyPepper` (a Key Vault reference per
+    app, `VoterKeyPepper` / `VoterKeyPepperStaging`; runbook section 7, step 7). Empty = sign-in off. Never store or log
+    the account id, a claim or a voter key;
+  - the cookie (`SignInSetup`): `__Host-lazydad`, HttpOnly, Secure, `SameSite=Lax`, a session cookie for now, holding
+    exactly the voter key and the provider (`SignInPrincipal`; any other cookie is rejected). With a Key Vault key
+    (`DataProtection:KeyVaultKeyId`, versionless; required wherever sign-in is on, except Development) its key ring is in
+    the database (`DataProtectionKeys`, application name `lazydad`, so both production apps share it; always the
+    read-write connection), each key wrapped with that key. Without one (a local run) the ring stays on the machine, so a
+    local run against production's database never adds an unencrypted key to production's ring. `KeyRingCheck` proves the ring at startup in the background (`/status`
+    `signIn.keyRing`: `off`, `pending`, `ok`, `failed`);
+  - `SignInController`: `GET /auth/signin/{provider}?returnUrl=` (local URLs only; 404 for a provider that isn't
+    enabled), `POST /auth/signout`, `GET /me` → `{signedIn, provider}`, all `no-store`. Providers are authentication
+    schemes named after them; their callbacks go through `SignInEvents` (only the voter key survives;
+    `lazydad_signins_total{provider, outcome}`, `completed` counted once the cookie is written). `EnabledSignInProviders` lists the registered provider schemes, so
+    the controller has one path for all. No real provider yet: only `dev` (`DevelopmentSignInHandler`, in Development:
+    signs in at once; `?account=` picks the made-up account, to vote as several readers).
 - One loop per enabled language runs concurrently via `Task.WhenAll`: a startup tick, then a delay to each regular
   due time. **Due times are fixed UTC times** (`TickSchedule`: every whole `IntervalHours` since midnight UTC, so
   00:00, 04:00, 08:00 … for 4 h), the same for every replica and unchanged by restarts. After a startup tick the
@@ -165,6 +181,14 @@ dotnet user-secrets set "LlmProviders:AzureOpenAI:Endpoint"  "<endpoint>"       
 ```
 
 Azure SQL firewall must allow the local machine's public IP.
+
+To try sign-in locally, give it a pepper of its own (any 32 random bytes; never production's). Leave
+`DataProtection:KeyVaultKeyId` unset: the key ring then stays on your machine, out of the database. The `dev` provider
+signs you in at `/auth/signin/dev?account=alice`:
+
+```
+dotnet user-secrets set "SignIn:VoterKeyPepper" "$([Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)))" --project src/LazyDad.Api
+```
 
 Telemetry is off locally. To see traces, metrics and logs while developing, run the .NET Aspire dashboard and point the
 app at it (don't point a local run at Grafana: it would mix with production's data):
@@ -243,6 +267,7 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
 - `/status` returns the version, revision and this process's last scheduler tick per language
   (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details). It lists only jokes
   that still exist (a saved one can be deleted later as a duplicate copy, by any replica); without the database, all.
+  It also says whether the sign-in cookies' key ring works (`signIn.keyRing`).
 - **Monitoring:** a Grafana Cloud stack (free tier, `eu-north`) gets all three apps' telemetry, one service per app
   (`job="lazydad-app"`, `"lazydad-app-swedencentral"`, `"lazydad-app-staging"`), with the uptime check and email alerts
   on prod (per app, plus `LazyDadAppNotReporting` when an app sends nothing for 10 minutes). The dashboard is
@@ -341,7 +366,8 @@ that the new revision itself saved a joke in every enabled language, from any of
 joke on `/status` as soon as it's saved; DB rows alone could come from the draining revision), that those jokes are in
 `/jokes`, that
 the leaderboard is populated with valid ranks, that `app.js`/`app.css`, `/jokes/feed` and `/jokes/summary`
-are served, that a joke's page (`/j/<id>`) carries its link-preview tags and `/jokes/<id>/similar` answers, and that the vote endpoint answers (with a no-op vote, so it never changes the counts).
+are served, that a joke's page (`/j/<id>`) carries its link-preview tags and `/jokes/<id>/similar` answers, that the vote endpoint answers (with a no-op vote, so it never changes the counts), that `/me` answers signed out
+(and `no-store`), and that the new revision's key ring check is `ok` (every deployed app has sign-in configured, so `off` fails too).
 To run them against staging locally:
 
 ```

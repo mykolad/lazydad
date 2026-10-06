@@ -49,14 +49,14 @@ What it all looks like at the end:
 
 | Identity | Kind | Signs in as it | Roles |
 |---|---|---|---|
-| `lazydad-production` | user-assigned | both prod apps; both prod environments, to read the certificate | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeaders`, `JevApiKey` and `lazydad-fyi-origin`; read/write in `lazydad-db` |
-| `lazydad-app-staging` | system-assigned | the staging app | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeadersStaging` and `JevApiKeyStaging`; read/write in `lazydad-db-staging` |
+| `lazydad-production` | user-assigned | both prod apps; both prod environments, to read the certificate | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeaders`, `JevApiKey`, `VoterKeyPepper` and `lazydad-fyi-origin`; `Key Vault Crypto Service Encryption User` on the `DataProtection` key; read/write in `lazydad-db` |
+| `lazydad-app-staging` | system-assigned | the staging app | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeadersStaging`, `JevApiKeyStaging` and `VoterKeyPepperStaging`; `Key Vault Crypto Service Encryption User` on the `DataProtectionStaging` key; read/write in `lazydad-db-staging` |
 | `lazydad-acr-pull` | user-assigned | all three apps, to pull images | `Container Registry Repository Reader` (all repositories) |
 | `lazydad-github-cd` | user-assigned | GitHub's `production` environment | `Container Registry Repository Writer` on `lazydad`, `Reader` on `lazydad-preview`, `Reader` on the registry; `Contributor` on both prod apps; `LazyDad Deployer`; `LazyDad Service Tag Reader`; migrations in `lazydad-db` |
 | `lazydad-github-staging` | user-assigned | GitHub's `staging` environment (branch previews too) | `Container Registry Repository Writer` on `lazydad-preview` only, `Reader` on the registry; `Contributor` on `lazydad-app-staging`; `LazyDad Deployer`; migrations in `lazydad-db-staging` |
 | `lazydad-github-loadtest` | user-assigned | GitHub's `loadtest` environment (any branch) | `Contributor` on `lazydad-loadtest-rg`; `LazyDad Deployer` on `lazydad-cae`; `Managed Identity Operator` on `lazydad-acr-pull` and `lazydad-loadtest-app`; `Container Registry Repository Contributor` on `lazydad-loadtest`, `Reader` on the registry; `Reader` on `lazydad-app-staging` (section 12, "Load test") |
 | `lazydad-loadtest-app` | user-assigned | the load-test app | `Key Vault Secrets User` on `OtlpHeadersStaging`; its user in the load-test database |
-| you | your account | local runs, this runbook | `Owner`; the SQL server's Entra admin; `Foundry User`; `Key Vault Secrets Officer` + `Certificates Officer`; `Container Registry Repository Contributor` + `Catalog Lister` |
+| you | your account | local runs, this runbook | `Owner`; the SQL server's Entra admin; `Foundry User`; `Key Vault Secrets Officer` + `Certificates Officer` + `Crypto Officer`; `Container Registry Repository Contributor` + `Catalog Lister` |
 
 ## Before you start
 
@@ -255,15 +255,16 @@ unique data. Section 12 shows how to preview a purge, and how to roll back by ha
 
 ## 3. Key Vault
 
-It holds only what really is a secret: the Grafana Cloud write tokens (section 11), the Jev keys (section 7, step 5) and the origin certificate for
+It holds only what really is a secret: the Grafana Cloud write tokens (section 11), the Jev keys (section 7, step 5), the sign-in
+peppers and the keys that protect the sign-in cookies (section 7, step 7) and the origin certificate for
 `lazydad.fyi` with its private key (section 10). The AI endpoint and the database connection strings contain no
 credentials, so they're plain app settings. Access goes through Azure roles (RBAC), per secret where it matters: each
 app can read only its own token, and only production's identity reads the certificate.
 
 ```bash
 az keyvault create -g $RG -n lazydad-kv -l westeurope --enable-rbac-authorization true --retention-days 90 -o none
-# Owner manages the vault but can't read or write secrets or certificates: those are data roles.
-for role in "Key Vault Secrets Officer" "Key Vault Certificates Officer"; do
+# Owner manages the vault but can't read or write secrets, certificates or keys: those are data roles.
+for role in "Key Vault Secrets Officer" "Key Vault Certificates Officer" "Key Vault Crypto Officer"; do
   az role assignment create --assignee "$(az ad signed-in-user show --query id -o tsv)" \
     --role "$role" --scope "$(az keyvault show -n lazydad-kv --query id -o tsv)" -o none
 done
@@ -273,8 +274,8 @@ done
 
 ```powershell
 az keyvault create -g $RG -n lazydad-kv -l westeurope --enable-rbac-authorization true --retention-days 90 -o none
-# Owner manages the vault but can't read or write secrets or certificates: those are data roles.
-foreach ($role in 'Key Vault Secrets Officer', 'Key Vault Certificates Officer') {
+# Owner manages the vault but can't read or write secrets, certificates or keys: those are data roles.
+foreach ($role in 'Key Vault Secrets Officer', 'Key Vault Certificates Officer', 'Key Vault Crypto Officer') {
   az role assignment create --assignee (az ad signed-in-user show --query id -o tsv) `
     --role $role --scope (az keyvault show -n lazydad-kv --query id -o tsv) -o none
 }
@@ -921,6 +922,90 @@ az containerapp show -g $RG -n $APP --query 'properties.template.containers[0].p
 
 The new revision should turn `Healthy` within a minute (`az containerapp revision list -g $RG -n $APP -o table`); the
 environment's system logs (Log Analytics, `ContainerAppSystemLogs_CL`) record any probe failure.
+
+**7. Sign-in: the voter-key peppers and the cookies' key ring.** Readers sign in to vote (`docs/design/sign-in-2026-10.md`).
+A vote belongs to a voter key, an HMAC of the provider and the provider's account id keyed with the **pepper**, so the
+database never holds an account id. The sign-in cookies are encrypted with ASP.NET's key ring, kept in the database
+(`DataProtectionKeys`, so both production apps share it); each key in the ring is wrapped with a **Key Vault key**, so a
+copy of the database alone can't open a cookie. One of each per environment. The peppers are generated straight into
+Key Vault, so they're never shown or typed, and each app can use only its own entries: the pepper as a secret, the key
+only to wrap and unwrap with ("Crypto Service Encryption User" can't read or export it).
+
+**The production pepper can't be recreated:** with a new one every voter is new, and their votes can no longer be
+changed or deleted. Purge protection is off (section 3), so keep a backup outside the vault: `az keyvault secret backup`
+writes an encrypted file that only a vault in this subscription can restore (`az keyvault secret restore`). Keep it with
+your other recovery material (a password manager attachment) and delete the local copy. Staging's pepper needs none.
+
+```bash
+az keyvault secret set --vault-name lazydad-kv -n VoterKeyPepper        --value "$(openssl rand -base64 32)" -o none
+az keyvault secret set --vault-name lazydad-kv -n VoterKeyPepperStaging --value "$(openssl rand -base64 32)" -o none
+az keyvault key create --vault-name lazydad-kv -n DataProtection        --kty RSA --size 2048 -o none
+az keyvault key create --vault-name lazydad-kv -n DataProtectionStaging --kty RSA --size 2048 -o none
+az keyvault secret backup --vault-name lazydad-kv -n VoterKeyPepper -f VoterKeyPepper.kvbackup   # store it, then delete it here
+
+KV_ID=$(az keyvault show -n lazydad-kv --query id -o tsv)
+PROD=$(az identity show -g $RG -n lazydad-production --query principalId -o tsv)
+STAGING=$(az containerapp show -g $RG -n lazydad-app-staging --query identity.principalId -o tsv)
+az role assignment create --assignee-object-id $PROD --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets User" --scope "$KV_ID/secrets/VoterKeyPepper" -o none
+az role assignment create --assignee-object-id $PROD --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Crypto Service Encryption User" --scope "$KV_ID/keys/DataProtection" -o none
+az role assignment create --assignee-object-id $STAGING --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets User" --scope "$KV_ID/secrets/VoterKeyPepperStaging" -o none
+az role assignment create --assignee-object-id $STAGING --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Crypto Service Encryption User" --scope "$KV_ID/keys/DataProtectionStaging" -o none
+
+# A few minutes later, each app's settings: staging first (a new production revision runs an extra batch). The key id
+# has no version, so a rotated key needs no new setting; it isn't secret.
+APP=lazydad-app-staging; SUFFIX=Staging; IDENTITY=system
+# then: APP=lazydad-app; SUFFIX=; IDENTITY=$(az identity show -g $RG -n lazydad-production --query id -o tsv)
+# and:  APP=lazydad-app-swedencentral, the same otherwise
+az containerapp secret set -g $RG -n $APP \
+  --secrets "voter-key-pepper=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/VoterKeyPepper$SUFFIX,identityref:$IDENTITY" -o none
+az containerapp update -g $RG -n $APP --set-env-vars \
+  SignIn__VoterKeyPepper=secretref:voter-key-pepper \
+  DataProtection__KeyVaultKeyId=https://lazydad-kv.vault.azure.net/keys/DataProtection$SUFFIX -o none
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+function New-Pepper { [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)) }
+az keyvault secret set --vault-name lazydad-kv -n VoterKeyPepper        --value (New-Pepper) -o none
+az keyvault secret set --vault-name lazydad-kv -n VoterKeyPepperStaging --value (New-Pepper) -o none
+az keyvault key create --vault-name lazydad-kv -n DataProtection        --kty RSA --size 2048 -o none
+az keyvault key create --vault-name lazydad-kv -n DataProtectionStaging --kty RSA --size 2048 -o none
+az keyvault secret backup --vault-name lazydad-kv -n VoterKeyPepper -f VoterKeyPepper.kvbackup   # store it, then delete it here
+
+$KV_ID   = az keyvault show -n lazydad-kv --query id -o tsv
+$PROD    = az identity show -g $RG -n lazydad-production --query principalId -o tsv
+$STAGING = az containerapp show -g $RG -n lazydad-app-staging --query identity.principalId -o tsv
+az role assignment create --assignee-object-id $PROD --assignee-principal-type ServicePrincipal `
+  --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/VoterKeyPepper" -o none
+az role assignment create --assignee-object-id $PROD --assignee-principal-type ServicePrincipal `
+  --role 'Key Vault Crypto Service Encryption User' --scope "$KV_ID/keys/DataProtection" -o none
+az role assignment create --assignee-object-id $STAGING --assignee-principal-type ServicePrincipal `
+  --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/VoterKeyPepperStaging" -o none
+az role assignment create --assignee-object-id $STAGING --assignee-principal-type ServicePrincipal `
+  --role 'Key Vault Crypto Service Encryption User' --scope "$KV_ID/keys/DataProtectionStaging" -o none
+
+# A few minutes later, each app's settings: staging first (a new production revision runs an extra batch).
+$APP = 'lazydad-app-staging'; $SUFFIX = 'Staging'; $IDENTITY = 'system'
+# then: $APP = 'lazydad-app'; $SUFFIX = ''; $IDENTITY = az identity show -g $RG -n lazydad-production --query id -o tsv
+# and:  $APP = 'lazydad-app-swedencentral', the same otherwise
+az containerapp secret set -g $RG -n $APP `
+  --secrets "voter-key-pepper=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/VoterKeyPepper$SUFFIX,identityref:$IDENTITY" -o none
+az containerapp update -g $RG -n $APP --set-env-vars `
+  SignIn__VoterKeyPepper=secretref:voter-key-pepper `
+  "DataProtection__KeyVaultKeyId=https://lazydad-kv.vault.azure.net/keys/DataProtection$SUFFIX" -o none
+```
+
+</details>
+
+A pepper that isn't base64 of at least 32 bytes, or sign-in without the key id, stops the new revision at startup (the
+old one keeps serving). Each start then checks the key ring in the background (one value encrypted and decrypted, which
+the first time also makes its first key): `/status` shows `signIn.keyRing` as `ok`, or `failed` when the app can't use
+its key (a missing role, a wrong key id). Without a pepper, sign-in is off (`off`). The smoke tests require `ok`.
 
 ## 8. Database users
 

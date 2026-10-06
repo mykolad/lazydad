@@ -43,11 +43,17 @@ public sealed class TestDatabase : IDisposable
     public LazyDadDbContext CreateContext(IInterceptor[] interceptors)
     {
         var options = new DbContextOptionsBuilder<LazyDadDbContext>();
+        Configure(options);
+        return new LazyDadDbContext(options.AddInterceptors(interceptors).Options);
+    }
+
+    /// <summary>Points a context at this database: for an app under test, <c>AddDbContext&lt;LazyDadDbContext&gt;(database.Configure)</c>.</summary>
+    public void Configure(DbContextOptionsBuilder options)
+    {
         if (sqlite is not null)
             options.UseSqlite(sqlite);
         else
             options.UseSqlServer(sqlServer);
-        return new LazyDadDbContext(options.AddInterceptors(interceptors).Options);
     }
 
     public void Dispose()

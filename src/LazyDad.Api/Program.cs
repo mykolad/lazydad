@@ -51,13 +51,9 @@ builder.Services.AddScoped<ISchedulerLockRepository, SchedulerLockRepository>();
 builder.Services.AddScoped<IJokeProfileRepository, JokeProfileRepository>();
 builder.Services.AddScoped<IVoteRepository, VoteRepository>();
 
-// Sign-in for voting (#24): a vote belongs to a voter key, a keyed hash of the account (see VoterKeys). Off while
-// SignIn:VoterKeyPepper is empty.
-builder.Services.AddOptions<SignInOptions>()
-    .Bind(builder.Configuration.GetSection(SignInOptions.SectionName))
-    .ValidateOnStart();
-builder.Services.AddSingleton<IValidateOptions<SignInOptions>, SignInOptionsValidator>();
-builder.Services.AddSingleton<VoterKeys>();
+// Sign-in for voting: the cookie, its key ring in the database and the providers (see SignInSetup). A vote belongs to
+// a voter key, a keyed hash of the account (see VoterKeys). Off while SignIn:VoterKeyPepper is empty.
+builder.AddSignIn();
 
 // "You might also like": Jev profiles, embeddings as the fallback (see JokeProfiler, JokeSimilarity).
 builder.Services.AddOptions<SimilarityOptions>()
@@ -82,8 +78,9 @@ var wwwrootPath = Path.Combine(builder.Environment.ContentRootPath, "wwwroot");
 Directory.CreateDirectory(wwwrootPath);
 
 var app = builder.Build();
-// Created now, so its series start at 0 before anything counts (see SimilarityMetrics).
+// Created now, so their series start at 0 before anything counts (see SimilarityMetrics).
 app.Services.GetRequiredService<SimilarityMetrics>();
+app.Services.GetRequiredService<SignInMetrics>();
 
 // Pass an explicit PhysicalFileProvider so the middleware is not affected by
 // the stale internal WebRootFileProvider (which is snapshotted before wwwroot exists).
@@ -92,6 +89,8 @@ app.UseForwardedHeaders();
 app.UseMiddleware<CloudflareClientAddressMiddleware>();
 app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = fileProvider });
 app.UseStaticFiles(new StaticFileOptions { FileProvider = fileProvider });
+// Before the rate limiter, so a limit can count per voter as well as per address.
+app.UseAuthentication();
 app.UseRateLimiter();
 app.MapControllers();
 // version: the image's commit (baked into the image as App__Version). revision: the Container Apps revision,
@@ -105,8 +104,9 @@ app.MapGet("/healthz", () => Results.Ok(new { status = "healthy", version = appV
 var processId = Guid.NewGuid().ToString("N");
 // What this process's scheduler did: its last tick per language, and the jokes it saved most recently (see SchedulerStatus).
 // Only jokes that still exist: one can be deleted later as a duplicate copy, by this replica or another. If the database
-// can't be reached, it reports what this process saved.
-app.MapGet("/status", async (SchedulerStatus status, IJokeRepository jokes, CancellationToken cancellationToken) =>
+// can't be reached, it reports what this process saved. signIn.keyRing: whether the sign-in cookies' key ring works here
+// (see KeyRingCheck).
+app.MapGet("/status", async (SchedulerStatus status, IJokeRepository jokes, KeyRingCheck keyRing, CancellationToken cancellationToken) =>
 {
     var (ticks, savedJokes) = (status.LastTicks, status.SavedJokes);
     try
@@ -116,7 +116,15 @@ app.MapGet("/status", async (SchedulerStatus status, IJokeRepository jokes, Canc
     catch (Exception) when (!cancellationToken.IsCancellationRequested)
     {
     }
-    return Results.Ok(new { version = appVersion, revision = appRevision, process = processId, ticks, savedJokes });
+    return Results.Ok(new
+    {
+        version = appVersion,
+        revision = appRevision,
+        process = processId,
+        ticks,
+        savedJokes,
+        signIn = new { keyRing = keyRing.State },
+    });
 });
 
 // The page shell (wwwroot/index.html) depends only on the build and the configuration (the jokes
@@ -125,5 +133,8 @@ using (var scope = app.Services.CreateScope())
 {
     await scope.ServiceProvider.GetRequiredService<HtmlGeneratorService>().RegenerateAsync(CancellationToken.None);
 }
+
+// In the background: the database or Key Vault being slow must not hold up the start.
+_ = app.Services.GetRequiredService<KeyRingCheck>().RunAsync(app.Lifetime.ApplicationStopping);
 
 app.Run();
