@@ -105,8 +105,9 @@ var processId = Guid.NewGuid().ToString("N");
 // What this process's scheduler did: its last tick per language, and the jokes it saved most recently (see SchedulerStatus).
 // Only jokes that still exist: one can be deleted later as a duplicate copy, by this replica or another. If the database
 // can't be reached, it reports what this process saved. signIn.keyRing: whether the sign-in cookies' key ring works here
-// (see KeyRingCheck).
-app.MapGet("/status", async (SchedulerStatus status, IJokeRepository jokes, KeyRingCheck keyRing, CancellationToken cancellationToken) =>
+// (see KeyRingCheck); signIn.providers: each provider's state from its last probe (see SignInProbeService).
+app.MapGet("/status", async (SchedulerStatus status, IJokeRepository jokes, KeyRingCheck keyRing, SignInProviderStatus providers,
+    CancellationToken cancellationToken) =>
 {
     var (ticks, savedJokes) = (status.LastTicks, status.SavedJokes);
     try
@@ -123,7 +124,7 @@ app.MapGet("/status", async (SchedulerStatus status, IJokeRepository jokes, KeyR
         process = processId,
         ticks,
         savedJokes,
-        signIn = new { keyRing = keyRing.State },
+        signIn = new { keyRing = keyRing.State, providers = providers.All },
     });
 });
 

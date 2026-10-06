@@ -110,6 +110,14 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
     (never the login, which can change). `SignIn:GitHub:ClientId` and `ClientSecret` (a Key Vault reference per app,
     `GitHubClientSecret` / `GitHubClientSecretStaging`; one OAuth app per environment; runbook section 7, step 8): both
     or neither, empty = off. Signing in works by hand at `/auth/signin/github`; the page has no button yet (#72);
+  - **provider health:** each provider's handler talks to it through a named HTTP client (`SignInBackchannel`, which tests
+    replace with a fake provider) that times every call into `lazydad_signin_provider_duration_seconds{provider,
+    operation, outcome}` (`token`, `userinfo`). `SignInProbeService` probes each configured provider at startup and every
+    15 minutes (`OAuthCodeProbe`: a made-up code exchanged with the client id and secret; "bad code" = `valid`, "bad
+    client" = `invalid`, no answer = `unreachable`), shown on `/status` (`signIn.providers`, every provider, `off` if not
+    configured) and in `lazydad_signin_provider_state`. The smoke tests fail on a provider that's `invalid` (`unreachable` is
+    the provider's outage, not the deploy's) or doesn't redirect with this app's `/signin-<provider>` callback;
+    `LazyDadSignInProviderDown` alerts after 30 minutes not `valid`;
   - `dev` (`DevelopmentSignInHandler`, in Development only: signs in at once; `?account=` picks the made-up account, to
     vote as several readers).
 - One loop per enabled language runs concurrently via `Task.WhenAll`: a startup tick, then a delay to each regular
@@ -273,7 +281,8 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
 - `/status` returns the version, revision and this process's last scheduler tick per language
   (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details). It lists only jokes
   that still exist (a saved one can be deleted later as a duplicate copy, by any replica); without the database, all.
-  It also says whether the sign-in cookies' key ring works (`signIn.keyRing`).
+  It also says whether the sign-in cookies' key ring works (`signIn.keyRing`) and each sign-in provider's state from its
+  last probe (`signIn.providers`).
 - **Monitoring:** a Grafana Cloud stack (free tier, `eu-north`) gets all three apps' telemetry, one service per app
   (`job="lazydad-app"`, `"lazydad-app-swedencentral"`, `"lazydad-app-staging"`), with the uptime check and email alerts
   on prod (per app, plus `LazyDadAppNotReporting` when an app sends nothing for 10 minutes). The dashboard is
@@ -381,7 +390,8 @@ joke on `/status` as soon as it's saved; DB rows alone could come from the drain
 `/jokes`, that
 the leaderboard is populated with valid ranks, that `app.js`/`app.css`, `/jokes/feed` and `/jokes/summary`
 are served, that a joke's page (`/j/<id>`) carries its link-preview tags and `/jokes/<id>/similar` answers, that the vote endpoint answers (with a no-op vote, so it never changes the counts), that `/me` answers signed out
-(and `no-store`), and that the new revision's key ring check is `ok` (every deployed app has sign-in configured, so `off` fails too).
+(and `no-store`), that the new revision's key ring check is `ok` (every deployed app has sign-in configured, so `off` fails too),
+and that no sign-in provider is `invalid` and each configured one redirects with the app's own callback.
 To run them against staging locally:
 
 ```

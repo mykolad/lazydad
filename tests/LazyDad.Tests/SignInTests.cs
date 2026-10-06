@@ -1,6 +1,5 @@
 using System.Net;
 using System.Text.Json;
-using AspNet.Security.OAuth.GitHub;
 using LazyDad.Api.Controllers;
 using LazyDad.Api.SignIn;
 using LazyDad.Api.Telemetry;
@@ -328,7 +327,7 @@ public sealed class SignInTests : IAsyncDisposable
         settings["SignIn:GitHub:ClientId"] = FakeGitHub.ClientId;
         settings["SignIn:GitHub:ClientSecret"] = FakeGitHub.ClientSecret;
         var app = await StartAsync(Environments.Development, settings,
-            services => services.Configure<GitHubAuthenticationOptions>(SignInProviders.GitHub, options => options.BackchannelHttpHandler = gitHub));
+            services => services.AddHttpClient(SignInBackchannel.ClientName(SignInProviders.GitHub)).ConfigurePrimaryHttpMessageHandler(() => gitHub));
         return (Client(app), app, gitHub);
     }
 
@@ -372,13 +371,15 @@ public sealed class SignInTests : IAsyncDisposable
         var (client, app, gitHub) = await StartWithGitHubAsync();
         using var signIns = new MetricCollector<long>(app.Services.GetRequiredService<System.Diagnostics.Metrics.IMeterFactory>(),
             LazyDadTelemetry.Name, "lazydad.signins");
+        using var providerCalls = new MetricCollector<double>(app.Services.GetRequiredService<System.Diagnostics.Metrics.IMeterFactory>(),
+            LazyDadTelemetry.Name, "lazydad.signin.provider.duration");
         var (authorize, correlation) = await StartGitHubSignInAsync(client, "/j/5");
 
-        using var response = await GitHubCallbackAsync(client, correlation, $"code=the-code&state={Uri.EscapeDataString(State(authorize))}");
+        using var response = await GitHubCallbackAsync(client, correlation, $"code={FakeGitHub.Code}&state={Uri.EscapeDataString(State(authorize))}");
 
         Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
         Assert.Equal("/j/5", response.Headers.Location!.OriginalString);
-        Assert.Equal("the-code", gitHub.TokenRequest["code"]);
+        Assert.Equal(FakeGitHub.Code, gitHub.TokenRequest["code"]);
         Assert.NotEmpty(gitHub.TokenRequest["code_verifier"]);
 
         // The account id is GitHub's numeric id; the login, name and email are dropped.
@@ -390,6 +391,43 @@ public sealed class SignInTests : IAsyncDisposable
 
         var counted = signIns.GetMeasurementSnapshot().Where(m => m.Value > 0).Select(m => (string)m.Tags["outcome"]!).Order().ToList();
         Assert.Equal([SignInMetrics.Completed, SignInMetrics.Started], counted);
+        // Each call to GitHub timed: how fast the real provider answers.
+        var calls = providerCalls.GetMeasurementSnapshot()
+            .Where(m => (string)m.Tags["operation"]! != SignInBackchannel.Probe)
+            .Select(m => ((string)m.Tags["provider"]!, (string)m.Tags["operation"]!, (string)m.Tags["outcome"]!))
+            .ToList();
+        Assert.Equal([("github", SignInBackchannel.Token, SignInBackchannel.Ok), ("github", SignInBackchannel.UserInfo, SignInBackchannel.Ok)], calls);
+    }
+
+    [Fact]
+    public async Task GitHub_IsProbedAtStartup_AndValidWithTheRightClient()
+    {
+        var (_, app, _) = await StartWithGitHubAsync();
+
+        Assert.Equal(ProviderState.Valid, await ProbedAsync(app, SignInProviders.GitHub));
+        Assert.Equal(ProviderState.Off, app.Services.GetRequiredService<SignInProviderStatus>()[SignInProviders.Microsoft]);
+    }
+
+    [Fact]
+    public async Task GitHub_WithAWrongSecret_IsInvalid()
+    {
+        var settings = Settings(Pepper, "");
+        settings["SignIn:GitHub:ClientId"] = FakeGitHub.ClientId;
+        settings["SignIn:GitHub:ClientSecret"] = "an-old-secret";
+        var gitHub = new FakeGitHub();
+        var app = await StartAsync(Environments.Development, settings,
+            services => services.AddHttpClient(SignInBackchannel.ClientName(SignInProviders.GitHub)).ConfigurePrimaryHttpMessageHandler(() => gitHub));
+
+        Assert.Equal(ProviderState.Invalid, await ProbedAsync(app, SignInProviders.GitHub));
+    }
+
+    // The probe runs in the background as the app starts.
+    private static async Task<ProviderState> ProbedAsync(WebApplication app, string provider)
+    {
+        var status = app.Services.GetRequiredService<SignInProviderStatus>();
+        for (var i = 0; i < 100 && status[provider] == ProviderState.Pending; i++)
+            await Task.Delay(50);
+        return status[provider];
     }
 
     [Fact]
@@ -399,7 +437,7 @@ public sealed class SignInTests : IAsyncDisposable
         gitHub.User = """{"login": "alice"}""";
         var (authorize, correlation) = await StartGitHubSignInAsync(client, "/");
 
-        using var response = await GitHubCallbackAsync(client, correlation, $"code=the-code&state={Uri.EscapeDataString(State(authorize))}");
+        using var response = await GitHubCallbackAsync(client, correlation, $"code={FakeGitHub.Code}&state={Uri.EscapeDataString(State(authorize))}");
 
         Assert.Equal(SignInEvents.FailedRedirect, response.Headers.Location!.OriginalString);
         Assert.DoesNotContain(response.Headers.GetValues("Set-Cookie"), c => c.StartsWith($"{SignInSetup.CookieName}=", StringComparison.Ordinal));
@@ -407,7 +445,7 @@ public sealed class SignInTests : IAsyncDisposable
 
     [Theory]
     [InlineData("error=access_denied")]
-    [InlineData("code=the-code")]
+    [InlineData("code=" + FakeGitHub.Code)]
     public async Task SignIn_WithGitHub_WhenTheReaderCancelsOrTheCallbackIsForged_ReturnsToThePage(string query)
     {
         // access_denied: the reader said no on GitHub's page. A callback with the right state but no correlation cookie
