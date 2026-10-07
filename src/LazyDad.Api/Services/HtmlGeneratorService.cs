@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using LazyDad.Api.Configuration;
+using LazyDad.Api.SignIn;
 using LazyDad.Data.Entities;
 using Microsoft.Extensions.Options;
 
@@ -41,17 +42,20 @@ public class HtmlGeneratorService
 
     private readonly IOptions<JokeGenerationOptions> options;
     private readonly IOptions<AppInfoOptions> appInfo;
+    private readonly EnabledSignInProviders signInProviders;
     private readonly IWebHostEnvironment env;
     private readonly ILogger<HtmlGeneratorService> logger;
 
     public HtmlGeneratorService(
         IOptions<JokeGenerationOptions> options,
         IOptions<AppInfoOptions> appInfo,
+        EnabledSignInProviders signInProviders,
         IWebHostEnvironment env,
         ILogger<HtmlGeneratorService> logger)
     {
         this.options = options;
         this.appInfo = appInfo;
+        this.signInProviders = signInProviders;
         this.env = env;
         this.logger = logger;
     }
@@ -61,7 +65,7 @@ public class HtmlGeneratorService
         await WriteLock.WaitAsync(cancellationToken);
         try
         {
-            var html = BuildHtml(LanguageCodes(options.Value), appInfo.Value, SitePage);
+            var html = BuildHtml(LanguageCodes(options.Value), signInProviders.Names, appInfo.Value, SitePage);
 
             var wwwroot = Path.Combine(env.ContentRootPath, "wwwroot");
             Directory.CreateDirectory(wwwroot);
@@ -82,10 +86,10 @@ public class HtmlGeneratorService
 
     /// <summary>The shell for a joke's page: <paramref name="origin"/> is the site's scheme and host, as the visitor reached it.</summary>
     public string JokePageHtml(Joke joke, string origin)
-        => BuildHtml(LanguageCodes(options.Value), appInfo.Value, JokePage(joke, origin));
+        => BuildHtml(LanguageCodes(options.Value), signInProviders.Names, appInfo.Value, JokePage(joke, origin));
 
     /// <summary>The shell without a joke (an unknown joke's address: <c>app.js</c> says it's not there).</summary>
-    public string SiteHtml() => BuildHtml(LanguageCodes(options.Value), appInfo.Value, SitePage);
+    public string SiteHtml() => BuildHtml(LanguageCodes(options.Value), signInProviders.Names, appInfo.Value, SitePage);
 
     internal static PageMeta JokePage(Joke joke, string origin)
     {
@@ -99,13 +103,15 @@ public class HtmlGeneratorService
             .Where(l => !string.IsNullOrWhiteSpace(l.LanguageCode))
             .ToDictionary(l => l.Language, l => l.LanguageCode, StringComparer.OrdinalIgnoreCase);
 
-    internal static string BuildHtml(IReadOnlyDictionary<string, string> languageCodes, AppInfoOptions appInfo, PageMeta page)
+    internal static string BuildHtml(IReadOnlyDictionary<string, string> languageCodes, IReadOnlyList<string> signInProviders,
+        AppInfoOptions appInfo, PageMeta page)
     {
         // Busts browser caches of app.css/app.js on every deploy.
         var assetVersion = Uri.EscapeDataString(appInfo.Version);
         // app.js tags each joke with its language code, so screen readers pronounce it correctly.
         // System.Text.Json escapes <, > and &, so the JSON can't close the script element.
-        var config = JsonSerializer.Serialize(new { languageCodes });
+        // signIn: the providers a reader can sign in with here, in the order the dialog lists them; none, no sign-in UI.
+        var config = JsonSerializer.Serialize(new { languageCodes, signIn = signInProviders });
 
         // The shell's text is Ukrainian (the default); app.js switches [data-i18n] elements to English.
         return $$"""
@@ -152,6 +158,7 @@ public class HtmlGeneratorService
                     <button type="button" class="ld-icon-btn" data-set-theme="light" aria-pressed="false" title="Світла тема" aria-label="Світла тема" data-i18n-title="themeLight" data-i18n-aria="themeLight">{{SunIcon}}</button>
                     <button type="button" class="ld-icon-btn" data-set-theme="dark" aria-pressed="false" title="Темна тема" aria-label="Темна тема" data-i18n-title="themeDark" data-i18n-aria="themeDark">{{MoonIcon}}</button>
                   </div>
+                  <div class="ld-account" id="ld-account" hidden></div>
                 </div>
               </header>
               <main class="ld-main">

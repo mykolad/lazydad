@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using LazyDad.Api.Configuration;
 using LazyDad.Api.Services;
+using LazyDad.Api.SignIn;
 using LazyDad.Data.Entities;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -21,7 +22,7 @@ public class HtmlGeneratorServiceTests
     };
 
     private static string Build(AppInfoOptions appInfo)
-        => HtmlGeneratorService.BuildHtml(new Dictionary<string, string> { ["Ukrainian"] = "uk" }, appInfo, HtmlGeneratorService.SitePage);
+        => HtmlGeneratorService.BuildHtml(new Dictionary<string, string> { ["Ukrainian"] = "uk" }, ["github"], appInfo, HtmlGeneratorService.SitePage);
 
     [Fact]
     public void BuildHtml_IsTheShellForAppJs_WithVersionedAssets()
@@ -73,9 +74,20 @@ public class HtmlGeneratorServiceTests
     }
 
     [Fact]
+    public void BuildHtml_ListsTheSignInProviders_ForTheHeader()
+    {
+        var html = HtmlGeneratorService.BuildHtml(new Dictionary<string, string>(), ["github", "dev"], PipelineBuild, HtmlGeneratorService.SitePage);
+
+        var json = Regex.Match(html, "<script type=\"application/json\" id=\"ld-config\">(.*?)</script>").Groups[1].Value;
+        using var config = JsonDocument.Parse(json);
+        Assert.Equal(["github", "dev"], config.RootElement.GetProperty("signIn").EnumerateArray().Select(p => p.GetString()));
+        Assert.Contains("id=\"ld-account\"", html);
+    }
+
+    [Fact]
     public void BuildHtml_ConfigJson_CannotCloseTheScriptElement()
     {
-        var html = HtmlGeneratorService.BuildHtml(new Dictionary<string, string> { ["</script><b>"] = "x" }, PipelineBuild, HtmlGeneratorService.SitePage);
+        var html = HtmlGeneratorService.BuildHtml(new Dictionary<string, string> { ["</script><b>"] = "x" }, [], PipelineBuild, HtmlGeneratorService.SitePage);
 
         Assert.DoesNotContain("</script><b>", html);
     }
@@ -164,7 +176,7 @@ public class HtmlGeneratorServiceTests
     {
         var joke = new Joke { Id = 42, Text = "— Тату, <b>\"кава\"</b>?\n— Так & ні." };
 
-        var html = HtmlGeneratorService.BuildHtml(new Dictionary<string, string> { ["Ukrainian"] = "uk" }, PipelineBuild,
+        var html = HtmlGeneratorService.BuildHtml(new Dictionary<string, string> { ["Ukrainian"] = "uk" }, [], PipelineBuild,
             HtmlGeneratorService.JokePage(joke, "https://lazydad.fyi"));
 
         const string text = "— Тату, &lt;b&gt;&quot;кава&quot;&lt;/b&gt;? — Так &amp; ні.";
@@ -188,6 +200,7 @@ public class HtmlGeneratorServiceTests
             var service = new HtmlGeneratorService(
                 Options.Create(new JokeGenerationOptions { Languages = [new() { Language = "Ukrainian", LanguageCode = "uk" }] }),
                 Options.Create(PipelineBuild),
+                new EnabledSignInProviders(["github"]),
                 env.Object,
                 NullLogger<HtmlGeneratorService>.Instance);
 

@@ -42,11 +42,15 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
 - **The page** (design handoff "direction 2b"): `HtmlGeneratorService` writes `wwwroot/index.html`
   once, before the server listens. It holds only what depends on the build: the header, the version
   link, the loading skeleton, a pre-paint script that sets `data-theme` (no flash of the wrong theme),
-  and a JSON config (language codes). Its asset URLs are absolute, since the same shell also serves `/j/<id>`.
+  and a JSON config (language codes, the enabled sign-in providers). Its asset URLs are absolute, since the same shell also serves `/j/<id>`.
   `wwwroot/app.js` (plain JS, no build step) renders everything
   live: Top 3 spotlight (rotates every 7 s, paused on hover/focus or reduced motion), the "All jokes"
   feed (infinite scroll, pages of 20, sort Newest / Top voted), votes, link sharing, the lightbulbs ("why it's funny"),
-  the countdown, UA/EN interface (jokes stay Ukrainian), and light/dark/system theme. Preferences and the reader's
+  the countdown, UA/EN interface (jokes stay Ukrainian), light/dark/system theme, and sign-in in the header (a modal
+  `<dialog>` with a button per provider, in its brand's colours; once signed in, the provider's name with a menu holding
+  "Sign out"; no sign-in UI when no provider is enabled). A sign-in leaves for the provider and comes back to the same
+  address; the list's sort and scroll position wait in `sessionStorage` meanwhile, and `/?signin=failed` goes back to
+  where it started and says so. Preferences and the reader's
   votes live in `localStorage`. `wwwroot/app.css` has the Organic design tokens (dark = reversed ramps).
   Brand files (sloth logo per theme, favicons, `site.webmanifest`) are static files in `wwwroot`.
   Design spec and deviations: `docs/design/redesign-2026-09.md`.
@@ -86,7 +90,7 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   ingress), or, for requests from Cloudflare's ranges, from `CF-Connecting-IP` (`CloudflareClientAddressMiddleware`;
   anyone can send that header, so only Cloudflare's count). Server-side dedupe needs sign-in, which doesn't exist yet.
 - **Sign-in for voting is in progress** (issues #68–#83, one PR each, in the design's order; design and decisions in
-  `docs/design/sign-in-2026-10.md`). Landed so far, unused by the page:
+  `docs/design/sign-in-2026-10.md`). Landed so far (readers can sign in from the page; voting doesn't use it yet):
   - the `Votes` table (`(JokeId, VoterKey)`, `Value`, `UpdatedAt`) and `VoteRepository`, which changes a vote row only if
     it still holds the vote it read and the joke's `Up`/`Down` by the difference, in one transaction (idempotent; a lost
     race reads again);
@@ -109,7 +113,7 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   - **GitHub** (`AspNet.Security.OAuth.GitHub`, `/signin-github`): no scopes, PKCE, the account id is the numeric `id`
     (never the login, which can change). `SignIn:GitHub:ClientId` and `ClientSecret` (a Key Vault reference per app,
     `GitHubClientSecret` / `GitHubClientSecretStaging`; one OAuth app per environment; runbook section 7, step 8): both
-    or neither, empty = off. Signing in works by hand at `/auth/signin/github`; the page has no button yet (#72);
+    or neither, empty = off. The page's sign-in dialog offers it once it's configured;
   - **provider health:** each provider's handler talks to it through a named HTTP client (`SignInBackchannel`, which tests
     replace with a fake provider) that times every call into `lazydad_signin_provider_duration_seconds{provider,
     operation, outcome}` (`token`, `userinfo`). `SignInProbeService` probes each configured provider at startup and every
@@ -391,7 +395,8 @@ joke on `/status` as soon as it's saved; DB rows alone could come from the drain
 the leaderboard is populated with valid ranks, that `app.js`/`app.css`, `/jokes/feed` and `/jokes/summary`
 are served, that a joke's page (`/j/<id>`) carries its link-preview tags and `/jokes/<id>/similar` answers, that the vote endpoint answers (with a no-op vote, so it never changes the counts), that `/me` answers signed out
 (and `no-store`), that the new revision's key ring check is `ok` (every deployed app has sign-in configured, so `off` fails too),
-and that no sign-in provider is `invalid` and each configured one redirects with the app's own callback.
+that no sign-in provider is `invalid` and each configured one redirects with the app's own callback, and that the page offers
+exactly the providers `/status` shows as enabled.
 To run them against staging locally:
 
 ```
