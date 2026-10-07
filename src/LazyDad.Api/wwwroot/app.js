@@ -40,6 +40,7 @@
       signOut: 'Вийти', signedOut: 'Ви вийшли', signOutFailed: 'Не вдалося вийти. Спробуйте ще раз.',
       signInFailed: 'Не вдалося увійти. Спробуйте ще раз або оберіть інший спосіб.',
       privacy: 'Конфіденційність', privacyTitle: 'Конфіденційність — LazyDad', privacyLink: 'Як LazyDad поводиться з вашими даними',
+      keepSignedIn: 'Не виходити 90 днів',
       dur: (h, m) => `${h} год ${m} хв`
     },
     en: {
@@ -62,6 +63,7 @@
       signOut: 'Sign out', signedOut: 'You’ve signed out', signOutFailed: 'Couldn’t sign out. Try again.',
       signInFailed: 'Signing in didn’t work. Try again, or choose another way.',
       privacy: 'Privacy', privacyTitle: 'Privacy — LazyDad', privacyLink: 'How LazyDad handles your data',
+      keepSignedIn: 'Keep me signed in for 90 days',
       dur: (h, m) => `${h}h ${m}m`
     }
   };
@@ -1048,22 +1050,30 @@
       dialog.addEventListener('close', () => { $('ld-signin-btn')?.focus(); });
       document.body.append(dialog);
     }
+    const keep = $('ld-keep');
+    if (keep) keep.checked = false;
     renderSignInDialog();
     dialog.showModal();
   }
 
+  // "Keep me signed in" starts unticked every time: a sign-in outlives the browser session only by the reader's choice
+  // (that's what keeps the cookie exempt from consent, so there's no banner).
+  const signInHref = provider => `/auth/signin/${encodeURIComponent(provider)}?returnUrl=${encodeURIComponent(location.pathname)}` +
+    ($('ld-keep')?.checked ? '&persist=true' : '');
+
   function renderSignInDialog() {
     const strings = t();
-    const returnUrl = encodeURIComponent(location.pathname);
+    const keep = $('ld-keep')?.checked === true;
     const buttons = config.signIn.map((provider, i) => {
       const known = PROVIDERS[provider] || { mark: ICON.logIn, label: s => s.signInWith(provider) };
-      return `<a class="ld-provider ld-provider--${esc(provider)}" href="/auth/signin/${encodeURIComponent(provider)}?returnUrl=${returnUrl}" ` +
+      return `<a class="ld-provider ld-provider--${esc(provider)}" href="${esc(signInHref(provider))}" ` +
         `data-signin="${esc(provider)}"${i === 0 ? ' autofocus' : ''}>${known.mark}<span>${esc(known.label(strings))}</span></a>`;
     }).join('');
     $('ld-signin').innerHTML = '<div class="ld-dialog-body">' +
       `<div class="ld-dialog-head"><h2 id="ld-signin-title">${esc(strings.signInTitle)}</h2>` +
       `<button type="button" class="ld-copy" data-close-dialog aria-label="${esc(strings.close)}" title="${esc(strings.close)}">${ICON.close}</button></div>` +
       `<p class="ld-dialog-text">${esc(strings.signInWhy)}</p>` +
+      `<label class="ld-keep"><input type="checkbox" id="ld-keep"${keep ? ' checked' : ''}><span>${esc(strings.keepSignedIn)}</span></label>` +
       `<div class="ld-providers">${buttons}</div>` +
       `<a class="ld-dialog-link" href="/privacy">${esc(strings.privacyLink)}</a></div>`;
   }
@@ -1198,6 +1208,9 @@
 
   document.addEventListener('change', event => {
     if (event.target.name === 'ld-sort') setSort(event.target.value);
+    if (event.target.id === 'ld-keep') {
+      $$('a[data-signin]').forEach(link => { link.href = signInHref(link.dataset.signin); });
+    }
   });
 
   // Back and Forward: the address says what to show; the list's entry brings back its scroll position.

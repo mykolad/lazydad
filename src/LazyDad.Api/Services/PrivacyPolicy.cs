@@ -47,8 +47,9 @@ internal static class PrivacyPolicy
             <h3>Cookies</h3>
             <ul>
               <li><strong>Cookie входу</strong> (<code>__Host-lazydad</code>) з’являється лише після входу. Він
-                зашифрований і містить тільки код і назву сервісу. Зникає, коли ви закриваєте браузер, або коли
-                виходите.</li>
+                зашифрований і містить тільки код і назву сервісу. Зникає, коли ви закриваєте браузер або виходите.
+                Лише якщо ви позначите «Не виходити 90 днів», він живе 90 днів і подовжується, поки ви користуєтеся
+                сайтом.</li>
               <li>Під час входу сайт ставить короткі cookies, щоб перевірити, що відповідь сервісу стосується саме
                 цього входу. Вони зникають, щойно вхід завершено (або за 15 хвилин).</li>
               <li>Аналітичних, рекламних чи стежувальних cookies немає, тому й банера про cookies немає.</li>
@@ -103,8 +104,9 @@ internal static class PrivacyPolicy
             <h3>Cookies</h3>
             <ul>
               <li><strong>The sign-in cookie</strong> (<code>__Host-lazydad</code>) is set only once you sign in. It’s
-                encrypted and holds only the code and the provider’s name. It goes when you close the browser, or when
-                you sign out.</li>
+                encrypted and holds only the code and the provider’s name. It goes when you close the browser or sign out.
+                Only if you tick “Keep me signed in for 90 days” does it last 90 days, renewed while you use the
+                site.</li>
               <li>While you sign in, the site sets short-lived cookies to check that the provider’s answer belongs to
                 this sign-in. They go as soon as it’s done (or after 15 minutes).</li>
               <li>There are no analytics, advertising or tracking cookies, which is why there’s no cookie banner.</li>

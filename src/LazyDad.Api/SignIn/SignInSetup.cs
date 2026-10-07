@@ -24,7 +24,12 @@ public static class SignInSetup
     /// <summary><c>__Host-</c>: the browser only accepts it Secure, for the whole site, and from this host alone.</summary>
     public const string CookieName = "__Host-lazydad";
 
-    /// <summary>How long a sign-in lasts, renewed while it's used.</summary>
+    /// <summary>
+    /// How long a sign-in lasts, renewed while it's used (once more than half has passed). The cookie itself outlives the
+    /// browser session only when the reader ticked "Keep me signed in" (<c>persist</c> on the sign-in URL): EU guidance
+    /// (WP29 Opinion 04/2012) exempts sign-in cookies from consent, but one kept across sessions only by the user's choice.
+    /// Otherwise it's a session cookie, and the browser drops it on closing.
+    /// </summary>
     public static readonly TimeSpan Lifetime = TimeSpan.FromDays(90);
 
     public static void AddSignIn(this WebApplicationBuilder builder)
