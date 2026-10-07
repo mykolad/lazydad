@@ -204,6 +204,10 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
         {
             Assert.True(provider.Value.GetString() is "valid" or "unreachable",
                 $"{provider.Name} is {provider.Value.GetString()} on /status: it refuses the app's client id or secret.");
+            // An OpenID Connect provider's redirect needs its discovery document first, so it fails while the provider is
+            // down; that's still the provider's outage, not the deploy's.
+            if (provider.Value.GetString() == "unreachable")
+                continue;
 
             // The start of a sign-in (it counts as "started" in lazydad_signins_total, once per deploy).
             using var response = await noRedirects.GetAsync($"auth/signin/{provider.Name}");
