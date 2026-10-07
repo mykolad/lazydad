@@ -17,5 +17,11 @@ public static class SignInProviders
 
     public static readonly IReadOnlyList<string> All = [Microsoft, Google, GitHub, Facebook, Telegram];
 
+    /// <summary>
+    /// How the sign-in dialog lists them: GitHub first, as the first provider (#72), then the rest; the made-up
+    /// Development account last, so a local run shows the real order.
+    /// </summary>
+    public static readonly IReadOnlyList<string> DisplayOrder = [GitHub, Google, Microsoft, Telegram, Facebook, Development];
+
     public static bool IsKnown(string provider) => All.Contains(provider) || provider == Development;
 }

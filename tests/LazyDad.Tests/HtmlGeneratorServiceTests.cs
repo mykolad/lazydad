@@ -76,11 +76,11 @@ public class HtmlGeneratorServiceTests
     [Fact]
     public void BuildHtml_ListsTheSignInProviders_ForTheHeader()
     {
-        var html = HtmlGeneratorService.BuildHtml(new Dictionary<string, string>(), ["dev", "github"], PipelineBuild, HtmlGeneratorService.SitePage);
+        var html = HtmlGeneratorService.BuildHtml(new Dictionary<string, string>(), ["github", "dev"], PipelineBuild, HtmlGeneratorService.SitePage);
 
         var json = Regex.Match(html, "<script type=\"application/json\" id=\"ld-config\">(.*?)</script>").Groups[1].Value;
         using var config = JsonDocument.Parse(json);
-        Assert.Equal(["dev", "github"], config.RootElement.GetProperty("signIn").EnumerateArray().Select(p => p.GetString()));
+        Assert.Equal(["github", "dev"], config.RootElement.GetProperty("signIn").EnumerateArray().Select(p => p.GetString()));
         Assert.Contains("id=\"ld-account\"", html);
     }
 
