@@ -106,6 +106,49 @@ svg { display: block; flex: none; }
 .ld-pills .ld-icon-btn { min-width: 0; width: 32px; padding: 0; display: grid; place-items: center; }
 .ld-pills button[aria-pressed="true"] { background: var(--color-selected); color: var(--color-bg); }
 
+/* — sign-in: the header's button and account menu, the dialog, a notice — */
+.ld-account { position: relative; }
+.ld-account-btn {
+  display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 14px 0 12px; border: 0; border-radius: 999px;
+  cursor: pointer; background: var(--color-surface); color: var(--color-text); font: 700 13px var(--font-body);
+}
+.ld-account-btn:hover, .ld-account-btn[aria-expanded="true"] { background: var(--color-neutral-200); }
+.ld-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 10; min-width: 180px; padding: 6px;
+  border-radius: 20px; background: var(--color-bg); box-shadow: var(--shadow-md);
+}
+.ld-menu button {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 14px; border: 0; border-radius: 14px;
+  cursor: pointer; background: transparent; text-align: left; font: 600 14px var(--font-body);
+}
+.ld-menu button:hover { background: var(--color-surface); }
+.ld-dialog {
+  width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 0; border: 0; border-radius: 32px;
+  background: var(--color-bg); color: var(--color-text); box-shadow: var(--shadow-md);
+}
+.ld-dialog::backdrop { background: color-mix(in srgb, #201e1d 45%, transparent); }
+.ld-dialog-body { display: flex; flex-direction: column; gap: 16px; padding: 26px 26px 28px; }
+.ld-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ld-dialog-head h2 { font-size: 24px; }
+.ld-dialog-text { margin: 0; font-size: 14px; text-wrap: pretty; color: color-mix(in srgb, var(--color-text) 80%, transparent); }
+.ld-providers { display: flex; flex-direction: column; gap: 10px; }
+.ld-provider {
+  display: flex; align-items: center; justify-content: center; gap: 10px; height: 48px; padding: 0 20px; border-radius: 999px;
+  text-decoration: none; font: 700 15px var(--font-body);
+  background: var(--color-surface); color: var(--color-text);
+}
+.ld-provider:hover { color: var(--color-text); background: var(--color-neutral-200); }
+/* GitHub's own colours: the white mark on its near-black, with an outline where the page is dark too. */
+.ld-provider--github, .ld-provider--github:hover { background: #24292f; color: #fff; }
+.ld-provider--github:hover { background: #32383f; }
+[data-theme="dark"] .ld-provider--github { box-shadow: inset 0 0 0 1px color-mix(in srgb, #fff 25%, transparent); }
+.ld-notice {
+  flex: 1 1 100%; display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 20px; border-radius: 22px;
+  background: var(--color-accent-200); color: var(--color-accent-900); font-weight: 600;
+}
+.ld-notice span { flex: 1; }
+.ld-notice .ld-copy { color: inherit; }
+
 /* — layout — */
 .ld-main {
   display: flex; flex-wrap: wrap; align-items: flex-start; gap: 32px 44px;

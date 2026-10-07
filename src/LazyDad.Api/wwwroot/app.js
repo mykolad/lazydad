@@ -11,7 +11,7 @@
   // How long the server may keep serving a joke's counts from before a vote (JokeReadCache: 30 s), plus a margin.
   const READ_CACHE_MS = 35000;
   const MINUS = '\u2212';
-  const KEYS = { theme: 'lazydad.theme', lang: 'lazydad.lang', votes: 'lazydad.votes', rotation: 'lazydad.rotation' };
+  const KEYS = { theme: 'lazydad.theme', lang: 'lazydad.lang', votes: 'lazydad.votes', rotation: 'lazydad.rotation', signIn: 'lazydad.signin' };
 
   const MONTHS = {
     ua: ['січ', 'лют', 'бер', 'кві', 'тра', 'чер', 'лип', 'сер', 'вер', 'жов', 'лис', 'гру'],
@@ -34,6 +34,11 @@
       loading: 'Завантажуємо жарти…', failed: 'Не вдалося завантажити жарти.', retry: 'Спробувати ще раз',
       themeSystem: 'Як у системі', themeLight: 'Світла тема', themeDark: 'Темна тема', build: 'Версія збірки',
       place: 'Місце', stopRotation: 'Зупинити зміну Топ-3', startRotation: 'Відновити зміну Топ-3', langGroup: 'Мова', themeGroup: 'Тема', sort: 'Порядок',
+      signIn: 'Увійти', signInTitle: 'Увійти в LazyDad', close: 'Закрити', dismiss: 'Закрити повідомлення',
+      signInWhy: 'Увійдіть з акаунтом, який у вас уже є. LazyDad не зберігає ні імені, ні пошти, ні фото: лише код, обчислений з акаунта, щоб рахувати один голос на жарт.',
+      signInWith: name => `Увійти через ${name}`, account: name => `Ви увійшли через ${name}`, signedIn: name => `Ви увійшли через ${name}`,
+      signOut: 'Вийти', signedOut: 'Ви вийшли', signOutFailed: 'Не вдалося вийти. Спробуйте ще раз.',
+      signInFailed: 'Не вдалося увійти. Спробуйте ще раз або оберіть інший спосіб.',
       dur: (h, m) => `${h} год ${m} хв`
     },
     en: {
@@ -50,6 +55,11 @@
       loading: 'Loading jokes…', failed: 'Couldn’t load the jokes.', retry: 'Try again',
       themeSystem: 'Follow system', themeLight: 'Light theme', themeDark: 'Dark theme', build: 'Build version',
       place: 'Place', stopRotation: 'Pause the Top 3 rotation', startRotation: 'Resume the Top 3 rotation', langGroup: 'Language', themeGroup: 'Theme', sort: 'Sort',
+      signIn: 'Sign in', signInTitle: 'Sign in to LazyDad', close: 'Close', dismiss: 'Dismiss',
+      signInWhy: 'Sign in with an account you already have. LazyDad keeps no name, email or photo: only a code worked out from the account, to count one vote per joke.',
+      signInWith: name => `Sign in with ${name}`, account: name => `Signed in with ${name}`, signedIn: name => `You’re signed in with ${name}`,
+      signOut: 'Sign out', signedOut: 'You’ve signed out', signOutFailed: 'Couldn’t sign out. Try again.',
+      signInFailed: 'Signing in didn’t work. Try again, or choose another way.',
       dur: (h, m) => `${h}h ${m}m`
     }
   };
@@ -68,13 +78,43 @@
     pause: svg(14, '<rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/>'),
     play: svg(14, '<polygon points="6 3 20 12 6 21 6 3"/>'),
     // A lightbulb: "why it's funny".
-    why: size => svg(size, '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6M10 22h4"/>')
+    why: size => svg(size, '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6M10 22h4"/>'),
+    logIn: svg(16, '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/>'),
+    logOut: svg(16, '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>'),
+    user: svg(16, '<circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/>'),
+    close: svg(18, '<path d="M18 6 6 18M6 6l12 12"/>')
   };
+
+  // Each provider's button follows its own brand guidelines (name, mark and colours; see app.css).
+  const PROVIDERS = {
+    github: {
+      name: 'GitHub',
+      // The GitHub mark, unaltered.
+      mark: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.73.5.5 5.74.5 12.03c0 5.09 3.29 9.4 7.86 10.93.58.11.79-.25.79-.56v-1.97c-3.2.7-3.87-1.37-3.87-1.37-.52-1.34-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.2 1.77 1.2 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.68.8.56A11.53 11.53 0 0 0 23.5 12.03C23.5 5.74 18.27.5 12 .5Z"/></svg>',
+      label: strings => strings.signInWith('GitHub')
+    },
+    // Development only: a made-up account, no provider.
+    dev: { name: 'Dev', mark: ICON.user, label: strings => strings.signInWith('Dev') }
+  };
+  const providerName = provider => PROVIDERS[provider]?.name || provider;
 
   // localStorage can be unavailable (private mode, blocked storage): the page still works, it just forgets.
   const storage = {
     get(key) { try { return localStorage.getItem(key); } catch { return null; } },
     set(key, value) { try { localStorage.setItem(key, value); } catch { /* not persisted */ } }
+  };
+  // What a sign-in needs to survive its trip to the provider and back, for this tab only.
+  const session = {
+    take(key) {
+      try {
+        const value = sessionStorage.getItem(key);
+        sessionStorage.removeItem(key);
+        return value;
+      } catch {
+        return null;
+      }
+    },
+    set(key, value) { try { sessionStorage.setItem(key, value); } catch { /* the page just starts at the top */ } }
   };
 
   const $ = id => document.getElementById(id);
@@ -115,7 +155,10 @@
     refreshPending: false,    // a batch landed but showing it failed; retry on the next poll
     page: null,               // the joke page: { id, joke (null if there's no such joke), similar }
     copied: null,             // { id, kind: 'link' | 'text' } for a moment after a copy
-    explained: new Set()      // ids of jokes whose "why it's funny" the reader opened (this visit only)
+    explained: new Set(),     // ids of jokes whose "why it's funny" the reader opened (this visit only)
+    me: null,                 // /me: { signedIn, provider }, null until it answers
+    listScrollY: 0,           // the list's scroll position when the reader last left it for a joke's page
+    restoreScrollY: 0         // where the list was before a sign-in, restored once it loads
   };
   const pendingVotes = new Map();
   const lastVoteAt = new Map(); // joke id → when its shown counts last changed through a vote
@@ -176,6 +219,8 @@
     renderSpotlight();
     renderTopList();
     renderFeedFooter();
+    renderAccount();
+    if ($('ld-signin')?.open) renderSignInDialog();
     $('ld-list').innerHTML = state.feed.map(id => rowHtml(state.jokes.get(id))).join('');
     if (state.page) renderJokePage();
   }
@@ -355,7 +400,10 @@
     try {
       await Promise.all([loadSummary(), state.topLoaded ? null : loadTop(), loadPage()]);
       state.listReady = true;
-      if (route === state.route) showView(listView());
+      if (route === state.route) {
+        showView(listView());
+        await restoreListScroll();
+      }
     } catch {
       if (route === state.route) showLoadError();
     }
@@ -402,8 +450,18 @@
     return response.json();
   }
 
+  // Back where the list was before a sign-in. Its rows load a page at a time, so first load as many as that needs.
+  async function restoreListScroll() {
+    const y = state.restoreScrollY;
+    state.restoreScrollY = 0;
+    if (!y || state.view !== 'feed') return;
+    for (let i = 0; i < 10 && !state.done && document.documentElement.scrollHeight < y + window.innerHeight; i++) await loadPage();
+    window.scrollTo(0, y);
+  }
+
   function goToJoke(id) {
     const depth = history.state?.depth;
+    if (state.view === 'feed') state.listScrollY = window.scrollY;
     // This entry (the list, or another joke's page) keeps where the reader was.
     history.replaceState({ ...history.state, scrollY: window.scrollY, focus: id }, '');
     history.pushState({ depth: typeof depth === 'number' ? depth + 1 : null }, '', `/j/${id}`);
@@ -896,8 +954,152 @@
       `<span class="ld-card-open">${ICON.open(17)}</span></span></a>`;
   }
 
+  // — sign-in —
+  // config.signIn lists the providers this deployment offers; with none, there's no sign-in UI. Signing in leaves the
+  // page for the provider, which sends the reader back to the same address (the server accepts only this site's).
+  // What the page needs to look the same (the list's sort and scroll position) waits in sessionStorage meanwhile.
+  const signInEnabled = () => Array.isArray(config.signIn) && config.signIn.length > 0;
+
+  async function loadMe() {
+    try {
+      state.me = await getJson('/me');
+    } catch {
+      state.me = { signedIn: false, provider: null };
+    }
+    renderAccount();
+  }
+
+  // The header: "Sign in", or the provider's name with a menu holding "Sign out". Nothing until /me answers, so a
+  // signed-in reader never sees "Sign in" flash first.
+  function renderAccount() {
+    const box = $('ld-account');
+    if (!signInEnabled() || !state.me) {
+      box.hidden = true;
+      return;
+    }
+    const strings = t();
+    const focused = box.contains(document.activeElement) ? document.activeElement.id : null;
+    if (state.me.signedIn) {
+      const name = providerName(state.me.provider);
+      box.innerHTML =
+        `<button type="button" class="ld-account-btn" id="ld-account-btn" aria-expanded="false" aria-controls="ld-account-menu" aria-label="${esc(strings.account(name))}">` +
+        `${ICON.user}<span>${esc(name)}</span>${ICON.down(14)}</button>` +
+        `<div class="ld-menu" id="ld-account-menu" hidden>` +
+        `<button type="button" id="ld-signout" data-signout>${ICON.logOut}<span>${esc(strings.signOut)}</span></button></div>`;
+    } else {
+      box.innerHTML = `<button type="button" class="ld-account-btn" id="ld-signin-btn" data-open-signin>${ICON.logIn}<span>${esc(strings.signIn)}</span></button>`;
+    }
+    box.hidden = false;
+    if (focused) $(focused)?.focus();
+  }
+
+  function setMenu(open) {
+    const button = $('ld-account-btn');
+    if (!button) return;
+    button.setAttribute('aria-expanded', String(open));
+    $('ld-account-menu').hidden = !open;
+    if (open) $('ld-account-menu').querySelector('button').focus();
+  }
+
+  // A modal <dialog>: the browser keeps focus inside, closes it on Escape, and the rest of the page is inert meanwhile.
+  function openSignIn() {
+    let dialog = $('ld-signin');
+    if (!dialog) {
+      dialog = document.createElement('dialog');
+      dialog.id = 'ld-signin';
+      dialog.className = 'ld-dialog';
+      dialog.setAttribute('aria-labelledby', 'ld-signin-title');
+      // The body fills the dialog, so a click whose target is the dialog itself landed on the backdrop.
+      dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
+      dialog.addEventListener('close', () => { $('ld-signin-btn')?.focus(); });
+      document.body.append(dialog);
+    }
+    renderSignInDialog();
+    dialog.showModal();
+  }
+
+  function renderSignInDialog() {
+    const strings = t();
+    const returnUrl = encodeURIComponent(location.pathname);
+    const buttons = config.signIn.map((provider, i) => {
+      const known = PROVIDERS[provider] || { mark: ICON.logIn, label: s => s.signInWith(provider) };
+      return `<a class="ld-provider ld-provider--${esc(provider)}" href="/auth/signin/${encodeURIComponent(provider)}?returnUrl=${returnUrl}" ` +
+        `data-signin="${esc(provider)}"${i === 0 ? ' autofocus' : ''}>${known.mark}<span>${esc(known.label(strings))}</span></a>`;
+    }).join('');
+    $('ld-signin').innerHTML = '<div class="ld-dialog-body">' +
+      `<div class="ld-dialog-head"><h2 id="ld-signin-title">${esc(strings.signInTitle)}</h2>` +
+      `<button type="button" class="ld-copy" data-close-dialog aria-label="${esc(strings.close)}" title="${esc(strings.close)}">${ICON.close}</button></div>` +
+      `<p class="ld-dialog-text">${esc(strings.signInWhy)}</p>` +
+      `<div class="ld-providers">${buttons}</div></div>`;
+  }
+
+  function rememberReturn() {
+    session.set(KEYS.signIn, JSON.stringify({
+      path: location.pathname,
+      sort: state.sort,
+      listScrollY: state.view === 'feed' ? window.scrollY : state.listScrollY
+    }));
+  }
+
+  // Back from the provider: the list as the reader left it, and a word if it didn't work. A failed sign-in lands on
+  // "/?signin=failed" (the server knows no better), so the page goes back to where it started.
+  function returnFromSignIn() {
+    let saved = null;
+    try {
+      saved = JSON.parse(session.take(KEYS.signIn) || 'null');
+    } catch { /* nothing to restore */ }
+    const failed = new URLSearchParams(location.search).get('signin') === 'failed';
+    if (failed) {
+      const path = saved && (saved.path === '/' || jokeIdFrom(saved.path) !== null) ? saved.path : '/';
+      history.replaceState(null, '', path);
+    }
+    if (saved && saved.path === location.pathname) {
+      if (saved.sort === 'top') {
+        state.sort = 'top';
+        document.querySelector('input[name="ld-sort"][value="top"]').checked = true;
+      }
+      state.restoreScrollY = Number(saved.listScrollY) || 0;
+    }
+    return { failed, returned: saved !== null };
+  }
+
+  // A message at the top of the page until dismissed; key is a string of T, so a language switch translates it.
+  function showNotice(key) {
+    $('ld-notice')?.remove();
+    const notice = document.createElement('div');
+    notice.id = 'ld-notice';
+    notice.className = 'ld-notice';
+    notice.setAttribute('role', 'alert');
+    notice.innerHTML = `<span data-i18n="${key}">${esc(t()[key])}</span>` +
+      `<button type="button" class="ld-copy" data-dismiss-notice aria-label="${esc(t().dismiss)}" title="${esc(t().dismiss)}" ` +
+      `data-i18n-aria="dismiss" data-i18n-title="dismiss">${ICON.close}</button>`;
+    document.querySelector('.ld-main').prepend(notice);
+  }
+
+  // Only with the page's header: the server refuses a sign-out without it, so another site can't sign a reader out.
+  async function signOut() {
+    setMenu(false);
+    try {
+      const response = await fetch('/auth/signout', { method: 'POST', headers: { 'X-LazyDad': '1' } });
+      if (!response.ok) throw new Error(String(response.status));
+      state.me = { signedIn: false, provider: null };
+      renderAccount();
+      $('ld-signin-btn')?.focus();
+      announce(t().signedOut);
+    } catch {
+      showNotice('signOutFailed');
+    }
+  }
+
   // — events —
   document.addEventListener('click', event => {
+    // A sign-in leaves the page: keep what's needed to come back to the same place.
+    if (event.target.closest('a[data-signin]')) {
+      rememberReturn();
+      return;
+    }
+    // The account menu closes on any click outside it.
+    if (!event.target.closest('#ld-account')) setMenu(false);
     // Links to a joke's page, and "All jokes", stay in the page (History API); a modified click (new tab or window)
     // is the browser's.
     const link = event.target.closest('a[data-joke-link], a[data-home]');
@@ -912,6 +1114,16 @@
     const voteControl = target.closest('[data-vote-for]');
     if (voteControl && target.dataset.vote) {
       vote(Number(voteControl.dataset.voteFor), Number(target.dataset.vote));
+    } else if (target.hasAttribute('data-open-signin')) {
+      openSignIn();
+    } else if (target.id === 'ld-account-btn') {
+      setMenu(target.getAttribute('aria-expanded') !== 'true');
+    } else if (target.hasAttribute('data-signout')) {
+      signOut();
+    } else if (target.hasAttribute('data-close-dialog')) {
+      target.closest('dialog').close();
+    } else if (target.hasAttribute('data-dismiss-notice')) {
+      $('ld-notice').remove();
     } else if (target.dataset.setLang) {
       state.lang = target.dataset.setLang;
       storage.set(KEYS.lang, state.lang);
@@ -969,9 +1181,28 @@
 
   // The page restores the list's scroll position itself (the rows load after the browser would).
   if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+  const signInReturn = returnFromSignIn();
   if (!history.state) history.replaceState({ depth: jokeIdFrom(location.pathname) === null ? 0 : null }, '');
+
+  // Escape closes the account menu (the dialog closes itself) and puts focus back on its button.
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && $('ld-account-btn')?.getAttribute('aria-expanded') === 'true') {
+      setMenu(false);
+      $('ld-account-btn').focus();
+    }
+  });
+  // Leaving the menu by keyboard closes it too.
+  $('ld-account').addEventListener('focusout', () => setTimeout(() => {
+    if (!$('ld-account').contains(document.activeElement)) setMenu(false);
+  }, 0));
 
   applyTheme();
   applyLanguage();
   route();
+  if (signInEnabled()) {
+    loadMe().then(() => {
+      if (signInReturn.failed) showNotice('signInFailed');
+      else if (signInReturn.returned && state.me.signedIn) announce(t().signedIn(providerName(state.me.provider)));
+    });
+  }
 })();

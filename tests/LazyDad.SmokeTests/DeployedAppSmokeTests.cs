@@ -203,6 +203,31 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
     }
 
     [Fact]
+    public async Task ThePage_OffersSignInWithExactlyTheEnabledProviders()
+    {
+        // The header's sign-in dialog lists the providers from the shell's config: one that's off would send readers to a
+        // 404, and a missing one would hide a working provider.
+        var config = await target.PollAsync<JsonElement>(async () =>
+        {
+            using var response = await target.Client.GetAsync("");
+            var html = await response.Content.ReadAsStringAsync();
+            if (target.ExpectedVersion is not null && !html.Contains($"<span class=\"ld-sha\">{target.ExpectedVersion}</span>"))
+                return null;
+            var json = System.Text.RegularExpressions.Regex.Match(html, "<script type=\"application/json\" id=\"ld-config\">(.*?)</script>");
+            return json.Success ? JsonDocument.Parse(json.Groups[1].Value).RootElement.Clone() : null;
+        }, SmokeTarget.ColdStartTimeout, $"the home page to show version '{target.ExpectedVersion}'");
+        var providers = await target.PollAsync<JsonElement>(async () =>
+        {
+            var json = await target.GetJsonAsync("status");
+            return target.IsFromTheProcessUnderTest(json) ? json.GetProperty("signIn").GetProperty("providers").Clone() : null;
+        }, SmokeTarget.ColdStartTimeout, $"revision '{target.ExpectedRevision}' to answer /status");
+
+        var enabled = providers.EnumerateObject().Where(p => p.Value.GetString() != "off").Select(p => p.Name).Order();
+        var offered = config.GetProperty("signIn").EnumerateArray().Select(p => p.GetString()!).Order();
+        Assert.Equal(enabled, offered);
+    }
+
+    [Fact]
     public async Task JokesApi_ReturnsAJsonArray()
     {
         var jokes = await target.PollAsync<JsonElement>(async () => await target.GetJsonAsync("jokes"), SmokeTarget.ColdStartTimeout, "/jokes");
