@@ -58,6 +58,7 @@ public sealed class SignInTests : IAsyncDisposable
         builder.Logging.ClearProviders();
         builder.Configuration.AddInMemoryCollection(settings);
         builder.Services.AddDbContext<LazyDadDbContext>(database.Configure);
+        builder.Services.AddScoped<LazyDad.Data.Repositories.IVoteRepository, LazyDad.Data.Repositories.VoteRepository>();
         builder.Services.AddControllers().AddApplicationPart(typeof(SignInController).Assembly);
         builder.AddSignIn();
         configure(builder.Services);
@@ -294,6 +295,94 @@ public sealed class SignInTests : IAsyncDisposable
         var removal = SetCookie(response).ToLowerInvariant();
         Assert.StartsWith($"{SignInSetup.CookieName.ToLowerInvariant()}=;", removal);
         Assert.Contains("expires=thu, 01 jan 1970", removal);
+    }
+
+    private static async Task<HttpResponseMessage> DeleteMyVotesAsync(HttpClient client, string? cookie, bool fromThePage)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Delete, "me/votes");
+        if (cookie is not null)
+            request.Headers.Add("Cookie", $"{SignInSetup.CookieName}={cookie}");
+        if (fromThePage)
+            request.Headers.Add(SignInController.RequestHeader, SignInController.RequestHeaderValue);
+        return await client.SendAsync(request);
+    }
+
+    // Two jokes; alice votes up on the first and down on the second, bob up on the first. Returns their ids.
+    private async Task<(int First, int Second)> SeedVotesAsync(WebApplication app)
+    {
+        var keys = app.Services.GetRequiredService<VoterKeys>();
+        int first, second;
+        await using (var context = database.CreateContext())
+        {
+            var a = new Data.Entities.Joke { Language = "Ukrainian", Model = "m", Text = "first", GeneratedAt = DateTime.UtcNow };
+            var b = new Data.Entities.Joke { Language = "Ukrainian", Model = "m", Text = "second", GeneratedAt = DateTime.UtcNow };
+            context.Jokes.AddRange(a, b);
+            await context.SaveChangesAsync();
+            (first, second) = (a.Id, b.Id);
+        }
+        foreach (var (joke, account, value) in new[] { (first, "alice", 1), (second, "alice", -1), (first, "bob", 1) })
+        {
+            await using var context = database.CreateContext();
+            await new Data.Repositories.VoteRepository(context)
+                .SetAsync(joke, keys.For(SignInProviders.Development, account), value, DateTime.UtcNow, CancellationToken.None);
+        }
+        return (first, second);
+    }
+
+    [Fact]
+    public async Task DeleteMyVotes_RemovesOnlyThisReadersVotes_AndTakesThemOffTheCounts()
+    {
+        var app = await StartDevelopmentAsync();
+        var (first, second) = await SeedVotesAsync(app);
+        var client = Client(app);
+        var cookie = await SignInAsync(client, "alice");
+
+        using var response = await DeleteMyVotesAsync(client, cookie, fromThePage: true);
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Contains("no-store", response.Headers.CacheControl!.ToString());
+        await using var context = database.CreateContext();
+        var bob = app.Services.GetRequiredService<VoterKeys>().For(SignInProviders.Development, "bob");
+        Assert.Equal([bob], (await context.Votes.ToListAsync()).Select(v => v.VoterKey));
+        var jokes = await context.Jokes.ToDictionaryAsync(j => j.Id);
+        Assert.Equal((1, 0), (jokes[first].Up, jokes[first].Down));
+        Assert.Equal((0, 0), (jokes[second].Up, jokes[second].Down));
+        // Signed in still: deleting the votes isn't signing out.
+        Assert.True((await MeAsync(client, cookie)).GetProperty("signedIn").GetBoolean());
+    }
+
+    [Fact]
+    public async Task DeleteMyVotes_Twice_ChangesNothingTheSecondTime()
+    {
+        // A retry after a lost answer.
+        var app = await StartDevelopmentAsync();
+        var (first, _) = await SeedVotesAsync(app);
+        var client = Client(app);
+        var cookie = await SignInAsync(client, "alice");
+
+        using var once = await DeleteMyVotesAsync(client, cookie, fromThePage: true);
+        using var twice = await DeleteMyVotesAsync(client, cookie, fromThePage: true);
+
+        Assert.Equal(HttpStatusCode.NoContent, twice.StatusCode);
+        await using var context = database.CreateContext();
+        Assert.Equal(1, (await context.Jokes.SingleAsync(j => j.Id == first)).Up);
+    }
+
+    [Fact]
+    public async Task DeleteMyVotes_SignedOut_IsUnauthorized_AndWithoutThePagesHeader_IsRefused()
+    {
+        var app = await StartDevelopmentAsync();
+        await SeedVotesAsync(app);
+        var client = Client(app);
+        var cookie = await SignInAsync(client, "alice");
+
+        using var signedOut = await DeleteMyVotesAsync(client, null, fromThePage: true);
+        using var fromAnotherSite = await DeleteMyVotesAsync(client, cookie, fromThePage: false);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, signedOut.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, fromAnotherSite.StatusCode);
+        await using var context = database.CreateContext();
+        Assert.Equal(3, await context.Votes.CountAsync());
     }
 
     [Fact]

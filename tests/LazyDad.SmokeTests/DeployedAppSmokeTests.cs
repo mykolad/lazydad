@@ -145,6 +145,21 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
     }
 
     [Fact]
+    public async Task DeleteMyVotes_WhenSignedOut_IsUnauthorized()
+    {
+        // Polled for the same reason as /me: the draining revision has no such endpoint (404 or 405).
+        var status = await target.PollAsync<HttpStatusCode>(async () =>
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Delete, "me/votes");
+            request.Headers.Add("X-LazyDad", "1");
+            using var response = await target.Client.SendAsync(request);
+            return response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed ? null : response.StatusCode;
+        }, SmokeTarget.ColdStartTimeout, "DELETE /me/votes to answer");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, status);
+    }
+
+    [Fact]
     public async Task ThisRevision_SignInKeyRingWorks()
     {
         // The new revision checks its key ring (database + Key Vault key) in the background at startup. Every environment
