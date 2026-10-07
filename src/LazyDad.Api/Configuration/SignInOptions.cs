@@ -17,6 +17,9 @@ public class SignInOptions
     /// <summary>Sign in with GitHub: an OAuth app per environment. Off while its client id is empty.</summary>
     public OAuthClientOptions GitHub { get; set; } = new();
 
+    /// <summary>Sign in with Google: an OAuth client per environment. Off while its client id is empty.</summary>
+    public OAuthClientOptions Google { get; set; } = new();
+
     // Only empty means off: a value of spaces is a mistake, so it goes to the validator and fails startup.
     public bool Enabled => !string.IsNullOrEmpty(VoterKeyPepper);
 }

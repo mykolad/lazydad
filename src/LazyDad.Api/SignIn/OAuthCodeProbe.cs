@@ -48,6 +48,17 @@ public sealed class OAuthCodeProbe : ISignInProbe
             new HashSet<string> { "incorrect_client_credentials", "invalid_client", "unauthorized_client", "redirect_uri_mismatch" },
             services.GetRequiredService<IHttpClientFactory>(), services.GetRequiredService<ILogger<OAuthCodeProbe>>());
 
+    /// <summary>
+    /// A provider that answers as RFC 6749 says: <c>invalid_grant</c> for a code it doesn't know, <c>invalid_client</c> (or
+    /// <c>unauthorized_client</c>) for a wrong id or secret. Google checks the client first, so a made-up code with the
+    /// right client is always <c>invalid_grant</c>.
+    /// </summary>
+    public static OAuthCodeProbe Standard(string provider, string tokenEndpoint, OAuthClientOptions client, IServiceProvider services)
+        => new(provider, tokenEndpoint, client,
+            new HashSet<string> { "invalid_grant" },
+            new HashSet<string> { "invalid_client", "unauthorized_client" },
+            services.GetRequiredService<IHttpClientFactory>(), services.GetRequiredService<ILogger<OAuthCodeProbe>>());
+
     public async Task<ProviderState> ProbeAsync(CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

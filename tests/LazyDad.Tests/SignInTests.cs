@@ -24,7 +24,7 @@ namespace LazyDad.Tests;
 /// The sign-in endpoints and cookie in a real app (Kestrel on a free port), wired as Program.cs wires them, with the
 /// key ring in a test database. Cookies are handled by hand: they're Secure, and the test talks plain HTTP.
 /// </summary>
-public sealed class SignInTests : IAsyncDisposable
+public sealed partial class SignInTests : IAsyncDisposable
 {
     private const string KeyId = "https://lazydad-kv.vault.azure.net/keys/DataProtection";
     private static readonly string Pepper = Convert.ToBase64String(Enumerable.Range(1, 32).Select(i => (byte)i).ToArray());

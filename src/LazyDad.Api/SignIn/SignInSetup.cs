@@ -6,7 +6,9 @@ using LazyDad.Data;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OAuth;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.Extensions.Options;
 using System.Security.Claims;
 
@@ -101,7 +103,7 @@ public static class SignInSetup
             });
 
         // Each provider is an authentication scheme named after it (EnabledSignInProviders lists them), registered only
-        // while sign-in is on and the provider is configured. The rest come with their issues (#70, #76, #78, #79);
+        // while sign-in is on and the provider is configured. The rest come with their issues (#70, #78, #79);
         // Development's signs in at once, only in Development.
         var options = builder.Configuration.GetSection(SignInOptions.SectionName).Get<SignInOptions>() ?? new SignInOptions();
         if (!options.Enabled)
@@ -125,6 +127,53 @@ public static class SignInSetup
                 : SignInBackchannel.Other);
             services.AddSingleton<ISignInProbe>(provider => OAuthCodeProbe.GitHub(options.GitHub, provider));
         }
+        if (options.Google.Configured)
+        {
+            // Google's id tokens name their issuer with or without the scheme (its OpenID Connect documentation).
+            OpenIdConnect(authentication, services, SignInProviders.Google, OpenIdProviders.Google, options.Google,
+                google => google.TokenValidationParameters.ValidIssuers = [OpenIdProviders.Google.Authority, "accounts.google.com"]);
+            services.AddSingleton<ISignInProbe>(provider => OAuthCodeProbe.Standard(SignInProviders.Google, OpenIdProviders.Google.TokenEndpoint,
+                options.Google, provider));
+        }
+    }
+
+    /// <summary>
+    /// An OpenID Connect provider: the code flow with PKCE, the <c>openid</c> scope only (no email, no profile), and the
+    /// account id from the id token's <c>sub</c>, which the handler validates (signature from the provider's published
+    /// keys, issuer, audience, nonce). No user info call, nothing kept but the voter key. The answer comes back in the
+    /// query (a top-level GET, as with GitHub) rather than as a cross-site form post.
+    /// </summary>
+    private static void OpenIdConnect(AuthenticationBuilder authentication, IServiceCollection services, string provider,
+        OpenIdProvider endpoints, OAuthClientOptions client, Action<OpenIdConnectOptions> configure)
+    {
+        authentication.AddOpenIdConnect(provider, oidc =>
+        {
+            oidc.Authority = endpoints.Authority;
+            oidc.ClientId = client.ClientId;
+            oidc.ClientSecret = client.ClientSecret;
+            oidc.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+            oidc.ResponseType = OpenIdConnectResponseType.Code;
+            oidc.ResponseMode = OpenIdConnectResponseMode.Query;
+            oidc.UsePkce = true;
+            oidc.Scope.Clear();
+            oidc.Scope.Add("openid");
+            oidc.GetClaimsFromUserInfoEndpoint = false;
+            // The token's own claim names ("sub", not a long URI), and nothing copied into the user but what's mapped.
+            oidc.MapInboundClaims = false;
+            oidc.SaveTokens = false;
+            oidc.CallbackPath = $"/signin-{provider}";
+            // No provider-initiated sign-out: its path would sign a reader out on any site's request (the cookie has no
+            // sid or iss for the handler to check), around the X-LazyDad check on the site's own sign-out. Nor is there a
+            // provider sign-out to come back from.
+            oidc.RemoteSignOutPath = PathString.Empty;
+            oidc.SignedOutCallbackPath = PathString.Empty;
+            oidc.Events.OnTicketReceived = context => SignInEvents.OnTicketReceived(context, provider, p => p.FindFirstValue("sub"));
+            oidc.Events.OnRemoteFailure = context => SignInEvents.OnRemoteFailure(context, provider);
+            configure(oidc);
+        });
+        // The discovery document and the signing keys go through it too ("other"), about once a day.
+        Backchannel<OpenIdConnectOptions>(services, provider, uri =>
+            uri.AbsoluteUri == endpoints.TokenEndpoint ? SignInBackchannel.Token : SignInBackchannel.Other);
     }
 
     /// <summary>
