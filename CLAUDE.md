@@ -139,6 +139,11 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
     `ManagedIdentityClientId` (production: `lazydad-production`, which the registration trusts as a federated credential;
     its token goes as the `client_assertion`, `ManagedIdentityAssertion`). `common` reads a made-up code before the
     client, so its probe is `ClientCredentialsProbe` (a token as the app from its own tenant). Runbook section 7, step 10;
+  - **Telegram** (#78): its OpenID Connect at `oauth.telegram.org`, a bot per environment (@BotFather's Login Widget:
+    client id and secret, allowed URLs; RS256, since .NET can't check its EdDSA or ES256K tokens). `SignIn:Telegram:ClientId`
+    and `ClientSecret` (`TelegramClientSecret` / `…Staging`; runbook section 7, step 11). Never the `phone` scope. No
+    nonce asked for (its documentation has none). Errors come back as 200 with the error in the body. "Log in with
+    Telegram", in its blue darkened to pass WCAG AA;
   - **provider health:** each provider's handler talks to it through a named HTTP client (`SignInBackchannel`, which tests
     replace with a fake provider) that times every call into `lazydad_signin_provider_duration_seconds{provider,
     operation, outcome}` (`token`, `userinfo`). `SignInProbeService` probes each configured provider at startup and every

@@ -20,6 +20,9 @@ public class SignInOptions
     /// <summary>Sign in with Google: an OAuth client per environment. Off while its client id is empty.</summary>
     public OAuthClientOptions Google { get; set; } = new();
 
+    /// <summary>Sign in with Telegram: a bot per environment (@BotFather's Login Widget settings). Off while its client id is empty.</summary>
+    public OAuthClientOptions Telegram { get; set; } = new();
+
     /// <summary>Sign in with Microsoft: an Entra app registration per environment. Off while its client id is empty.</summary>
     public MicrosoftClientOptions Microsoft { get; set; } = new();
 

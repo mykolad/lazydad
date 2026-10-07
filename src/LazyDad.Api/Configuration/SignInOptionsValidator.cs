@@ -23,6 +23,7 @@ public class SignInOptionsValidator : IValidateOptions<SignInOptions>
         var errors = new List<string>();
         Client(errors, "GitHub", options.GitHub);
         Client(errors, "Google", options.Google);
+        Client(errors, "Telegram", options.Telegram);
         Microsoft(errors, options.Microsoft);
         if (!options.Enabled)
             return Result(errors);

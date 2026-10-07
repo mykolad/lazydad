@@ -36,7 +36,7 @@
       place: 'Місце', stopRotation: 'Зупинити зміну Топ-3', startRotation: 'Відновити зміну Топ-3', langGroup: 'Мова', themeGroup: 'Тема', sort: 'Порядок',
       signIn: 'Увійти', signInTitle: 'Увійти в LazyDad', close: 'Закрити', dismiss: 'Закрити повідомлення',
       signInWhy: 'Увійдіть з акаунтом, який у вас уже є. LazyDad не зберігає ні імені, ні пошти, ні фото: лише код, обчислений з акаунта, щоб рахувати один голос на жарт.',
-      signInWith: name => `Увійти через ${name}`, account: name => `Ви увійшли через ${name}`, signedIn: name => `Ви увійшли через ${name}`,
+      signInWith: name => `Увійти через ${name}`, logInWith: name => `Увійти через ${name}`, account: name => `Ви увійшли через ${name}`, signedIn: name => `Ви увійшли через ${name}`,
       signOut: 'Вийти', signedOut: 'Ви вийшли', signOutFailed: 'Не вдалося вийти. Спробуйте ще раз.',
       signInFailed: 'Не вдалося увійти. Спробуйте ще раз або оберіть інший спосіб.',
       privacy: 'Конфіденційність', privacyTitle: 'Конфіденційність — LazyDad', privacyLink: 'Як LazyDad поводиться з вашими даними',
@@ -62,7 +62,7 @@
       place: 'Place', stopRotation: 'Pause the Top 3 rotation', startRotation: 'Resume the Top 3 rotation', langGroup: 'Language', themeGroup: 'Theme', sort: 'Sort',
       signIn: 'Sign in', signInTitle: 'Sign in to LazyDad', close: 'Close', dismiss: 'Dismiss',
       signInWhy: 'Sign in with an account you already have. LazyDad keeps no name, email or photo: only a code worked out from the account, to count one vote per joke.',
-      signInWith: name => `Sign in with ${name}`, account: name => `Signed in with ${name}`, signedIn: name => `You’re signed in with ${name}`,
+      signInWith: name => `Sign in with ${name}`, logInWith: name => `Log in with ${name}`, account: name => `Signed in with ${name}`, signedIn: name => `You’re signed in with ${name}`,
       signOut: 'Sign out', signedOut: 'You’ve signed out', signOutFailed: 'Couldn’t sign out. Try again.',
       signInFailed: 'Signing in didn’t work. Try again, or choose another way.',
       privacy: 'Privacy', privacyTitle: 'Privacy — LazyDad', privacyLink: 'How LazyDad handles your data',
@@ -115,6 +115,12 @@
       // The four-square logo, unaltered (Microsoft's sign-in branding guidelines).
       mark: '<svg width="20" height="20" viewBox="0 0 21 21" aria-hidden="true"><rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/><rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/></svg>',
       label: strings => strings.signInWith('Microsoft')
+    },
+    telegram: {
+      name: 'Telegram',
+      // The paper plane in its circle.
+      mark: '<svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="12" fill="#fff"/><path fill="#1f78bd" d="M5.43 11.87 17 7.41c.54-.2 1.01.13.83.94l-1.97 9.28c-.15.66-.54.82-1.09.51l-3-2.21-1.45 1.39c-.16.16-.3.3-.61.3l.21-3.05 5.56-5.02c.24-.21-.05-.33-.38-.12l-6.87 4.33-2.96-.92c-.64-.2-.66-.64.14-.97z"/></svg>',
+      label: strings => strings.logInWith('Telegram')
     },
     // Development only: a made-up account, no provider.
     dev: { name: 'Dev', mark: ICON.user, label: strings => strings.signInWith('Dev') }

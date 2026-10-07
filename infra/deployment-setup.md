@@ -49,8 +49,8 @@ What it all looks like at the end:
 
 | Identity | Kind | Signs in as it | Roles |
 |---|---|---|---|
-| `lazydad-production` | user-assigned | both prod apps; both prod environments, to read the certificate | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeaders`, `JevApiKey`, `VoterKeyPepper`, `GitHubClientSecret`, `GoogleClientSecret` and `lazydad-fyi-origin`; `Key Vault Crypto Service Encryption User` on the `DataProtection` key; read/write in `lazydad-db`; the `LazyDad` Entra app registration trusts it as a federated credential (sign in with Microsoft) |
-| `lazydad-app-staging` | system-assigned | the staging app | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeadersStaging`, `JevApiKeyStaging`, `VoterKeyPepperStaging`, `GitHubClientSecretStaging`, `GoogleClientSecretStaging` and `MicrosoftClientSecretStaging`; `Key Vault Crypto Service Encryption User` on the `DataProtectionStaging` key; read/write in `lazydad-db-staging` |
+| `lazydad-production` | user-assigned | both prod apps; both prod environments, to read the certificate | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeaders`, `JevApiKey`, `VoterKeyPepper`, `GitHubClientSecret`, `GoogleClientSecret`, `TelegramClientSecret` and `lazydad-fyi-origin`; `Key Vault Crypto Service Encryption User` on the `DataProtection` key; read/write in `lazydad-db`; the `LazyDad` Entra app registration trusts it as a federated credential (sign in with Microsoft) |
+| `lazydad-app-staging` | system-assigned | the staging app | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeadersStaging`, `JevApiKeyStaging`, `VoterKeyPepperStaging`, `GitHubClientSecretStaging`, `GoogleClientSecretStaging`, `MicrosoftClientSecretStaging` and `TelegramClientSecretStaging`; `Key Vault Crypto Service Encryption User` on the `DataProtectionStaging` key; read/write in `lazydad-db-staging` |
 | `lazydad-acr-pull` | user-assigned | all three apps, to pull images | `Container Registry Repository Reader` (all repositories) |
 | `lazydad-github-cd` | user-assigned | GitHub's `production` environment | `Container Registry Repository Writer` on `lazydad`, `Reader` on `lazydad-preview`, `Reader` on the registry; `Contributor` on both prod apps; `LazyDad Deployer`; `LazyDad Service Tag Reader`; migrations in `lazydad-db` |
 | `lazydad-github-staging` | user-assigned | GitHub's `staging` environment (branch previews too) | `Container Registry Repository Writer` on `lazydad-preview` only, `Reader` on the registry; `Contributor` on `lazydad-app-staging`; `LazyDad Deployer`; migrations in `lazydad-db-staging` |
@@ -1280,6 +1280,79 @@ stop the new revision at startup. `/status` shows `microsoft` as `valid` once th
 staging secret expires after a year:** before then, run the `credential reset … --append` line again, restart the
 staging app, sign in, and delete the old secret (`az ad app credential list` / `delete`); an expired one shows as
 `invalid`.
+
+**11. Sign in with Telegram.** Telegram's OpenID Connect (https://core.telegram.org/bots/telegram-login): a bot is the
+client, its numeric id the client id. The app asks for `openid` only, never `phone` or `profile`, and keeps nothing but
+the voter key (from the id token's `sub`). One bot per environment. In Telegram, with **@BotFather**:
+
+| | Production | Staging |
+|---|---|---|
+| `/newbot`: name, username | `LazyDad`, e.g. `lazydad_fyi_bot` | `LazyDad (staging)`, e.g. `lazydad_staging_bot` |
+| Profile picture (`/setuserpic`) | the sloth (`src/LazyDad.Api/wwwroot/icon-512.png`) | the same |
+| Bot Settings → Login Widget → Allowed URLs | `https://lazydad.fyi` and `https://lazydad.fyi/signin-telegram` | staging's address, and it + `/signin-telegram` |
+| Login Widget → Advanced → signing algorithm | **RS256** (the default; .NET can't check EdDSA or ES256K tokens) | RS256 |
+
+The Login Widget page shows the **Client ID** and **Client Secret**; put the secret in Key Vault at once:
+
+```bash
+read -rsp "Production client secret: " SECRET; echo
+az keyvault secret set --vault-name lazydad-kv -n TelegramClientSecret        --value "$SECRET" -o none
+read -rsp "Staging client secret: " SECRET; echo
+az keyvault secret set --vault-name lazydad-kv -n TelegramClientSecretStaging --value "$SECRET" -o none
+unset SECRET
+
+KV_ID=$(az keyvault show -n lazydad-kv --query id -o tsv)
+PROD=$(az identity show -g $RG -n lazydad-production --query principalId -o tsv)
+STAGING=$(az containerapp show -g $RG -n lazydad-app-staging --query identity.principalId -o tsv)
+az role assignment create --assignee-object-id $PROD --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets User" --scope "$KV_ID/secrets/TelegramClientSecret" -o none
+az role assignment create --assignee-object-id $STAGING --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets User" --scope "$KV_ID/secrets/TelegramClientSecretStaging" -o none
+
+# A few minutes later, each app's settings: staging first (a new production revision runs an extra batch).
+APP=lazydad-app-staging; SUFFIX=Staging; IDENTITY=system; CLIENT_ID=<staging's bot id>
+# then: APP=lazydad-app; SUFFIX=; IDENTITY=$(az identity show -g $RG -n lazydad-production --query id -o tsv); CLIENT_ID=<production's>
+# and:  APP=lazydad-app-swedencentral, the same otherwise
+az containerapp secret set -g $RG -n $APP \
+  --secrets "telegram-client-secret=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/TelegramClientSecret$SUFFIX,identityref:$IDENTITY" -o none
+az containerapp update -g $RG -n $APP --set-env-vars \
+  SignIn__Telegram__ClientId=$CLIENT_ID SignIn__Telegram__ClientSecret=secretref:telegram-client-secret -o none
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$SECRET = Read-Host 'Production client secret' -MaskInput
+az keyvault secret set --vault-name lazydad-kv -n TelegramClientSecret        --value $SECRET -o none
+$SECRET = Read-Host 'Staging client secret' -MaskInput
+az keyvault secret set --vault-name lazydad-kv -n TelegramClientSecretStaging --value $SECRET -o none
+Remove-Variable SECRET
+
+$KV_ID   = az keyvault show -n lazydad-kv --query id -o tsv
+$PROD    = az identity show -g $RG -n lazydad-production --query principalId -o tsv
+$STAGING = az containerapp show -g $RG -n lazydad-app-staging --query identity.principalId -o tsv
+az role assignment create --assignee-object-id $PROD --assignee-principal-type ServicePrincipal `
+  --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/TelegramClientSecret" -o none
+az role assignment create --assignee-object-id $STAGING --assignee-principal-type ServicePrincipal `
+  --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/TelegramClientSecretStaging" -o none
+
+# A few minutes later, each app's settings: staging first (a new production revision runs an extra batch).
+$APP = 'lazydad-app-staging'; $SUFFIX = 'Staging'; $IDENTITY = 'system'; $CLIENT_ID = '<staging''s bot id>'
+# then: $APP = 'lazydad-app'; $SUFFIX = ''; $IDENTITY = az identity show -g $RG -n lazydad-production --query id -o tsv; $CLIENT_ID = '<production''s>'
+# and:  $APP = 'lazydad-app-swedencentral', the same otherwise
+az containerapp secret set -g $RG -n $APP `
+  --secrets "telegram-client-secret=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/TelegramClientSecret$SUFFIX,identityref:$IDENTITY" -o none
+az containerapp update -g $RG -n $APP --set-env-vars `
+  "SignIn__Telegram__ClientId=$CLIENT_ID" SignIn__Telegram__ClientSecret=secretref:telegram-client-secret -o none
+```
+
+</details>
+
+Telegram checks the client before the code (it answers a made-up client with `invalid_client`), so the probe works as
+for Google; `/status` shows `telegram` as `valid`. Sign in by hand once on each environment: Telegram's documentation
+doesn't say whether its id tokens carry a nonce, so the app asks for none (PKCE and the state cover the same ground),
+and it doesn't name its token errors either. If the hand check fails, the bot's support (@BotSupport, `#oidc`) is the
+place to ask.
 
 ## 8. Database users
 

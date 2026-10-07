@@ -27,7 +27,12 @@ public sealed partial class SignInTests
             fake.ExtraClaims["tid"] = MicrosoftTenant;
             fake.ClientCredentialsEndpoint = OpenIdProviders.MicrosoftTenantTokenEndpoint(MicrosoftTenant);
         }),
+        // Errors come back as 200 with the error in the body.
+        [SignInProviders.Telegram] = ("Telegram", OpenIdProviders.Telegram, [], fake => fake.ErrorsWith200 = true),
     };
+
+    // The providers asked for no nonce (Telegram's documentation has none).
+    private static readonly HashSet<string> WithoutNonce = [SignInProviders.Telegram];
 
     private async Task<(HttpClient Client, WebApplication App, FakeOpenIdProvider Provider)> StartWithOpenIdProviderAsync(string provider,
         Action<Dictionary<string, string?>> settings, Action<IServiceCollection> configure)
@@ -80,7 +85,8 @@ public sealed partial class SignInTests
     {
         var (authorize, cookies) = await StartRemoteSignInAsync(client, provider, returnUrl);
         var query = QueryHelpers.ParseQuery(authorize.Query);
-        fake.Nonce ??= query["nonce"].ToString();
+        if (query.TryGetValue("nonce", out var nonce))
+            fake.Nonce ??= nonce.ToString();
         return await ProviderCallbackAsync(client, provider, cookies,
             $"code={FakeOpenIdProvider.Code}&state={Uri.EscapeDataString(query["state"].ToString())}");
     }
@@ -110,7 +116,7 @@ public sealed partial class SignInTests
         // No email, no profile.
         Assert.Equal("openid", query["scope"].ToString());
         Assert.Equal("S256", query["code_challenge_method"].ToString());
-        Assert.NotEmpty(query["nonce"].ToString());
+        Assert.Equal(!WithoutNonce.Contains(provider), query.ContainsKey("nonce"));
     }
 
     [Theory]
@@ -138,7 +144,7 @@ public sealed partial class SignInTests
     {
         var data = new TheoryData<string, string>();
         foreach (var provider in OpenIdProviderSettings.Keys)
-            foreach (var forgery in new[] { "issuer", "audience", "signature", "nonce", "subject" })
+            foreach (var forgery in new[] { "issuer", "audience", "signature", "nonce", "subject" }.Where(f => f != "nonce" || !WithoutNonce.Contains(provider)))
                 data.Add(provider, forgery);
         return data;
     }
