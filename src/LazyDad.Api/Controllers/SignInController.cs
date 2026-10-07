@@ -28,10 +28,11 @@ public class SignInController : ControllerBase
 
     /// <summary>
     /// Sends the reader to the provider, who sends them back to <paramref name="returnUrl"/> signed in. Only a URL on
-    /// this site is followed; anything else goes to the home page.
+    /// this site is followed; anything else goes to the home page. <paramref name="persist"/>: the reader ticked "Keep me
+    /// signed in" (see <see cref="SignInSetup.Lifetime"/>); the choice travels to the callback inside the sign-in's state.
     /// </summary>
     [HttpGet("auth/signin/{provider}")]
-    public IActionResult StartSignIn(string provider, [FromQuery] string? returnUrl)
+    public IActionResult StartSignIn(string provider, [FromQuery] string? returnUrl, [FromQuery] bool persist)
     {
         if (!providers.Contains(provider))
             return NotFound();
@@ -40,7 +41,7 @@ public class SignInController : ControllerBase
 
         // Every provider is an authentication scheme named after it, and its handler takes over: a remote one sends the
         // reader to the provider, whose callback signs them in (SignInEvents); Development's signs them in at once.
-        return Challenge(new AuthenticationProperties { RedirectUri = target }, provider);
+        return Challenge(new AuthenticationProperties { RedirectUri = target, IsPersistent = persist }, provider);
     }
 
     /// <summary>
