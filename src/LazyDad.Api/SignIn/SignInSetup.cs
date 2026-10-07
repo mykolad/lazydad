@@ -103,7 +103,7 @@ public static class SignInSetup
             });
 
         // Each provider is an authentication scheme named after it (EnabledSignInProviders lists them), registered only
-        // while sign-in is on and the provider is configured. The rest come with their issues (#70, #78, #79);
+        // while sign-in is on and the provider is configured. The rest come with their issues (#78, #79);
         // Development's signs in at once, only in Development.
         var options = builder.Configuration.GetSection(SignInOptions.SectionName).Get<SignInOptions>() ?? new SignInOptions();
         if (!options.Enabled)
@@ -135,6 +135,38 @@ public static class SignInSetup
             services.AddSingleton<ISignInProbe>(provider => OAuthCodeProbe.Standard(SignInProviders.Google, OpenIdProviders.Google.TokenEndpoint,
                 options.Google, provider));
         }
+        if (options.Microsoft.Configured)
+            AddMicrosoft(authentication, services, options.Microsoft);
+    }
+
+    /// <summary>
+    /// Personal Microsoft accounts and work or school ones, through "common". Its <c>sub</c> is unique to the app
+    /// registration, so replacing the registration makes every Microsoft voter new. The registration proves itself with a
+    /// secret, or with a token of a managed identity it trusts (no secret at all).
+    /// </summary>
+    private static void AddMicrosoft(AuthenticationBuilder authentication, IServiceCollection services, MicrosoftClientOptions microsoft)
+    {
+        if (microsoft.UsesManagedIdentity)
+            services.AddSingleton<IClientAssertion>(new ManagedIdentityAssertion(microsoft.ManagedIdentityClientId));
+        OpenIdConnect(authentication, services, SignInProviders.Microsoft, OpenIdProviders.Microsoft, microsoft, oidc =>
+        {
+            oidc.TokenValidationParameters.IssuerValidator = OpenIdProviders.MicrosoftIssuer;
+            if (microsoft.UsesManagedIdentity)
+                oidc.Events.OnAuthorizationCodeReceived = async context =>
+                {
+                    var request = context.TokenEndpointRequest!;
+                    request.ClientSecret = null;
+                    request.ClientAssertionType = IClientAssertion.Type;
+                    request.ClientAssertion = await context.HttpContext.RequestServices.GetRequiredService<IClientAssertion>()
+                        .GetAsync(context.HttpContext.RequestAborted);
+                };
+        });
+        services.AddSingleton<ISignInProbe>(provider => new ClientCredentialsProbe(SignInProviders.Microsoft,
+            OpenIdProviders.MicrosoftTenantTokenEndpoint(microsoft.TenantId), microsoft.ClientId, microsoft.ClientSecret,
+            microsoft.UsesManagedIdentity ? provider.GetRequiredService<IClientAssertion>() : null,
+            // Any resource will do; the app needs no permission on it to get a token for itself.
+            "https://graph.microsoft.com/.default",
+            provider.GetRequiredService<IHttpClientFactory>(), provider.GetRequiredService<ILogger<ClientCredentialsProbe>>()));
     }
 
     /// <summary>

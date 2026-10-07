@@ -67,4 +67,31 @@ public class SignInOptionsValidatorTests
 
         Assert.Contains(Validate(options, KeyId, Environments.Production).Failures!, f => f.Contains($"SignIn:{provider}"));
     }
+
+    private const string Tenant = "3f1a6c2e-5b7d-4e8f-9a0b-1c2d3e4f5a6b";
+
+    [Theory]
+    [InlineData("client-id", Tenant, "secret", "", true)]
+    [InlineData("client-id", Tenant, "", "identity-client-id", true)]
+    [InlineData("", "", "", "", true)]
+    // A secret and a managed identity both: which one proves the app would be a guess.
+    [InlineData("client-id", Tenant, "secret", "identity-client-id", false)]
+    [InlineData("client-id", Tenant, "", "", false)]
+    [InlineData("client-id", "", "secret", "", false)]
+    [InlineData("client-id", "contoso.onmicrosoft.com", "secret", "", false)]
+    [InlineData("", Tenant, "secret", "", false)]
+    [InlineData("", "", "", "identity-client-id", false)]
+    public void Validate_Microsoft_NeedsItsTenant_AndASecretOrAManagedIdentity(string clientId, string tenantId, string secret,
+        string managedIdentity, bool valid)
+    {
+        var options = new SignInOptions
+        {
+            VoterKeyPepper = Pepper,
+            Microsoft = new() { ClientId = clientId, TenantId = tenantId, ClientSecret = secret, ManagedIdentityClientId = managedIdentity },
+        };
+
+        var result = Validate(options, KeyId, Environments.Production);
+
+        Assert.Equal(valid, !(result.Failures ?? []).Any(f => f.Contains("SignIn:Microsoft")));
+    }
 }

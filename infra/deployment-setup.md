@@ -49,8 +49,8 @@ What it all looks like at the end:
 
 | Identity | Kind | Signs in as it | Roles |
 |---|---|---|---|
-| `lazydad-production` | user-assigned | both prod apps; both prod environments, to read the certificate | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeaders`, `JevApiKey`, `VoterKeyPepper`, `GitHubClientSecret`, `GoogleClientSecret` and `lazydad-fyi-origin`; `Key Vault Crypto Service Encryption User` on the `DataProtection` key; read/write in `lazydad-db` |
-| `lazydad-app-staging` | system-assigned | the staging app | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeadersStaging`, `JevApiKeyStaging`, `VoterKeyPepperStaging`, `GitHubClientSecretStaging` and `GoogleClientSecretStaging`; `Key Vault Crypto Service Encryption User` on the `DataProtectionStaging` key; read/write in `lazydad-db-staging` |
+| `lazydad-production` | user-assigned | both prod apps; both prod environments, to read the certificate | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeaders`, `JevApiKey`, `VoterKeyPepper`, `GitHubClientSecret`, `GoogleClientSecret` and `lazydad-fyi-origin`; `Key Vault Crypto Service Encryption User` on the `DataProtection` key; read/write in `lazydad-db`; the `LazyDad` Entra app registration trusts it as a federated credential (sign in with Microsoft) |
+| `lazydad-app-staging` | system-assigned | the staging app | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeadersStaging`, `JevApiKeyStaging`, `VoterKeyPepperStaging`, `GitHubClientSecretStaging`, `GoogleClientSecretStaging` and `MicrosoftClientSecretStaging`; `Key Vault Crypto Service Encryption User` on the `DataProtectionStaging` key; read/write in `lazydad-db-staging` |
 | `lazydad-acr-pull` | user-assigned | all three apps, to pull images | `Container Registry Repository Reader` (all repositories) |
 | `lazydad-github-cd` | user-assigned | GitHub's `production` environment | `Container Registry Repository Writer` on `lazydad`, `Reader` on `lazydad-preview`, `Reader` on the registry; `Contributor` on both prod apps; `LazyDad Deployer`; `LazyDad Service Tag Reader`; migrations in `lazydad-db` |
 | `lazydad-github-staging` | user-assigned | GitHub's `staging` environment (branch previews too) | `Container Registry Repository Writer` on `lazydad-preview` only, `Reader` on the registry; `Contributor` on `lazydad-app-staging`; `LazyDad Deployer`; migrations in `lazydad-db-staging` |
@@ -1183,6 +1183,103 @@ As with GitHub: a client id without its secret stops the new revision at startup
 code tells a wrong secret from a right one); the smoke tests check the redirect; and after changing a client's redirect
 URIs, sign in by hand. A new secret: add one on the client's page, put it in Key Vault, restart the apps, sign in, then
 delete the old one.
+
+**10. Sign in with Microsoft.** Personal Microsoft accounts and work or school ones, through the `common` endpoint, with
+the `openid` scope only. The account id is the id token's `sub`, which is unique to the app registration: **replacing a
+registration makes every Microsoft voter new**, so keep them. One registration per environment, in your tenant, each
+with a service principal (the probe asks your tenant for a token as the app, which is how it tells a working credential
+from a broken one: `common` reads a made-up code before the client).
+
+Production proves itself without a secret: the registration trusts `lazydad-production` (the user-assigned identity both
+prod apps run as) as a federated credential, and the apps send that identity's token instead. Entra accepts only
+user-assigned identities there, and staging runs as its system-assigned one, so staging uses a secret. If Microsoft ever
+refuses production's token (the probe shows `invalid`, or a personal account's sign-in fails), give production a secret
+the way staging has one.
+
+```bash
+TENANT=$(az account show --query tenantId -o tsv)
+# Each registration: a web redirect URI, then the audience (personal accounts need v2 access tokens first).
+PROD_APP=$(az ad app create --display-name LazyDad --web-redirect-uris https://lazydad.fyi/signin-microsoft --query appId -o tsv)
+STAGING_FQDN=$(az containerapp show -g $RG -n lazydad-app-staging --query properties.configuration.ingress.fqdn -o tsv)
+STAGING_APP=$(az ad app create --display-name "LazyDad (staging)" --web-redirect-uris "https://$STAGING_FQDN/signin-microsoft" --query appId -o tsv)
+for APP_ID in $PROD_APP $STAGING_APP; do
+  az ad app update --id $APP_ID --set api.requestedAccessTokenVersion=2
+  az ad app update --id $APP_ID --sign-in-audience AzureADandPersonalMicrosoftAccount
+  az ad sp create --id $APP_ID -o none
+done
+
+# Production: trust lazydad-production instead of a secret.
+PROD_MI=$(az identity show -g $RG -n lazydad-production --query principalId -o tsv)
+az ad app federated-credential create --id $PROD_APP --parameters "{\"name\": \"lazydad-production\",
+  \"issuer\": \"https://login.microsoftonline.com/$TENANT/v2.0\", \"subject\": \"$PROD_MI\",
+  \"audiences\": [\"api://AzureADTokenExchange\"]}" -o none
+PROD_MI_CLIENT=$(az identity show -g $RG -n lazydad-production --query clientId -o tsv)
+for APP in lazydad-app lazydad-app-swedencentral; do
+  az containerapp update -g $RG -n $APP --set-env-vars SignIn__Microsoft__ClientId=$PROD_APP \
+    SignIn__Microsoft__TenantId=$TENANT SignIn__Microsoft__ManagedIdentityClientId=$PROD_MI_CLIENT -o none
+done
+
+# Staging: a secret for a year, straight into Key Vault (never printed).
+az keyvault secret set --vault-name lazydad-kv -n MicrosoftClientSecretStaging -o none --value "$(az ad app credential reset \
+  --id $STAGING_APP --append --display-name lazydad-staging --end-date $(date -u -d '+1 year' +%F) --query password -o tsv)"
+KV_ID=$(az keyvault show -n lazydad-kv --query id -o tsv)
+STAGING=$(az containerapp show -g $RG -n lazydad-app-staging --query identity.principalId -o tsv)
+az role assignment create --assignee-object-id $STAGING --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets User" --scope "$KV_ID/secrets/MicrosoftClientSecretStaging" -o none
+# A few minutes later:
+az containerapp secret set -g $RG -n lazydad-app-staging \
+  --secrets "microsoft-client-secret=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/MicrosoftClientSecretStaging,identityref:system" -o none
+az containerapp update -g $RG -n lazydad-app-staging --set-env-vars SignIn__Microsoft__ClientId=$STAGING_APP \
+  SignIn__Microsoft__TenantId=$TENANT SignIn__Microsoft__ClientSecret=secretref:microsoft-client-secret -o none
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$TENANT = az account show --query tenantId -o tsv
+$PROD_APP = az ad app create --display-name LazyDad --web-redirect-uris https://lazydad.fyi/signin-microsoft --query appId -o tsv
+$STAGING_FQDN = az containerapp show -g $RG -n lazydad-app-staging --query properties.configuration.ingress.fqdn -o tsv
+$STAGING_APP = az ad app create --display-name 'LazyDad (staging)' --web-redirect-uris "https://$STAGING_FQDN/signin-microsoft" --query appId -o tsv
+foreach ($APP_ID in $PROD_APP, $STAGING_APP) {
+  az ad app update --id $APP_ID --set api.requestedAccessTokenVersion=2
+  az ad app update --id $APP_ID --sign-in-audience AzureADandPersonalMicrosoftAccount
+  az ad sp create --id $APP_ID -o none
+}
+
+$PROD_MI = az identity show -g $RG -n lazydad-production --query principalId -o tsv
+@{ name = 'lazydad-production'; issuer = "https://login.microsoftonline.com/$TENANT/v2.0"; subject = $PROD_MI
+   audiences = @('api://AzureADTokenExchange') } | ConvertTo-Json | Set-Content fic.json
+az ad app federated-credential create --id $PROD_APP --parameters fic.json -o none
+Remove-Item fic.json
+$PROD_MI_CLIENT = az identity show -g $RG -n lazydad-production --query clientId -o tsv
+foreach ($APP in 'lazydad-app', 'lazydad-app-swedencentral') {
+  az containerapp update -g $RG -n $APP --set-env-vars "SignIn__Microsoft__ClientId=$PROD_APP" `
+    "SignIn__Microsoft__TenantId=$TENANT" "SignIn__Microsoft__ManagedIdentityClientId=$PROD_MI_CLIENT" -o none
+}
+
+$END = (Get-Date).ToUniversalTime().AddYears(1).ToString('yyyy-MM-dd')
+az keyvault secret set --vault-name lazydad-kv -n MicrosoftClientSecretStaging -o none --value (az ad app credential reset `
+  --id $STAGING_APP --append --display-name lazydad-staging --end-date $END --query password -o tsv)
+$KV_ID   = az keyvault show -n lazydad-kv --query id -o tsv
+$STAGING = az containerapp show -g $RG -n lazydad-app-staging --query identity.principalId -o tsv
+az role assignment create --assignee-object-id $STAGING --assignee-principal-type ServicePrincipal `
+  --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/MicrosoftClientSecretStaging" -o none
+# A few minutes later:
+az containerapp secret set -g $RG -n lazydad-app-staging `
+  --secrets 'microsoft-client-secret=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/MicrosoftClientSecretStaging,identityref:system' -o none
+az containerapp update -g $RG -n lazydad-app-staging --set-env-vars "SignIn__Microsoft__ClientId=$STAGING_APP" `
+  "SignIn__Microsoft__TenantId=$TENANT" SignIn__Microsoft__ClientSecret=secretref:microsoft-client-secret -o none
+```
+
+</details>
+
+On each registration's **Branding & properties** page in the Entra admin center: the name `LazyDad` (staging: `LazyDad
+(staging)`), the sloth logo, the home page `https://lazydad.fyi`, the privacy statement `https://lazydad.fyi/privacy`.
+Settings that don't fit together (a client id without the tenant, both a secret and a managed identity, or neither)
+stop the new revision at startup. `/status` shows `microsoft` as `valid` once the probe got a token as the app. **The
+staging secret expires after a year:** before then, run the `credential reset … --append` line again, restart the
+staging app, sign in, and delete the old secret (`az ad app credential list` / `delete`); an expired one shows as
+`invalid`.
 
 ## 8. Database users
 

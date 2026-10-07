@@ -20,6 +20,9 @@ public class SignInOptions
     /// <summary>Sign in with Google: an OAuth client per environment. Off while its client id is empty.</summary>
     public OAuthClientOptions Google { get; set; } = new();
 
+    /// <summary>Sign in with Microsoft: an Entra app registration per environment. Off while its client id is empty.</summary>
+    public MicrosoftClientOptions Microsoft { get; set; } = new();
+
     // Only empty means off: a value of spaces is a mistake, so it goes to the validator and fails startup.
     public bool Enabled => !string.IsNullOrEmpty(VoterKeyPepper);
 }
@@ -35,4 +38,20 @@ public class OAuthClientOptions
 
     // The validator fails startup when only one of them is set: that's a lost setting, not "off".
     public bool Configured => ClientId.Length > 0;
+}
+
+/// <summary>
+/// The Entra app registration. It proves itself with either a secret (<c>MicrosoftClientSecret</c> in Key Vault, which
+/// expires and needs rotating) or, with no secret at all, a user-assigned managed identity the registration trusts as a
+/// federated credential (<see cref="ManagedIdentityClientId"/>; Entra accepts only user-assigned ones).
+/// </summary>
+public class MicrosoftClientOptions : OAuthClientOptions
+{
+    /// <summary>The registration's own tenant: the probe asks it for a token as the app (the common endpoint can't tell).</summary>
+    public string TenantId { get; set; } = string.Empty;
+
+    /// <summary>The client id of the user-assigned managed identity whose token stands in for the secret.</summary>
+    public string ManagedIdentityClientId { get; set; } = string.Empty;
+
+    public bool UsesManagedIdentity => ManagedIdentityClientId.Length > 0;
 }

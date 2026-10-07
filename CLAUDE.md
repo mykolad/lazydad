@@ -132,6 +132,13 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   - **Google** (#76): `SignIn:Google:ClientId` and `ClientSecret` (`GoogleClientSecret` / `GoogleClientSecretStaging`;
     a Google Cloud project per environment, staging's in Testing; runbook section 7, step 9). Its `sub` is the same for
     every client; its issuer comes with or without `https://`. The button follows Google's branding (Roboto Medium);
+  - **Microsoft** (#70): `common`, so personal and work or school accounts; each id token's issuer must be its own
+    tenant's (`OpenIdProviders.MicrosoftIssuer`, from its `tid`). Its `sub` is unique to the app registration: replacing
+    the registration makes every Microsoft voter new. `SignIn:Microsoft:ClientId`, `TenantId` (the registration's, for
+    the probe), and either `ClientSecret` (staging: `MicrosoftClientSecretStaging`, expires yearly) or
+    `ManagedIdentityClientId` (production: `lazydad-production`, which the registration trusts as a federated credential;
+    its token goes as the `client_assertion`, `ManagedIdentityAssertion`). `common` reads a made-up code before the
+    client, so its probe is `ClientCredentialsProbe` (a token as the app from its own tenant). Runbook section 7, step 10;
   - **provider health:** each provider's handler talks to it through a named HTTP client (`SignInBackchannel`, which tests
     replace with a fake provider) that times every call into `lazydad_signin_provider_duration_seconds{provider,
     operation, outcome}` (`token`, `userinfo`). `SignInProbeService` probes each configured provider at startup and every
