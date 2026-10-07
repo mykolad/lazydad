@@ -1084,6 +1084,12 @@
     const failed = new URLSearchParams(location.search).get('signin') === 'failed';
     if (failed) {
       const path = saved && (saved.path === '/' || saved.path === '/privacy' || jokeIdFrom(saved.path) !== null) ? saved.path : '/';
+      // Only the server's answer for /privacy holds the policy: load it, keeping what the next load needs to say so.
+      if (path === '/privacy' && !$('ld-privacy')) {
+        session.set(KEYS.signIn, JSON.stringify(saved));
+        location.replace('/privacy?signin=failed');
+        return { failed, returned: true, leaving: true };
+      }
       history.replaceState(null, '', path);
     }
     if (saved && saved.path === location.pathname) {
@@ -1093,7 +1099,7 @@
       }
       state.restoreScrollY = Number(saved.listScrollY) || 0;
     }
-    return { failed, returned: saved !== null };
+    return { failed, returned: saved !== null, leaving: false };
   }
 
   // A message at the top of the page until dismissed; key is a string of T, so a language switch translates it.
@@ -1217,6 +1223,7 @@
   // The page restores the list's scroll position itself (the rows load after the browser would).
   if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
   const signInReturn = returnFromSignIn();
+  if (signInReturn.leaving) return;
   if (!history.state) history.replaceState({ depth: jokeIdFrom(location.pathname) === null ? 0 : null }, '');
 
   // Escape closes the account menu (the dialog closes itself) and puts focus back on its button.

@@ -19,8 +19,8 @@ internal static class PrivacyPolicy
           <div class="ld-doc-body" lang="uk">
             <h2>Конфіденційність</h2>
             <p class="ld-doc-meta">Оновлено <time datetime="{{Updated}}">8 жовтня 2026</time></p>
-            <p>Коротко: щоб рахувати один голос на жарт від кожного акаунта, LazyDad зберігає лише код, обчислений з
-              акаунта, і ваші голоси. Ні імені, ні пошти, ні фото. Жодної аналітики чи реклами.</p>
+            <p>Коротко: LazyDad зберігає якнайменше. Щоб рахувати один голос на жарт від кожного акаунта, йому досить
+              коду, обчисленого з акаунта: ні імені, ні пошти, ні фото. Жодної аналітики чи реклами.</p>
 
             <h3>Хто веде сайт</h3>
             <p>LazyDad (lazydad.fyi) — хобі-проєкт приватної особи, <a href="{{Owner}}">mykolad</a>. Зв’язатися можна
@@ -34,9 +34,10 @@ internal static class PrivacyPolicy
                 до нас не потрапляють.</li>
               <li><strong>Коли ви входите</strong> через GitHub, Google, Microsoft, Telegram чи Facebook (з тих, що
                 пропонує сайт), сервіс повідомляє номер вашого акаунта. Ми його не зберігаємо: з нього обчислюється код
-                (HMAC-SHA256 із секретним ключем), і з цим кодом зберігаються ваші голоси. Без ключа з коду не дізнатися
-                акаунт. Ми просимо в сервісу якнайменше даних і не зберігаємо ні імені, ні пошти, ні фото, ні профілю, ні
-                токенів сервісу.</li>
+                (HMAC-SHA256 із секретним ключем). Без ключа з коду не дізнатися акаунт. Поки що код живе лише в cookie
+                входу; коли голосувати можна буде тільки після входу, ваші голоси зберігатимуться з цим кодом. Ми просимо
+                в сервісу якнайменше даних і не зберігаємо ні імені, ні пошти, ні фото, ні профілю, ні токенів
+                сервісу.</li>
               <li><strong>Навіщо:</strong> щоб кожен акаунт мав один голос на жарт. Підстава — надання послуги, про яку
                 ви просите, входячи (ст. 6(1)(b) GDPR).</li>
               <li><strong>Як довго:</strong> доки ви їх не видалите. Кнопка «Видалити мої голоси» з’явиться в меню
@@ -68,14 +69,14 @@ internal static class PrivacyPolicy
               <li><strong>Сервіс, яким ви входите</strong> — на його боці діє його власна політика
                 конфіденційності.</li>
             </ul>
-            <p>Сам LazyDad не зберігає IP-адрес. Обмеження частоти голосів тримає адресу в пам’яті сервера одну
-              хвилину. Жарти пишуть моделі ШІ (Azure OpenAI); вони нічого не дізнаються про вас.</p>
+            <p>Сам LazyDad ніде не записує IP-адрес. Щоб обмежити, як часто можна голосувати, сервер тримає адресу в
+              пам’яті одну хвилину, а тоді забуває. Жарти пишуть моделі ШІ (Azure OpenAI); вони нічого не дізнаються про вас.</p>
           </div>
           <div class="ld-doc-body" lang="en">
             <h2>Privacy</h2>
             <p class="ld-doc-meta">Updated <time datetime="{{Updated}}">8 October 2026</time></p>
-            <p>In short: to count one vote per joke for each account, LazyDad stores only a code worked out from the
-              account, and your votes. No name, email or photo. No analytics or advertising.</p>
+            <p>In short: LazyDad keeps as little as it can. To count one vote per joke for each account, it uses only a
+              code worked out from the account: no name, email or photo. No analytics or advertising.</p>
 
             <h3>Who runs the site</h3>
             <p>LazyDad (lazydad.fyi) is a hobby project of a private individual, <a href="{{Owner}}">mykolad</a>. You can
@@ -89,9 +90,10 @@ internal static class PrivacyPolicy
                 its own storage (localStorage); the theme and language never reach us.</li>
               <li><strong>When you sign in</strong> with GitHub, Google, Microsoft, Telegram or Facebook (whichever the
                 site offers), the provider tells us your account’s number. We don’t store it: we work out a code from it
-                (HMAC-SHA256 with a secret key) and store your votes with that code. Without the key, the code can’t be
-                traced back to the account. We ask the provider for as little as it allows, and keep no name, email,
-                photo, profile, or the provider’s tokens.</li>
+                (HMAC-SHA256 with a secret key). Without the key, the code can’t be traced back to the account. For now
+                the code lives only in your sign-in cookie; once voting needs signing in, your votes will be stored with
+                it. We ask the provider for as little as it allows, and keep no name, email, photo, profile, or the
+                provider’s tokens.</li>
               <li><strong>Why:</strong> so that each account has one vote per joke. The basis is providing the service
                 you ask for by signing in (GDPR Article 6(1)(b)).</li>
               <li><strong>For how long:</strong> until you delete them. A “Delete my votes” button is coming to the
@@ -122,8 +124,8 @@ internal static class PrivacyPolicy
                 and browser details are removed from it.</li>
               <li><strong>The provider you sign in with:</strong> its own privacy policy applies on its side.</li>
             </ul>
-            <p>LazyDad itself doesn’t store IP addresses. The limit on how often you can vote keeps the address in the
-              server’s memory for one minute. AI models (Azure OpenAI) write the jokes; they learn nothing about you.</p>
+            <p>LazyDad itself never writes IP addresses down. To limit how often one can vote, the server holds the
+              address in memory for one minute, then forgets it. AI models (Azure OpenAI) write the jokes; they learn nothing about you.</p>
           </div>
         </article>
         """;
