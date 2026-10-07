@@ -382,10 +382,12 @@
   // Each history entry remembers how many in-app joke pages lie between it and the list (depth; null when the
   // visit started on a joke's page), and the list's entry its scroll position and the joke it was left for.
   const jokeIdFrom = path => { const m = /^\/j\/(\d+)\/?$/.exec(path); return m ? Number(m[1]) : null; };
+  // As the server routes it: any case, with or without a trailing slash.
+  const isPrivacy = path => /^\/privacy\/?$/i.test(path);
   const listView = () => (state.count === 0 && state.feed.length === 0 ? 'empty' : 'feed');
 
   function route() {
-    if (location.pathname === '/privacy') return openPrivacy();
+    if (isPrivacy(location.pathname)) return openPrivacy();
     const id = jokeIdFrom(location.pathname);
     return id === null ? openList() : openJoke(id);
   }
@@ -1093,9 +1095,9 @@
     } catch { /* nothing to restore */ }
     const failed = new URLSearchParams(location.search).get('signin') === 'failed';
     if (failed) {
-      const path = saved && (saved.path === '/' || saved.path === '/privacy' || jokeIdFrom(saved.path) !== null) ? saved.path : '/';
+      const path = saved && (saved.path === '/' || isPrivacy(saved.path) || jokeIdFrom(saved.path) !== null) ? saved.path : '/';
       // Only the server's answer for /privacy holds the policy: load it, keeping what the next load needs to say so.
-      if (path === '/privacy' && !$('ld-privacy')) {
+      if (isPrivacy(path) && !$('ld-privacy')) {
         session.set(KEYS.signIn, JSON.stringify(saved));
         location.replace('/privacy?signin=failed');
         return { failed, returned: true, leaving: true };
