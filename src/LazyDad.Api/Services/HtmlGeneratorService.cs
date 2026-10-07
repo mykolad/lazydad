@@ -25,6 +25,7 @@ public class HtmlGeneratorService
     private const string MonitorIcon = SvgOpen + "<rect width=\"20\" height=\"14\" x=\"2\" y=\"3\" rx=\"2\"/><path d=\"M8 21h8M12 17v4\"/></svg>";
     private const string SunIcon = SvgOpen + "<circle cx=\"12\" cy=\"12\" r=\"4\"/><path d=\"M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41\"/></svg>";
     private const string MoonIcon = SvgOpen + "<path d=\"M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z\"/></svg>";
+    private const string BackIcon = "<svg width=\"17\" height=\"17\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.75\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m12 19-7-7 7-7M19 12H5\"/></svg>";
     private const string CommitIcon = "<svg width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.75\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"3\"/><path d=\"M3 12h6M15 12h6\"/></svg>";
 
     // Runs before first paint, so the page never flashes the wrong theme: the stored preference,
@@ -90,6 +91,19 @@ public class HtmlGeneratorService
 
     /// <summary>The shell without a joke (an unknown joke's address: <c>app.js</c> says it's not there).</summary>
     public string SiteHtml() => BuildHtml(LanguageCodes(options.Value), signInProviders.Names, appInfo.Value, SitePage);
+
+    /// <summary>
+    /// The privacy page: the shell with the policy in it, both languages (the shown one follows the page's language).
+    /// Written into the HTML rather than by <c>app.js</c>, since providers check the page with crawlers that run no script.
+    /// </summary>
+    public string PrivacyHtml(string origin)
+        => BuildHtml(LanguageCodes(options.Value), signInProviders.Names, appInfo.Value, PrivacyPage(origin));
+
+    internal static PageMeta PrivacyPage(string origin)
+        => new("Конфіденційність — LazyDad", "LazyDad: конфіденційність", PrivacyPolicy.Description, $"{origin}/privacy", null)
+        {
+            Body = PrivacyPolicy.Html(BackIcon),
+        };
 
     internal static PageMeta JokePage(Joke joke, string origin)
     {
@@ -162,8 +176,8 @@ public class HtmlGeneratorService
                 </div>
               </header>
               <main class="ld-main">
-                <noscript><p>LazyDad needs JavaScript to show the jokes.</p></noscript>
-                <div class="ld-state ld-loading" id="ld-loading" aria-busy="true">
+                {{page.Body ?? "<noscript><p>LazyDad needs JavaScript to show the jokes.</p></noscript>"}}
+                <div class="ld-state ld-loading" id="ld-loading" aria-busy="true"{{(page.Body is null ? "" : " hidden")}}>
                   <div class="ld-skel ld-skel--hero">
                     <div class="ld-bar" style="width:56px;height:56px"></div>
                     <div class="ld-bar" style="width:86%;height:22px"></div>
@@ -180,7 +194,7 @@ public class HtmlGeneratorService
                   <h2 data-i18n="emptyT">Тато ще прокидається</h2>
                   <p id="ld-empty-text"></p>
                 </section>
-                <div class="ld-aside" id="ld-aside">
+                <div class="ld-aside" id="ld-aside"{{(page.Body is null ? "" : " hidden")}}>
                   <section class="ld-panel" data-theme="dark" id="ld-spotlight" aria-label="Топ-3 від ШІ-судді" data-i18n-aria="top" hidden></section>
                   <div class="ld-toplist" id="ld-toplist"></div>
                   {{VersionHtml(appInfo)}}
@@ -200,6 +214,7 @@ public class HtmlGeneratorService
                   <p class="ld-end" id="ld-end" hidden data-i18n="end">Це всі жарти. Поки що.</p>
                 </section>
               </main>
+              <footer class="ld-footer"><a href="/privacy" data-i18n="privacy">Конфіденційність</a></footer>
             </div>
             <span class="ld-sr" id="ld-live" role="status" aria-live="polite"></span>
             <script type="application/json" id="ld-config">{{config}}</script>
@@ -252,4 +267,8 @@ public class HtmlGeneratorService
 /// What a page's head says about it: <paramref name="Title"/> for the browser tab, <paramref name="ShareTitle"/> and
 /// <paramref name="Description"/> for link previews, and, when known, its address and preview image (absolute URLs).
 /// </summary>
-public sealed record PageMeta(string Title, string ShareTitle, string Description, string? Url, string? ImageUrl);
+public sealed record PageMeta(string Title, string ShareTitle, string Description, string? Url, string? ImageUrl)
+{
+    /// <summary>What the page shows instead of the jokes, already in the HTML (the privacy page); null for the jokes.</summary>
+    public string? Body { get; init; }
+}

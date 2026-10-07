@@ -39,6 +39,7 @@
       signInWith: name => `Увійти через ${name}`, account: name => `Ви увійшли через ${name}`, signedIn: name => `Ви увійшли через ${name}`,
       signOut: 'Вийти', signedOut: 'Ви вийшли', signOutFailed: 'Не вдалося вийти. Спробуйте ще раз.',
       signInFailed: 'Не вдалося увійти. Спробуйте ще раз або оберіть інший спосіб.',
+      privacy: 'Конфіденційність', privacyTitle: 'Конфіденційність — LazyDad', privacyLink: 'Як LazyDad поводиться з вашими даними',
       dur: (h, m) => `${h} год ${m} хв`
     },
     en: {
@@ -60,6 +61,7 @@
       signInWith: name => `Sign in with ${name}`, account: name => `Signed in with ${name}`, signedIn: name => `You’re signed in with ${name}`,
       signOut: 'Sign out', signedOut: 'You’ve signed out', signOutFailed: 'Couldn’t sign out. Try again.',
       signInFailed: 'Signing in didn’t work. Try again, or choose another way.',
+      privacy: 'Privacy', privacyTitle: 'Privacy — LazyDad', privacyLink: 'How LazyDad handles your data',
       dur: (h, m) => `${h}h ${m}m`
     }
   };
@@ -223,6 +225,7 @@
     if ($('ld-signin')?.open) renderSignInDialog();
     $('ld-list').innerHTML = state.feed.map(id => rowHtml(state.jokes.get(id))).join('');
     if (state.page) renderJokePage();
+    if (state.view === 'privacy') document.title = strings.privacyTitle;
   }
 
   // — API —
@@ -377,11 +380,28 @@
   // Each history entry remembers how many in-app joke pages lie between it and the list (depth; null when the
   // visit started on a joke's page), and the list's entry its scroll position and the joke it was left for.
   const jokeIdFrom = path => { const m = /^\/j\/(\d+)\/?$/.exec(path); return m ? Number(m[1]) : null; };
+  // As the server routes it: any case, with or without a trailing slash.
+  const isPrivacy = path => /^\/privacy\/?$/i.test(path);
   const listView = () => (state.count === 0 && state.feed.length === 0 ? 'empty' : 'feed');
 
   function route() {
+    if (isPrivacy(location.pathname)) return openPrivacy();
     const id = jokeIdFrom(location.pathname);
     return id === null ? openList() : openJoke(id);
+  }
+
+  // The privacy page comes in the HTML the server sends for /privacy (crawlers run no script), so only a page loaded
+  // there has it; links to it are ordinary links.
+  function openPrivacy() {
+    ++state.route;
+    state.page = null;
+    if (!$('ld-privacy')) {
+      location.reload();
+      return;
+    }
+    document.title = t().privacyTitle;
+    showView('privacy');
+    if (state.count === null) loadSummary().catch(() => { /* the header stays empty */ });
   }
 
   async function openList() {
@@ -514,7 +534,8 @@
     $('ld-empty').hidden = view !== 'empty';
     $('ld-feed').hidden = view !== 'feed';
     $('ld-page').hidden = view !== 'joke';
-    $('ld-aside').hidden = view === 'joke';
+    $('ld-privacy')?.toggleAttribute('hidden', view !== 'privacy');
+    $('ld-aside').hidden = view === 'joke' || view === 'privacy';
     $('ld-spotlight').hidden = view !== 'feed' || state.top.length === 0;
     $('ld-toplist').hidden = view !== 'feed' || state.top.length === 0;
     renderCountdown();
@@ -1043,7 +1064,8 @@
       `<div class="ld-dialog-head"><h2 id="ld-signin-title">${esc(strings.signInTitle)}</h2>` +
       `<button type="button" class="ld-copy" data-close-dialog aria-label="${esc(strings.close)}" title="${esc(strings.close)}">${ICON.close}</button></div>` +
       `<p class="ld-dialog-text">${esc(strings.signInWhy)}</p>` +
-      `<div class="ld-providers">${buttons}</div></div>`;
+      `<div class="ld-providers">${buttons}</div>` +
+      `<a class="ld-dialog-link" href="/privacy">${esc(strings.privacyLink)}</a></div>`;
   }
 
   function rememberReturn() {
@@ -1063,7 +1085,13 @@
     } catch { /* nothing to restore */ }
     const failed = new URLSearchParams(location.search).get('signin') === 'failed';
     if (failed) {
-      const path = saved && (saved.path === '/' || jokeIdFrom(saved.path) !== null) ? saved.path : '/';
+      const path = saved && (saved.path === '/' || isPrivacy(saved.path) || jokeIdFrom(saved.path) !== null) ? saved.path : '/';
+      // Only the server's answer for /privacy holds the policy: load it, keeping what the next load needs to say so.
+      if (isPrivacy(path) && !$('ld-privacy')) {
+        session.set(KEYS.signIn, JSON.stringify(saved));
+        location.replace('/privacy?signin=failed');
+        return { failed, returned: true, leaving: true };
+      }
       history.replaceState(null, '', path);
     }
     if (saved && saved.path === location.pathname) {
@@ -1073,7 +1101,7 @@
       }
       state.restoreScrollY = Number(saved.listScrollY) || 0;
     }
-    return { failed, returned: saved !== null };
+    return { failed, returned: saved !== null, leaving: false };
   }
 
   // A message at the top of the page until dismissed; key is a string of T, so a language switch translates it.
@@ -1197,6 +1225,7 @@
   // The page restores the list's scroll position itself (the rows load after the browser would).
   if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
   const signInReturn = returnFromSignIn();
+  if (signInReturn.leaving) return;
   if (!history.state) history.replaceState({ depth: jokeIdFrom(location.pathname) === null ? 0 : null }, '');
 
   // Escape closes the account menu (the dialog closes itself) and puts focus back on its button.
