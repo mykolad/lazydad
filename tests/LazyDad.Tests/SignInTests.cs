@@ -469,6 +469,15 @@ public sealed class SignInTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task TheProviders_AreListedGitHubFirst_AndTheDevelopmentAccountLast()
+    {
+        // Development registers its made-up account before GitHub; the dialog still lists GitHub first.
+        var (_, app, _) = await StartWithGitHubAsync();
+
+        Assert.Equal([SignInProviders.GitHub, SignInProviders.Development], app.Services.GetRequiredService<EnabledSignInProviders>().Names);
+    }
+
+    [Fact]
     public async Task GitHub_IsProbedAtStartup_AndValidWithTheRightClient()
     {
         var (_, app, _) = await StartWithGitHubAsync();
