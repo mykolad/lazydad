@@ -41,6 +41,9 @@
       signInFailed: 'Не вдалося увійти. Спробуйте ще раз або оберіть інший спосіб.',
       privacy: 'Конфіденційність', privacyTitle: 'Конфіденційність — LazyDad', privacyLink: 'Як LazyDad поводиться з вашими даними',
       keepSignedIn: 'Не виходити 90 днів',
+      deleteVotes: 'Видалити мої голоси', deleteTitle: 'Видалити всі ваші голоси?', cancel: 'Скасувати',
+      deleteBody: 'Голоси, які ви віддали з цим акаунтом, зникнуть, і лічильники жартів зменшаться на них. Скасувати це не можна. Ви й далі будете в системі.',
+      votesDeleted: 'Ваші голоси видалено.', deleteFailed: 'Не вдалося видалити голоси. Спробуйте ще раз.',
       dur: (h, m) => `${h} год ${m} хв`
     },
     en: {
@@ -64,6 +67,9 @@
       signInFailed: 'Signing in didn’t work. Try again, or choose another way.',
       privacy: 'Privacy', privacyTitle: 'Privacy — LazyDad', privacyLink: 'How LazyDad handles your data',
       keepSignedIn: 'Keep me signed in for 90 days',
+      deleteVotes: 'Delete my votes', deleteTitle: 'Delete all your votes?', cancel: 'Cancel',
+      deleteBody: 'The votes you cast with this account go, and the jokes’ counts drop by them. This can’t be undone. You stay signed in.',
+      votesDeleted: 'Your votes are deleted.', deleteFailed: 'Couldn’t delete your votes. Try again.',
       dur: (h, m) => `${h}h ${m}m`
     }
   };
@@ -86,7 +92,8 @@
     logIn: svg(16, '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/>'),
     logOut: svg(16, '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>'),
     user: svg(16, '<circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/>'),
-    close: svg(18, '<path d="M18 6 6 18M6 6l12 12"/>')
+    close: svg(18, '<path d="M18 6 6 18M6 6l12 12"/>'),
+    trash: svg(16, '<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>')
   };
 
   // Each provider's button follows its own brand guidelines (name, mark and colours; see app.css).
@@ -1021,12 +1028,54 @@
         `<button type="button" class="ld-account-btn" id="ld-account-btn" aria-expanded="false" aria-controls="ld-account-menu" aria-label="${esc(strings.account(name))}">` +
         `${ICON.user}<span>${esc(name)}</span>${ICON.down(14)}</button>` +
         `<div class="ld-menu" id="ld-account-menu" hidden>` +
+        `<button type="button" id="ld-delete-votes" data-delete-votes>${ICON.trash}<span>${esc(strings.deleteVotes)}</span></button>` +
         `<button type="button" id="ld-signout" data-signout>${ICON.logOut}<span>${esc(strings.signOut)}</span></button></div>`;
     } else {
       box.innerHTML = `<button type="button" class="ld-account-btn" id="ld-signin-btn" data-open-signin>${ICON.logIn}<span>${esc(strings.signIn)}</span></button>`;
     }
     box.hidden = false;
+    // The privacy page's own "Delete my votes" works only signed in.
+    $$('.ld-doc [data-delete-votes]').forEach(button => { button.hidden = !state.me.signedIn; });
     if (focused) $(focused)?.focus();
+  }
+
+  // "Delete my votes" asks first, in a modal dialog whose safe choice (Cancel) has the focus.
+  function confirmDeleteVotes(opener) {
+    let dialog = $('ld-confirm');
+    if (!dialog) {
+      dialog = document.createElement('dialog');
+      dialog.id = 'ld-confirm';
+      dialog.className = 'ld-dialog';
+      dialog.setAttribute('aria-labelledby', 'ld-confirm-title');
+      dialog.setAttribute('aria-describedby', 'ld-confirm-text');
+      dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
+      document.body.append(dialog);
+    }
+    const strings = t();
+    dialog.innerHTML = '<div class="ld-dialog-body">' +
+      `<h2 id="ld-confirm-title">${esc(strings.deleteTitle)}</h2>` +
+      `<p class="ld-dialog-text" id="ld-confirm-text">${esc(strings.deleteBody)}</p>` +
+      '<div class="ld-dialog-actions">' +
+      `<button type="button" class="ld-btn ld-btn--danger" data-confirm-delete>${ICON.trash}<span>${esc(strings.deleteVotes)}</span></button>` +
+      `<button type="button" class="ld-btn ld-btn--ghost" data-close-dialog autofocus>${esc(strings.cancel)}</button></div></div>`;
+    // On closing, the browser puts focus back where it was when the dialog opened: what opened it, or, for the account
+    // menu's item (gone with the closed menu), the menu's button.
+    if (!opener.isConnected || opener.closest('[hidden]')) $('ld-account-btn')?.focus();
+    dialog.showModal();
+  }
+
+  // Everything stored about the reader is their votes; the server takes them off the jokes' counts too.
+  async function deleteVotes() {
+    const dialog = $('ld-confirm');
+    try {
+      const response = await fetch('/me/votes', { method: 'DELETE', headers: { 'X-LazyDad': '1' } });
+      if (!response.ok) throw new Error(String(response.status));
+      dialog.close();
+      showNotice('votesDeleted');
+    } catch {
+      dialog.close();
+      showNotice('deleteFailed');
+    }
   }
 
   function setMenu(open) {
@@ -1171,6 +1220,11 @@
       openSignIn();
     } else if (target.id === 'ld-account-btn') {
       setMenu(target.getAttribute('aria-expanded') !== 'true');
+    } else if (target.hasAttribute('data-delete-votes')) {
+      setMenu(false);
+      confirmDeleteVotes(target);
+    } else if (target.hasAttribute('data-confirm-delete')) {
+      deleteVotes();
     } else if (target.hasAttribute('data-signout')) {
       signOut();
     } else if (target.hasAttribute('data-close-dialog')) {

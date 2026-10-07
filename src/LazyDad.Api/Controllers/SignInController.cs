@@ -1,5 +1,6 @@
 using LazyDad.Api.SignIn;
 using LazyDad.Api.Telemetry;
+using LazyDad.Data.Repositories;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc;
@@ -19,11 +20,13 @@ public class SignInController : ControllerBase
 
     private readonly EnabledSignInProviders providers;
     private readonly SignInMetrics metrics;
+    private readonly IVoteRepository votes;
 
-    public SignInController(EnabledSignInProviders providers, SignInMetrics metrics)
+    public SignInController(EnabledSignInProviders providers, SignInMetrics metrics, IVoteRepository votes)
     {
         this.providers = providers;
         this.metrics = metrics;
+        this.votes = votes;
     }
 
     /// <summary>
@@ -64,4 +67,20 @@ public class SignInController : ControllerBase
         => SignInPrincipal.TryRead(User, out _, out var provider)
             ? Ok(new { signedIn = true, provider })
             : Ok(new { signedIn = false, provider = (string?)null });
+
+    /// <summary>
+    /// Deletes everything stored about the signed-in reader: their votes (there's no users table), taken off the jokes'
+    /// counts. No count in the answer: a retry after a commit whose answer was lost finds nothing left. Other readers see
+    /// the new counts once their cached copy expires (JokeReadCache). Only from the page's own script, like sign-out.
+    /// </summary>
+    [HttpDelete("me/votes")]
+    public async Task<IActionResult> DeleteMyVotes(CancellationToken cancellationToken)
+    {
+        if (!SignInPrincipal.TryRead(User, out var voterKey, out _))
+            return Unauthorized();
+        if (Request.Headers[RequestHeader] != RequestHeaderValue)
+            return StatusCode(StatusCodes.Status403Forbidden);
+        await votes.DeleteAllAsync(voterKey, cancellationToken);
+        return NoContent();
+    }
 }

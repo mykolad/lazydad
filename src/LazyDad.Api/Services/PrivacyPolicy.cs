@@ -40,8 +40,8 @@ internal static class PrivacyPolicy
                 сервісу.</li>
               <li><strong>Навіщо:</strong> щоб кожен акаунт мав один голос на жарт. Підстава — надання послуги, про яку
                 ви просите, входячи (ст. 6(1)(b) GDPR).</li>
-              <li><strong>Як довго:</strong> доки ви їх не видалите. Кнопка «Видалити мої голоси» з’явиться в меню
-                акаунта.</li>
+              <li><strong>Як довго:</strong> доки ви їх не видалите: «Видалити мої голоси» в меню акаунта або
+                нижче.</li>
             </ul>
 
             <h3>Cookies</h3>
@@ -56,9 +56,11 @@ internal static class PrivacyPolicy
             </ul>
 
             <h3>Ваші права</h3>
-            <p>Ваші голоси видно на сторінці, і ви зможете видалити їх будь-коли. Сайт не може пов’язати код із вами,
-              тож запит листом ми не зможемо зіставити з вашими голосами: видалення працює лише з вашого входу. Ви
-              також можете поскаржитися до органу із захисту даних там, де живете.</p>
+            <p>Ваші голоси видно на сторінці, і ви можете будь-коли видалити їх усі: увійдіть і оберіть «Видалити мої
+              голоси» в меню акаунта. Сайт не може пов’язати код із вами, тож запит листом ми не зможемо зіставити з
+              вашими голосами: видалення працює лише з вашого входу. Ви також можете поскаржитися до органу із захисту
+              даних там, де живете.</p>
+            <p><button type="button" class="ld-btn ld-btn--danger" data-delete-votes hidden>Видалити мої голоси</button></p>
 
             <h3>Сервіси, через які проходять дані</h3>
             <ul>
@@ -97,8 +99,8 @@ internal static class PrivacyPolicy
                 provider’s tokens.</li>
               <li><strong>Why:</strong> so that each account has one vote per joke. The basis is providing the service
                 you ask for by signing in (GDPR Article 6(1)(b)).</li>
-              <li><strong>For how long:</strong> until you delete them. A “Delete my votes” button is coming to the
-                account menu.</li>
+              <li><strong>For how long:</strong> until you delete them, with “Delete my votes” in the account menu or
+                below.</li>
             </ul>
 
             <h3>Cookies</h3>
@@ -113,9 +115,11 @@ internal static class PrivacyPolicy
             </ul>
 
             <h3>Your rights</h3>
-            <p>Your votes are shown on the page, and you’ll be able to delete them at any time. The site can’t link the
-              code to you, so a request by email couldn’t be matched to your votes: deleting works only while you’re
-              signed in. You can also complain to the data protection authority where you live.</p>
+            <p>Your votes are shown on the page, and you can delete them all at any time: sign in and choose “Delete my
+              votes” in the account menu. The site can’t link the code to you, so a request by email couldn’t be
+              matched to your votes: deleting works only while you’re signed in. You can also complain to the data
+              protection authority where you live.</p>
+            <p><button type="button" class="ld-btn ld-btn--danger" data-delete-votes hidden>Delete my votes</button></p>
 
             <h3>Services your data passes through</h3>
             <ul>
