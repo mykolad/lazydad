@@ -73,7 +73,7 @@ internal static class PrivacyPolicy
                 конфіденційності.</li>
             </ul>
             <p>Сам LazyDad ніде не записує IP-адрес. Щоб обмежити, як часто можна голосувати, сервер тримає адресу в
-              пам’яті одну хвилину, а тоді забуває. Жарти пишуть моделі ШІ (Azure OpenAI); вони нічого не дізнаються про вас.</p>
+              пам’яті близько хвилини після вашого останнього голосу, а тоді забуває. Жарти пишуть моделі ШІ (Azure OpenAI); вони нічого не дізнаються про вас.</p>
           </div>
           <div class="ld-doc-body" lang="en">
             <h2>Privacy</h2>
@@ -131,7 +131,7 @@ internal static class PrivacyPolicy
               <li><strong>The provider you sign in with:</strong> its own privacy policy applies on its side.</li>
             </ul>
             <p>LazyDad itself never writes IP addresses down. To limit how often one can vote, the server holds the
-              address in memory for one minute, then forgets it. AI models (Azure OpenAI) write the jokes; they learn nothing about you.</p>
+              address in memory for about a minute after your last vote, then forgets it. AI models (Azure OpenAI) write the jokes; they learn nothing about you.</p>
           </div>
         </article>
         """;
