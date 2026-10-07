@@ -1194,7 +1194,9 @@ Production proves itself without a secret: the registration trusts `lazydad-prod
 prod apps run as) as a federated credential, and the apps send that identity's token instead. Entra accepts only
 user-assigned identities there, and staging runs as its system-assigned one, so staging uses a secret. If Microsoft ever
 refuses production's token (the probe shows `invalid`, or a personal account's sign-in fails), give production a secret
-the way staging has one.
+the way staging has one (`MicrosoftClientSecret`, read by `lazydad-production`), and in the same `az containerapp
+update` drop the managed identity with `--remove-env-vars SignIn__Microsoft__ManagedIdentityClientId`: a secret and a
+managed identity together stop the revision at startup.
 
 ```bash
 TENANT=$(az account show --query tenantId -o tsv)
