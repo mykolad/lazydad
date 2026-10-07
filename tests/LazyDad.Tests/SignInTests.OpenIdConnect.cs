@@ -152,6 +152,24 @@ public sealed partial class SignInTests
         Assert.Equal(ProviderState.Invalid, await ProbedAsync(wrong, provider));
     }
 
+    [Theory]
+    [MemberData(nameof(OpenIdProviderNames))]
+    public async Task AnOpenIdProvider_HasNoRemoteSignOut_ThatAnotherSiteCouldUse(string provider)
+    {
+        // Provider-initiated sign-out would sign the reader out on any site's request, around the site's X-LazyDad check.
+        var (client, app, fake) = await StartWithOpenIdProviderAsync(provider);
+        using var signIn = await SignInThroughAsync(client, provider, fake, "/");
+        var cookie = CookieValue(signIn);
+
+        foreach (var path in new[] { $"signout-{provider}", "signout-oidc", $"signout-callback-{provider}", "signout-callback-oidc" })
+        {
+            using var response = await GetAsync(client, path, cookie);
+            Assert.False(response.Headers.TryGetValues("Set-Cookie", out var cookies)
+                && cookies.Any(c => c.StartsWith($"{SignInSetup.CookieName}=;", StringComparison.Ordinal)), $"/{path} signed the reader out.");
+        }
+        Assert.True((await MeAsync(client, cookie)).GetProperty("signedIn").GetBoolean());
+    }
+
     [Fact]
     public async Task Google_AcceptsItsIssuerWithoutTheScheme()
     {

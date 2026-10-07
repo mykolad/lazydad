@@ -162,9 +162,11 @@ public static class SignInSetup
             oidc.MapInboundClaims = false;
             oidc.SaveTokens = false;
             oidc.CallbackPath = $"/signin-{provider}";
-            // Never used (signing out is the site's own), but each scheme needs its own paths.
-            oidc.SignedOutCallbackPath = $"/signout-callback-{provider}";
-            oidc.RemoteSignOutPath = $"/signout-{provider}";
+            // No provider-initiated sign-out: its path would sign a reader out on any site's request (the cookie has no
+            // sid or iss for the handler to check), around the X-LazyDad check on the site's own sign-out. Nor is there a
+            // provider sign-out to come back from.
+            oidc.RemoteSignOutPath = PathString.Empty;
+            oidc.SignedOutCallbackPath = PathString.Empty;
             oidc.Events.OnTicketReceived = context => SignInEvents.OnTicketReceived(context, provider, p => p.FindFirstValue("sub"));
             oidc.Events.OnRemoteFailure = context => SignInEvents.OnRemoteFailure(context, provider);
             configure(oidc);
