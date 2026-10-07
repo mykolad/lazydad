@@ -125,6 +125,13 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
     (never the login, which can change). `SignIn:GitHub:ClientId` and `ClientSecret` (a Key Vault reference per app,
     `GitHubClientSecret` / `GitHubClientSecretStaging`; one OAuth app per environment; runbook section 7, step 8): both
     or neither, empty = off. The page's sign-in dialog offers it once it's configured;
+  - **OpenID Connect providers** (`SignInSetup.OpenIdConnect`, endpoints in `OpenIdProviders`): the code flow with PKCE,
+    the `openid` scope only, the answer in the query (not a cross-site form post), no user info call; the handler
+    validates the id token (the provider's published keys, issuer, audience, nonce) and its `sub` is the account id.
+    `/signin-<provider>`. Tests run each against `FakeOpenIdProvider` (discovery, keys, a signed id token);
+  - **Google** (#76): `SignIn:Google:ClientId` and `ClientSecret` (`GoogleClientSecret` / `GoogleClientSecretStaging`;
+    a Google Cloud project per environment, staging's in Testing; runbook section 7, step 9). Its `sub` is the same for
+    every client; its issuer comes with or without `https://`. The button follows Google's branding (Roboto Medium);
   - **provider health:** each provider's handler talks to it through a named HTTP client (`SignInBackchannel`, which tests
     replace with a fake provider) that times every call into `lazydad_signin_provider_duration_seconds{provider,
     operation, outcome}` (`token`, `userinfo`). `SignInProbeService` probes each configured provider at startup and every

@@ -22,6 +22,7 @@ public class SignInOptionsValidator : IValidateOptions<SignInOptions>
         // Checked even with sign-in off: a provider's lost setting must stop startup, not wait for the pepper.
         var errors = new List<string>();
         Client(errors, "GitHub", options.GitHub);
+        Client(errors, "Google", options.Google);
         if (!options.Enabled)
             return Result(errors);
 

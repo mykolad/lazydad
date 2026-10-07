@@ -49,8 +49,8 @@ What it all looks like at the end:
 
 | Identity | Kind | Signs in as it | Roles |
 |---|---|---|---|
-| `lazydad-production` | user-assigned | both prod apps; both prod environments, to read the certificate | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeaders`, `JevApiKey`, `VoterKeyPepper`, `GitHubClientSecret` and `lazydad-fyi-origin`; `Key Vault Crypto Service Encryption User` on the `DataProtection` key; read/write in `lazydad-db` |
-| `lazydad-app-staging` | system-assigned | the staging app | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeadersStaging`, `JevApiKeyStaging`, `VoterKeyPepperStaging` and `GitHubClientSecretStaging`; `Key Vault Crypto Service Encryption User` on the `DataProtectionStaging` key; read/write in `lazydad-db-staging` |
+| `lazydad-production` | user-assigned | both prod apps; both prod environments, to read the certificate | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeaders`, `JevApiKey`, `VoterKeyPepper`, `GitHubClientSecret`, `GoogleClientSecret` and `lazydad-fyi-origin`; `Key Vault Crypto Service Encryption User` on the `DataProtection` key; read/write in `lazydad-db` |
+| `lazydad-app-staging` | system-assigned | the staging app | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeadersStaging`, `JevApiKeyStaging`, `VoterKeyPepperStaging`, `GitHubClientSecretStaging` and `GoogleClientSecretStaging`; `Key Vault Crypto Service Encryption User` on the `DataProtectionStaging` key; read/write in `lazydad-db-staging` |
 | `lazydad-acr-pull` | user-assigned | all three apps, to pull images | `Container Registry Repository Reader` (all repositories) |
 | `lazydad-github-cd` | user-assigned | GitHub's `production` environment | `Container Registry Repository Writer` on `lazydad`, `Reader` on `lazydad-preview`, `Reader` on the registry; `Contributor` on both prod apps; `LazyDad Deployer`; `LazyDad Service Tag Reader`; migrations in `lazydad-db` |
 | `lazydad-github-staging` | user-assigned | GitHub's `staging` environment (branch previews too) | `Container Registry Repository Writer` on `lazydad-preview` only, `Reader` on the registry; `Contributor` on `lazydad-app-staging`; `LazyDad Deployer`; migrations in `lazydad-db-staging` |
@@ -1102,6 +1102,87 @@ GitHub id, the same for every app); only the client id and secret change.
 in Key Vault as above, then restart each of that environment's apps so they read it (`az containerapp revision restart
 -g $RG -n $APP --revision $(az containerapp show -g $RG -n $APP --query properties.latestReadyRevisionName -o tsv)`; a
 production restart runs an extra batch), sign in once to check, and delete the old secret on GitHub.
+
+**9. Sign in with Google.** OpenID Connect with the `openid` scope only: Google's consent page then says only that the
+site gets to know who you are, and the app keeps nothing but the voter key (from the id token's `sub`, Google's id for
+the account, the same for every client, so replacing a client keeps every voter). Two Google Cloud projects, one per
+environment, for the same reason as GitHub's two apps; staging's stays in **Testing**, which needs no review and lets
+only its test users sign in. On https://console.cloud.google.com, for each project:
+
+| | Production | Staging |
+|---|---|---|
+| Project | `lazydad` | `lazydad-staging` |
+| Google Auth Platform → Branding: app name | `LazyDad` | `LazyDad (staging)` |
+| User support email, developer contact | yours | yours |
+| App logo | none (a logo needs Google's brand verification) | none |
+| Home page, privacy policy | `https://lazydad.fyi`, `https://lazydad.fyi/privacy` | the same |
+| Authorized domains | `lazydad.fyi` | none |
+| Audience | External, **Publish app** (In production) | External, Testing; add yourself as a test user |
+| Data access (scopes) | none added (`openid` needs none) | none added |
+| Clients → Create client | Web application `LazyDad`, redirect URI `https://lazydad.fyi/signin-google` | Web application `LazyDad (staging)`, staging's address + `/signin-google` |
+
+With only `openid`, publishing needs no verification. Copy each client's secret when it's created (Google shows it
+once), then, as in step 8:
+
+```bash
+read -rsp "Production client secret: " SECRET; echo
+az keyvault secret set --vault-name lazydad-kv -n GoogleClientSecret        --value "$SECRET" -o none
+read -rsp "Staging client secret: " SECRET; echo
+az keyvault secret set --vault-name lazydad-kv -n GoogleClientSecretStaging --value "$SECRET" -o none
+unset SECRET
+
+KV_ID=$(az keyvault show -n lazydad-kv --query id -o tsv)
+PROD=$(az identity show -g $RG -n lazydad-production --query principalId -o tsv)
+STAGING=$(az containerapp show -g $RG -n lazydad-app-staging --query identity.principalId -o tsv)
+az role assignment create --assignee-object-id $PROD --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets User" --scope "$KV_ID/secrets/GoogleClientSecret" -o none
+az role assignment create --assignee-object-id $STAGING --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets User" --scope "$KV_ID/secrets/GoogleClientSecretStaging" -o none
+
+# A few minutes later, each app's settings: staging first (a new production revision runs an extra batch).
+APP=lazydad-app-staging; SUFFIX=Staging; IDENTITY=system; CLIENT_ID=<staging's client id>
+# then: APP=lazydad-app; SUFFIX=; IDENTITY=$(az identity show -g $RG -n lazydad-production --query id -o tsv); CLIENT_ID=<production's>
+# and:  APP=lazydad-app-swedencentral, the same otherwise
+az containerapp secret set -g $RG -n $APP \
+  --secrets "google-client-secret=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/GoogleClientSecret$SUFFIX,identityref:$IDENTITY" -o none
+az containerapp update -g $RG -n $APP --set-env-vars \
+  SignIn__Google__ClientId=$CLIENT_ID SignIn__Google__ClientSecret=secretref:google-client-secret -o none
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$SECRET = Read-Host 'Production client secret' -MaskInput
+az keyvault secret set --vault-name lazydad-kv -n GoogleClientSecret        --value $SECRET -o none
+$SECRET = Read-Host 'Staging client secret' -MaskInput
+az keyvault secret set --vault-name lazydad-kv -n GoogleClientSecretStaging --value $SECRET -o none
+Remove-Variable SECRET
+
+$KV_ID   = az keyvault show -n lazydad-kv --query id -o tsv
+$PROD    = az identity show -g $RG -n lazydad-production --query principalId -o tsv
+$STAGING = az containerapp show -g $RG -n lazydad-app-staging --query identity.principalId -o tsv
+az role assignment create --assignee-object-id $PROD --assignee-principal-type ServicePrincipal `
+  --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/GoogleClientSecret" -o none
+az role assignment create --assignee-object-id $STAGING --assignee-principal-type ServicePrincipal `
+  --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/GoogleClientSecretStaging" -o none
+
+# A few minutes later, each app's settings: staging first (a new production revision runs an extra batch).
+$APP = 'lazydad-app-staging'; $SUFFIX = 'Staging'; $IDENTITY = 'system'; $CLIENT_ID = '<staging''s client id>'
+# then: $APP = 'lazydad-app'; $SUFFIX = ''; $IDENTITY = az identity show -g $RG -n lazydad-production --query id -o tsv; $CLIENT_ID = '<production''s>'
+# and:  $APP = 'lazydad-app-swedencentral', the same otherwise
+az containerapp secret set -g $RG -n $APP `
+  --secrets "google-client-secret=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/GoogleClientSecret$SUFFIX,identityref:$IDENTITY" -o none
+az containerapp update -g $RG -n $APP --set-env-vars `
+  "SignIn__Google__ClientId=$CLIENT_ID" SignIn__Google__ClientSecret=secretref:google-client-secret -o none
+```
+
+</details>
+
+As with GitHub: a client id without its secret stops the new revision at startup; the probe shows `google` on
+`/status` as `valid` once Google accepts the client (Google checks the client before the code, so the probe's made-up
+code tells a wrong secret from a right one); the smoke tests check the redirect; and after changing a client's redirect
+URIs, sign in by hand. A new secret: add one on the client's page, put it in Key Vault, restart the apps, sign in, then
+delete the old one.
 
 ## 8. Database users
 

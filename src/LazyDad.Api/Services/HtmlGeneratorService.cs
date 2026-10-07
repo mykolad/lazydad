@@ -146,7 +146,7 @@ public class HtmlGeneratorService
               <script>{{ThemeBootstrap}}</script>
               <link rel="preconnect" href="https://fonts.googleapis.com">
               <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-              <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caprasimo&family=Nunito:wght@400;600;700;900&subset=cyrillic,cyrillic-ext&display=swap">
+              <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caprasimo&family=Nunito:wght@400;600;700;900&family=Roboto:wght@500&subset=cyrillic,cyrillic-ext&display=swap">
               <link rel="stylesheet" href="/app.css?v={{assetVersion}}">
               <script src="/app.js?v={{assetVersion}}" defer></script>
             </head>

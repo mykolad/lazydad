@@ -180,6 +180,7 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
     private static readonly IReadOnlyDictionary<string, string> AuthorizeUrls = new Dictionary<string, string>
     {
         ["github"] = "https://github.com/login/oauth/authorize",
+        ["google"] = "https://accounts.google.com/o/oauth2/v2/auth",
     };
 
     [Fact]
