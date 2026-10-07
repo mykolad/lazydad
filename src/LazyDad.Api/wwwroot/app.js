@@ -455,7 +455,20 @@
     const y = state.restoreScrollY;
     state.restoreScrollY = 0;
     if (!y || state.view !== 'feed') return;
-    for (let i = 0; i < 10 && !state.done && document.documentElement.scrollHeight < y + window.innerHeight; i++) await loadPage();
+    // However deep the reader was. A page already loading (the sentinel's) is waited for; a few loads in a row that
+    // bring nothing new, or one that fails (the footer says so), end it.
+    let stalled = 0;
+    try {
+      while (!state.done && document.documentElement.scrollHeight < y + window.innerHeight && stalled < 3) {
+        if (state.loadingPage) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          continue;
+        }
+        const before = state.feed.length;
+        await loadPage();
+        stalled = state.feed.length > before ? 0 : stalled + 1;
+      }
+    } catch { /* as far as it got */ }
     window.scrollTo(0, y);
   }
 
@@ -1087,6 +1100,8 @@
       $('ld-signin-btn')?.focus();
       announce(t().signedOut);
     } catch {
+      // The menu (and its focused "Sign out") is closed: focus goes back to the account button.
+      $('ld-account-btn')?.focus();
       showNotice('signOutFailed');
     }
   }
