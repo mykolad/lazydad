@@ -54,6 +54,10 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   votes live in `localStorage`. `wwwroot/app.css` has the Organic design tokens (dark = reversed ramps).
   Brand files (sloth logo per theme, favicons, `site.webmanifest`) are static files in `wwwroot`.
   Design spec and deviations: `docs/design/redesign-2026-09.md`.
+- **The privacy page** (`/privacy`, linked from the footer and the sign-in dialog): `PrivacyPageController` serves the
+  shell with the policy already in it (`PrivacyPolicy`, both languages; CSS shows the page's language), since providers
+  check the URL with crawlers that run no script. Keep it true to the code whenever what's stored, the cookies or the
+  services change. It names the owner as `mykolad` with GitHub as the contact (no surname, no email).
 - **A joke's page** (`/j/<id>`, what every share button shares): `JokePageController` serves the same shell per request,
   with the joke in `<title>` and the link-preview tags (Open Graph, `canonical`) that messengers read without running
   `app.js` (404 and the plain shell for an unknown joke). `app.js` routes with the History API: a joke opened from the
@@ -395,8 +399,8 @@ joke on `/status` as soon as it's saved; DB rows alone could come from the drain
 the leaderboard is populated with valid ranks, that `app.js`/`app.css`, `/jokes/feed` and `/jokes/summary`
 are served, that a joke's page (`/j/<id>`) carries its link-preview tags and `/jokes/<id>/similar` answers, that the vote endpoint answers (with a no-op vote, so it never changes the counts), that `/me` answers signed out
 (and `no-store`), that the new revision's key ring check is `ok` (every deployed app has sign-in configured, so `off` fails too),
-that no sign-in provider is `invalid` and each configured one redirects with the app's own callback, and that the page offers
-exactly the providers `/status` shows as enabled.
+that no sign-in provider is `invalid` and each configured one redirects with the app's own callback, that the page offers
+exactly the providers `/status` shows as enabled, and that `/privacy` is served in both languages.
 To run them against staging locally:
 
 ```

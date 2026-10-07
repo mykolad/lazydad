@@ -39,6 +39,7 @@
       signInWith: name => `Увійти через ${name}`, account: name => `Ви увійшли через ${name}`, signedIn: name => `Ви увійшли через ${name}`,
       signOut: 'Вийти', signedOut: 'Ви вийшли', signOutFailed: 'Не вдалося вийти. Спробуйте ще раз.',
       signInFailed: 'Не вдалося увійти. Спробуйте ще раз або оберіть інший спосіб.',
+      privacy: 'Конфіденційність', privacyTitle: 'Конфіденційність — LazyDad', privacyLink: 'Як LazyDad поводиться з вашими даними',
       dur: (h, m) => `${h} год ${m} хв`
     },
     en: {
@@ -60,6 +61,7 @@
       signInWith: name => `Sign in with ${name}`, account: name => `Signed in with ${name}`, signedIn: name => `You’re signed in with ${name}`,
       signOut: 'Sign out', signedOut: 'You’ve signed out', signOutFailed: 'Couldn’t sign out. Try again.',
       signInFailed: 'Signing in didn’t work. Try again, or choose another way.',
+      privacy: 'Privacy', privacyTitle: 'Privacy — LazyDad', privacyLink: 'How LazyDad handles your data',
       dur: (h, m) => `${h}h ${m}m`
     }
   };
@@ -223,6 +225,7 @@
     if ($('ld-signin')?.open) renderSignInDialog();
     $('ld-list').innerHTML = state.feed.map(id => rowHtml(state.jokes.get(id))).join('');
     if (state.page) renderJokePage();
+    if (state.view === 'privacy') document.title = strings.privacyTitle;
   }
 
   // — API —
@@ -380,8 +383,23 @@
   const listView = () => (state.count === 0 && state.feed.length === 0 ? 'empty' : 'feed');
 
   function route() {
+    if (location.pathname === '/privacy') return openPrivacy();
     const id = jokeIdFrom(location.pathname);
     return id === null ? openList() : openJoke(id);
+  }
+
+  // The privacy page comes in the HTML the server sends for /privacy (crawlers run no script), so only a page loaded
+  // there has it; links to it are ordinary links.
+  function openPrivacy() {
+    ++state.route;
+    state.page = null;
+    if (!$('ld-privacy')) {
+      location.reload();
+      return;
+    }
+    document.title = t().privacyTitle;
+    showView('privacy');
+    if (state.count === null) loadSummary().catch(() => { /* the header stays empty */ });
   }
 
   async function openList() {
@@ -501,7 +519,8 @@
     $('ld-empty').hidden = view !== 'empty';
     $('ld-feed').hidden = view !== 'feed';
     $('ld-page').hidden = view !== 'joke';
-    $('ld-aside').hidden = view === 'joke';
+    $('ld-privacy')?.toggleAttribute('hidden', view !== 'privacy');
+    $('ld-aside').hidden = view === 'joke' || view === 'privacy';
     $('ld-spotlight').hidden = view !== 'feed' || state.top.length === 0;
     $('ld-toplist').hidden = view !== 'feed' || state.top.length === 0;
     renderCountdown();
@@ -1030,7 +1049,8 @@
       `<div class="ld-dialog-head"><h2 id="ld-signin-title">${esc(strings.signInTitle)}</h2>` +
       `<button type="button" class="ld-copy" data-close-dialog aria-label="${esc(strings.close)}" title="${esc(strings.close)}">${ICON.close}</button></div>` +
       `<p class="ld-dialog-text">${esc(strings.signInWhy)}</p>` +
-      `<div class="ld-providers">${buttons}</div></div>`;
+      `<div class="ld-providers">${buttons}</div>` +
+      `<a class="ld-dialog-link" href="/privacy">${esc(strings.privacyLink)}</a></div>`;
   }
 
   function rememberReturn() {
@@ -1050,7 +1070,7 @@
     } catch { /* nothing to restore */ }
     const failed = new URLSearchParams(location.search).get('signin') === 'failed';
     if (failed) {
-      const path = saved && (saved.path === '/' || jokeIdFrom(saved.path) !== null) ? saved.path : '/';
+      const path = saved && (saved.path === '/' || saved.path === '/privacy' || jokeIdFrom(saved.path) !== null) ? saved.path : '/';
       history.replaceState(null, '', path);
     }
     if (saved && saved.path === location.pathname) {
