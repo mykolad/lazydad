@@ -57,17 +57,64 @@ public sealed partial class SignInTests
     [Theory]
     [InlineData(SignInProviders.GitHub, "SignIn:GitHub")]
     [InlineData(SignInProviders.Facebook, "SignIn:Facebook")]
-    public async Task InALoadTest_AnOAuthProvider_SendsReadersToTheFake(string provider, string section)
+    public async Task InALoadTest_AnOAuthProvider_IsTheFake_FromTheRedirectToTheCookie(string provider, string section)
     {
+        var fake = new FakeLoadTestOAuth(provider);
         var settings = Settings(Pepper, "");
         settings["SignIn:LoadTest:Authority"] = FakeAuthority;
         settings[$"{section}:ClientId"] = "load-test";
         settings[$"{section}:ClientSecret"] = "load-test";
-        var client = Client(await StartAsync(LazyDad.Api.Configuration.SignInOptionsValidator.LoadTestEnvironment, settings, _ => { }));
+        var app = await StartAsync(LazyDad.Api.Configuration.SignInOptionsValidator.LoadTestEnvironment, settings,
+            services => services.AddHttpClient(SignInBackchannel.ClientName(provider)).ConfigurePrimaryHttpMessageHandler(() => fake));
+        var client = Client(app);
 
-        var (authorize, _) = await StartRemoteSignInAsync(client, provider, "/");
+        var (authorize, cookies) = await StartRemoteSignInAsync(client, provider, "/j/3");
+        using var response = await ProviderCallbackAsync(client, provider, cookies,
+            $"code={FakeLoadTestOAuth.Code}&state={Uri.EscapeDataString(QueryHelpers.ParseQuery(authorize.Query)["state"].ToString())}");
 
         Assert.Equal($"{FakeAuthority}/{provider}/authorize", authorize.GetLeftPart(UriPartial.Path));
         Assert.Equal(new Uri(client.BaseAddress!, $"signin-{provider}").AbsoluteUri, QueryHelpers.ParseQuery(authorize.Query)["redirect_uri"].ToString());
+        Assert.Equal("/j/3", response.Headers.Location!.OriginalString);
+        var claims = Tickets(app).Unprotect(CookieValue(response))!.Principal.Claims.Select(c => (c.Type, c.Value)).Order().ToList();
+        var voterKey = app.Services.GetRequiredService<VoterKeys>().For(provider, FakeLoadTestOAuth.Account);
+        Assert.Equal([(SignInPrincipal.ProviderClaim, provider), (SignInPrincipal.VoterClaim, Convert.ToBase64String(voterKey))], claims);
+        Assert.Equal(ProviderState.Valid, await ProbedAsync(app, provider));
+    }
+
+    /// <summary>
+    /// GitHub's or Facebook's endpoints where the load test's fake has them (<c>&lt;authority&gt;/&lt;provider&gt;/token</c>
+    /// and <c>/user</c>), answering as tests/load/FakeIdentityProvider.cs does.
+    /// </summary>
+    private sealed class FakeLoadTestOAuth(string provider) : HttpMessageHandler
+    {
+        public const string Code = "load-test-code";
+        public const string Account = "4242";
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri!.GetLeftPart(UriPartial.Path);
+            if (request.Method == HttpMethod.Post && path == $"{FakeAuthority}/{provider}/token")
+            {
+                var form = QueryHelpers.ParseQuery("?" + await request.Content!.ReadAsStringAsync(cancellationToken));
+                if (form["grant_type"] == "client_credentials")
+                    return Json(HttpStatusCode.OK, """{"access_token": "app-token", "token_type": "bearer"}""");
+                return form["code"] == Code
+                    ? Json(HttpStatusCode.OK, """{"access_token": "user-token", "token_type": "bearer"}""")
+                    : Json(HttpStatusCode.OK, """{"error": "bad_verification_code"}""");
+            }
+            if (request.Method == HttpMethod.Get && path == $"{FakeAuthority}/{provider}/user")
+            {
+                var token = provider == SignInProviders.GitHub
+                    ? request.Headers.Authorization?.Parameter
+                    : QueryHelpers.ParseQuery(request.RequestUri.Query)["access_token"].ToString();
+                return token == "user-token"
+                    ? Json(HttpStatusCode.OK, provider == SignInProviders.GitHub ? $$"""{"id": {{Account}}}""" : $$"""{"id": "{{Account}}"}""")
+                    : Json(HttpStatusCode.Unauthorized, "{}");
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        }
+
+        private static HttpResponseMessage Json(HttpStatusCode status, string body)
+            => new(status) { Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json") };
     }
 }
