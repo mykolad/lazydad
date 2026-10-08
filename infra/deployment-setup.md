@@ -1194,9 +1194,7 @@ Production proves itself without a secret: the registration trusts `lazydad-prod
 prod apps run as) as a federated credential, and the apps send that identity's token instead. Entra accepts only
 user-assigned identities there, and staging runs as its system-assigned one, so staging uses a secret. If Microsoft ever
 refuses production's token (the probe shows `invalid`, or a personal account's sign-in fails), give production a secret
-the way staging has one (`MicrosoftClientSecret`, read by `lazydad-production`), and in the same `az containerapp
-update` drop the managed identity with `--remove-env-vars SignIn__Microsoft__ManagedIdentityClientId`: a secret and a
-managed identity together stop the revision at startup.
+the way staging has one (**Production with a secret instead**, after the commands below).
 
 ```bash
 TENANT=$(az account show --query tenantId -o tsv)
@@ -1277,11 +1275,52 @@ az containerapp update -g $RG -n lazydad-app-staging --set-env-vars "SignIn__Mic
 
 On each registration's **Branding & properties** page in the Entra admin center: the name `LazyDad` (staging: `LazyDad
 (staging)`), the sloth logo, the home page `https://lazydad.fyi`, the privacy statement `https://lazydad.fyi/privacy`.
-Settings that don't fit together (a client id without the tenant, both a secret and a managed identity, or neither)
+Settings that don't fit together (an id that isn't a GUID, a client id without the tenant, both a secret and a managed identity, or neither)
 stop the new revision at startup. `/status` shows `microsoft` as `valid` once the probe got a token as the app. **The
 staging secret expires after a year:** before then, run the `credential reset … --append` line again, restart the
 staging app, sign in, and delete the old secret (`az ad app credential list` / `delete`); an expired one shows as
 `invalid`.
+
+**Production with a secret instead** (only if Microsoft refuses `lazydad-production`'s token): a secret in Key Vault
+that `lazydad-production` can read, referenced by both prod apps, which drop the managed identity in the same update (a
+secret and a managed identity together stop the revision at startup). The secret then expires yearly like staging's.
+
+```bash
+az keyvault secret set --vault-name lazydad-kv -n MicrosoftClientSecret -o none --value "$(az ad app credential reset \
+  --id $PROD_APP --append --display-name lazydad-production --end-date $(date -u -d '+1 year' +%F) --query password -o tsv)"
+PROD=$(az identity show -g $RG -n lazydad-production --query principalId -o tsv)
+az role assignment create --assignee-object-id $PROD --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets User" --scope "$KV_ID/secrets/MicrosoftClientSecret" -o none
+# A few minutes later:
+IDENTITY=$(az identity show -g $RG -n lazydad-production --query id -o tsv)
+for APP in lazydad-app lazydad-app-swedencentral; do
+  az containerapp secret set -g $RG -n $APP \
+    --secrets "microsoft-client-secret=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/MicrosoftClientSecret,identityref:$IDENTITY" -o none
+  az containerapp update -g $RG -n $APP --remove-env-vars SignIn__Microsoft__ManagedIdentityClientId \
+    --set-env-vars SignIn__Microsoft__ClientSecret=secretref:microsoft-client-secret -o none
+done
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$END = (Get-Date).ToUniversalTime().AddYears(1).ToString('yyyy-MM-dd')
+az keyvault secret set --vault-name lazydad-kv -n MicrosoftClientSecret -o none --value (az ad app credential reset `
+  --id $PROD_APP --append --display-name lazydad-production --end-date $END --query password -o tsv)
+$PROD = az identity show -g $RG -n lazydad-production --query principalId -o tsv
+az role assignment create --assignee-object-id $PROD --assignee-principal-type ServicePrincipal `
+  --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/MicrosoftClientSecret" -o none
+# A few minutes later:
+$IDENTITY = az identity show -g $RG -n lazydad-production --query id -o tsv
+foreach ($APP in 'lazydad-app', 'lazydad-app-swedencentral') {
+  az containerapp secret set -g $RG -n $APP `
+    --secrets "microsoft-client-secret=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/MicrosoftClientSecret,identityref:$IDENTITY" -o none
+  az containerapp update -g $RG -n $APP --remove-env-vars SignIn__Microsoft__ManagedIdentityClientId `
+    --set-env-vars SignIn__Microsoft__ClientSecret=secretref:microsoft-client-secret -o none
+}
+```
+
+</details>
 
 **11. Sign in with Telegram.** Telegram's OpenID Connect (https://core.telegram.org/bots/telegram-login): a bot is the
 client, its numeric id the client id. The app asks for `openid` only, never `phone` or `profile`, and keeps nothing but
