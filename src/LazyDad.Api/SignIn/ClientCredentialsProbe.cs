@@ -2,9 +2,9 @@ namespace LazyDad.Api.SignIn;
 
 /// <summary>
 /// Checks a registration by asking for a token as the app itself (the client credentials grant) and dropping it: a token
-/// means the provider accepts the app's secret or assertion (<see cref="ProviderState.Valid"/>), <c>invalid_client</c> or
-/// <c>unauthorized_client</c> that it doesn't. For Microsoft, whose common endpoint reads a made-up code before the client
-/// and so can't tell a wrong secret from a right one (<see cref="OAuthCodeProbe"/>'s way).
+/// means the provider accepts the app's secret or assertion (<see cref="ProviderState.Valid"/>), a refusal that it doesn't.
+/// For Microsoft, whose common endpoint reads a made-up code before the client and so can't tell a wrong secret from a
+/// right one (<see cref="OAuthCodeProbe"/>'s way), and Facebook, whose errors aren't OAuth's (an object, not a code).
 /// </summary>
 public sealed class ClientCredentialsProbe : ISignInProbe
 {
@@ -12,13 +12,14 @@ public sealed class ClientCredentialsProbe : ISignInProbe
     private readonly string clientId;
     private readonly string clientSecret;
     private readonly IClientAssertion? assertion;
-    private readonly string scope;
+    private readonly string? scope;
     private readonly IHttpClientFactory httpClients;
     private readonly ILogger<ClientCredentialsProbe> logger;
 
     /// <param name="assertion">Sent instead of <paramref name="clientSecret"/> when there's one.</param>
+    /// <param name="scope">What the token is for, where the provider needs it said (Microsoft).</param>
     public ClientCredentialsProbe(string provider, string tokenEndpoint, string clientId, string clientSecret, IClientAssertion? assertion,
-        string scope, IHttpClientFactory httpClients, ILogger<ClientCredentialsProbe> logger)
+        string? scope, IHttpClientFactory httpClients, ILogger<ClientCredentialsProbe> logger)
     {
         Provider = provider;
         this.tokenEndpoint = tokenEndpoint;
@@ -42,8 +43,9 @@ public sealed class ClientCredentialsProbe : ISignInProbe
             {
                 ["client_id"] = clientId,
                 ["grant_type"] = "client_credentials",
-                ["scope"] = scope,
             };
+            if (scope is not null)
+                form["scope"] = scope;
             if (assertion is null)
                 form["client_secret"] = clientSecret;
             else

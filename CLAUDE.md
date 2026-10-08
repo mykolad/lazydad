@@ -144,6 +144,15 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
     and `ClientSecret` (`TelegramClientSecret` / `…Staging`; runbook section 7, step 11). Never the `phone` scope. Its
     documentation doesn't mention the nonce (the app sends one anyway: OpenID Connect requires the echo). Errors come back as 200 with the error in the body. "Log in with
     Telegram", in its blue darkened to pass WCAG AA;
+  - **Facebook** (#79): ASP.NET Core's Facebook handler with `public_profile` only (no app review) and only the `id` field,
+    the app-scoped user id (unique to the Meta app: replacing it makes every Facebook voter new). `SignIn:Facebook:ClientId`
+    (the App ID) and `ClientSecret` (`FacebookClientSecret` / `…Staging`; an app per environment, staging's in
+    Development mode; runbook section 7, step 12). Meta's errors aren't OAuth's, so its probe is `ClientCredentialsProbe`.
+    **Data-deletion callback** (`FacebookDeletionController`, `POST /auth/facebook/deletion`, which Live mode requires):
+    `FacebookSignedRequest` checks Meta's HMAC-SHA256 signature with the app secret, then that reader's votes are deleted;
+    it answers `{url, confirmation_code}` (the privacy page's Facebook section, a random code), `400` for a bad signature,
+    `404` with Facebook off. Bot Fight Mode can't exempt it, so the runbook checks it gets through. "Continue with
+    Facebook" in Meta's current blue (#0866ff, AA);
   - **provider health:** each provider's handler talks to it through a named HTTP client (`SignInBackchannel`, which tests
     replace with a fake provider) that times every call into `lazydad_signin_provider_duration_seconds{provider,
     operation, outcome}` (`token`, `userinfo`). `SignInProbeService` probes each configured provider at startup and every

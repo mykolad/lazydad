@@ -49,8 +49,8 @@ What it all looks like at the end:
 
 | Identity | Kind | Signs in as it | Roles |
 |---|---|---|---|
-| `lazydad-production` | user-assigned | both prod apps; both prod environments, to read the certificate | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeaders`, `JevApiKey`, `VoterKeyPepper`, `GitHubClientSecret`, `GoogleClientSecret`, `TelegramClientSecret` and `lazydad-fyi-origin`; `Key Vault Crypto Service Encryption User` on the `DataProtection` key; read/write in `lazydad-db`; the `LazyDad` Entra app registration trusts it as a federated credential (sign in with Microsoft) |
-| `lazydad-app-staging` | system-assigned | the staging app | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeadersStaging`, `JevApiKeyStaging`, `VoterKeyPepperStaging`, `GitHubClientSecretStaging`, `GoogleClientSecretStaging`, `MicrosoftClientSecretStaging` and `TelegramClientSecretStaging`; `Key Vault Crypto Service Encryption User` on the `DataProtectionStaging` key; read/write in `lazydad-db-staging` |
+| `lazydad-production` | user-assigned | both prod apps; both prod environments, to read the certificate | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeaders`, `JevApiKey`, `VoterKeyPepper`, `GitHubClientSecret`, `GoogleClientSecret`, `TelegramClientSecret`, `FacebookClientSecret` and `lazydad-fyi-origin`; `Key Vault Crypto Service Encryption User` on the `DataProtection` key; read/write in `lazydad-db`; the `LazyDad` Entra app registration trusts it as a federated credential (sign in with Microsoft) |
+| `lazydad-app-staging` | system-assigned | the staging app | `Foundry User` on the AI resource; `Key Vault Secrets User` on `OtlpHeadersStaging`, `JevApiKeyStaging`, `VoterKeyPepperStaging`, `GitHubClientSecretStaging`, `GoogleClientSecretStaging`, `MicrosoftClientSecretStaging`, `TelegramClientSecretStaging` and `FacebookClientSecretStaging`; `Key Vault Crypto Service Encryption User` on the `DataProtectionStaging` key; read/write in `lazydad-db-staging` |
 | `lazydad-acr-pull` | user-assigned | all three apps, to pull images | `Container Registry Repository Reader` (all repositories) |
 | `lazydad-github-cd` | user-assigned | GitHub's `production` environment | `Container Registry Repository Writer` on `lazydad`, `Reader` on `lazydad-preview`, `Reader` on the registry; `Contributor` on both prod apps; `LazyDad Deployer`; `LazyDad Service Tag Reader`; migrations in `lazydad-db` |
 | `lazydad-github-staging` | user-assigned | GitHub's `staging` environment (branch previews too) | `Container Registry Repository Writer` on `lazydad-preview` only, `Reader` on the registry; `Contributor` on `lazydad-app-staging`; `LazyDad Deployer`; migrations in `lazydad-db-staging` |
@@ -1425,6 +1425,89 @@ doesn't mention the nonce, which OpenID Connect requires a provider to echo (the
 its token errors. If the hand check fails with a nonce error, Telegram doesn't echo it, and the code has to stop asking
 for one for Telegram; the bot's support (@BotSupport, `#oidc`) is the place to ask about anything else.
 
+**12. Sign in with Facebook.** Facebook Login with `public_profile` only, which needs no app review, reading only the
+`id` field: the app-scoped user id, unique to the Meta app, so **replacing an app makes every Facebook voter new**. Meta
+requires a data-deletion callback for an app in Live mode: `POST /auth/facebook/deletion` checks Meta's signature with the
+app secret and deletes that reader's votes. One app per environment; staging's stays in **Development** mode, where only
+the app's own roles (you) can sign in. On https://developers.facebook.com/apps, **Create app**, use case *Authenticate
+and request data from users with Facebook Login*, twice:
+
+| | Production | Staging |
+|---|---|---|
+| App name | `LazyDad` | `LazyDad (staging)` |
+| App settings → Basic: app domains | `lazydad.fyi` | staging's host |
+| Privacy policy URL | `https://lazydad.fyi/privacy` | the same |
+| User data deletion: data deletion callback URL | `https://lazydad.fyi/auth/facebook/deletion` | staging's address + `/auth/facebook/deletion` |
+| App icon | the sloth (Meta asks for 1024 × 1024) | the same |
+| Facebook Login → Settings: valid OAuth redirect URIs | `https://lazydad.fyi/signin-facebook` | staging's address + `/signin-facebook` |
+| Client OAuth login, web OAuth login, enforce HTTPS, strict mode | on | on |
+| Login with the JavaScript SDK | off | off |
+| Permissions | `public_profile` only (the default; don't add `email`) | the same |
+| App mode | **Live**, once the above is filled in | Development |
+
+**App settings → Basic** shows the App ID (the client id) and the App Secret:
+
+```bash
+read -rsp "Production app secret: " SECRET; echo
+az keyvault secret set --vault-name lazydad-kv -n FacebookClientSecret        --value "$SECRET" -o none
+read -rsp "Staging app secret: " SECRET; echo
+az keyvault secret set --vault-name lazydad-kv -n FacebookClientSecretStaging --value "$SECRET" -o none
+unset SECRET
+
+KV_ID=$(az keyvault show -n lazydad-kv --query id -o tsv)
+PROD=$(az identity show -g $RG -n lazydad-production --query principalId -o tsv)
+STAGING=$(az containerapp show -g $RG -n lazydad-app-staging --query identity.principalId -o tsv)
+az role assignment create --assignee-object-id $PROD --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets User" --scope "$KV_ID/secrets/FacebookClientSecret" -o none
+az role assignment create --assignee-object-id $STAGING --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets User" --scope "$KV_ID/secrets/FacebookClientSecretStaging" -o none
+
+# A few minutes later, each app's settings: staging first (a new production revision runs an extra batch).
+APP=lazydad-app-staging; SUFFIX=Staging; IDENTITY=system; CLIENT_ID=<staging's app id>
+# then: APP=lazydad-app; SUFFIX=; IDENTITY=$(az identity show -g $RG -n lazydad-production --query id -o tsv); CLIENT_ID=<production's>
+# and:  APP=lazydad-app-swedencentral, the same otherwise
+az containerapp secret set -g $RG -n $APP \
+  --secrets "facebook-client-secret=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/FacebookClientSecret$SUFFIX,identityref:$IDENTITY" -o none
+az containerapp update -g $RG -n $APP --set-env-vars \
+  SignIn__Facebook__ClientId=$CLIENT_ID SignIn__Facebook__ClientSecret=secretref:facebook-client-secret -o none
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$SECRET = Read-Host 'Production app secret' -MaskInput
+az keyvault secret set --vault-name lazydad-kv -n FacebookClientSecret        --value $SECRET -o none
+$SECRET = Read-Host 'Staging app secret' -MaskInput
+az keyvault secret set --vault-name lazydad-kv -n FacebookClientSecretStaging --value $SECRET -o none
+Remove-Variable SECRET
+
+$KV_ID   = az keyvault show -n lazydad-kv --query id -o tsv
+$PROD    = az identity show -g $RG -n lazydad-production --query principalId -o tsv
+$STAGING = az containerapp show -g $RG -n lazydad-app-staging --query identity.principalId -o tsv
+az role assignment create --assignee-object-id $PROD --assignee-principal-type ServicePrincipal `
+  --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/FacebookClientSecret" -o none
+az role assignment create --assignee-object-id $STAGING --assignee-principal-type ServicePrincipal `
+  --role 'Key Vault Secrets User' --scope "$KV_ID/secrets/FacebookClientSecretStaging" -o none
+
+# A few minutes later, each app's settings: staging first (a new production revision runs an extra batch).
+$APP = 'lazydad-app-staging'; $SUFFIX = 'Staging'; $IDENTITY = 'system'; $CLIENT_ID = '<staging''s app id>'
+# then: $APP = 'lazydad-app'; $SUFFIX = ''; $IDENTITY = az identity show -g $RG -n lazydad-production --query id -o tsv; $CLIENT_ID = '<production''s>'
+# and:  $APP = 'lazydad-app-swedencentral', the same otherwise
+az containerapp secret set -g $RG -n $APP `
+  --secrets "facebook-client-secret=keyvaultref:https://lazydad-kv.vault.azure.net/secrets/FacebookClientSecret$SUFFIX,identityref:$IDENTITY" -o none
+az containerapp update -g $RG -n $APP --set-env-vars `
+  "SignIn__Facebook__ClientId=$CLIENT_ID" SignIn__Facebook__ClientSecret=secretref:facebook-client-secret -o none
+```
+
+</details>
+
+The probe asks Meta for a token as the app (Meta answers a wrong app or secret with its own error object, not OAuth's),
+so `/status` shows `facebook` as `valid` or `invalid`. **Cloudflare:** Meta calls the deletion URL from its servers.
+Bot Fight Mode can't be given an exception on the Free plan (section 10), so after setting it up, use the dashboard's
+check for the data deletion callback URL, and, if Cloudflare challenges it, turn Bot Fight Mode off (the rate-limit rule
+and Block AI bots stay). A forged or unsigned request gets `400`; with Facebook off, `404`. The callback answers with
+the privacy page's Facebook section as the status URL and a random confirmation code; nothing about the request is kept.
+
 ## 8. Database users
 
 Nobody has a password: every user is an Entra identity, created by you as the server's Entra admin. Each app can
@@ -1769,8 +1852,8 @@ third region could be added later without touching the live record.
 - *DNS → Records*: switch the `CNAME` record to **Proxied** (orange cloud). Leave the `TXT` record as it is.
   `curl -s https://lazydad.fyi/healthz` now works without `-k`: browsers get Cloudflare's certificate.
 - *Security → Bots*: **Block AI bots** (on all pages), **AI Labyrinth** on, **Bot Fight Mode** on. On the Free plan
-  no rule can make an exception to Bot Fight Mode, so check that Grafana's uptime check (section 11) passes; turn
-  Bot Fight Mode off if it gets challenged.
+  no rule can make an exception to Bot Fight Mode, so check that Grafana's uptime check (section 11) and Meta's
+  data-deletion callback (section 7, step 12) get through; turn Bot Fight Mode off if either gets challenged.
 - *Security → WAF → Rate limiting rules* (the Free plan has one, with a fixed 10-second period and block, and only
   the path and verified-bot fields): name "Votes", expression `(http.request.uri.path contains "/vote")` (only POST
   is served there), counted per IP, 20 requests per 10 seconds, action **Block**, duration 10 seconds. Cloudflare

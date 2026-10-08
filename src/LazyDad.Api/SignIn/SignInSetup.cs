@@ -5,6 +5,7 @@ using LazyDad.Api.Telemetry;
 using LazyDad.Data;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.Facebook;
 using Microsoft.AspNetCore.Authentication.OAuth;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.DataProtection;
@@ -103,7 +104,7 @@ public static class SignInSetup
             });
 
         // Each provider is an authentication scheme named after it (EnabledSignInProviders lists them), registered only
-        // while sign-in is on and the provider is configured. Facebook comes with its issue (#79);
+        // while sign-in is on and the provider is configured;
         // Development's signs in at once, only in Development.
         var options = builder.Configuration.GetSection(SignInOptions.SectionName).Get<SignInOptions>() ?? new SignInOptions();
         if (!options.Enabled)
@@ -147,6 +148,37 @@ public static class SignInSetup
             services.AddSingleton<ISignInProbe>(provider => OAuthCodeProbe.Standard(SignInProviders.Telegram,
                 OpenIdProviders.Telegram.TokenEndpoint, options.Telegram, provider));
         }
+        if (options.Facebook.Configured)
+            AddFacebook(authentication, services, options.Facebook);
+    }
+
+    /// <summary>
+    /// Facebook with <c>public_profile</c> only, which needs no app review, and only the <c>id</c> field: the app-scoped
+    /// user id, unique to the Meta app (replacing the app makes every Facebook voter new). Meta requires a data-deletion
+    /// callback (FacebookDeletionController).
+    /// </summary>
+    private static void AddFacebook(AuthenticationBuilder authentication, IServiceCollection services, OAuthClientOptions client)
+    {
+        authentication.AddFacebook(SignInProviders.Facebook, facebook =>
+        {
+            Remote(facebook, SignInProviders.Facebook, client);
+            // The handler would ask for the email and read the name; neither is wanted.
+            facebook.Scope.Clear();
+            facebook.Scope.Add("public_profile");
+            facebook.Fields.Clear();
+            facebook.Fields.Add("id");
+            facebook.Events.OnTicketReceived = context
+                => SignInEvents.OnTicketReceived(context, SignInProviders.Facebook, p => p.FindFirstValue(ClaimTypes.NameIdentifier));
+        });
+        // The user endpoint's address carries the fields and the app secret proof in its query.
+        Backchannel<FacebookOptions>(services, SignInProviders.Facebook, uri =>
+            uri.GetLeftPart(UriPartial.Path) == FacebookDefaults.TokenEndpoint ? SignInBackchannel.Token
+            : uri.GetLeftPart(UriPartial.Path) == FacebookDefaults.UserInformationEndpoint ? SignInBackchannel.UserInfo
+            : SignInBackchannel.Other);
+        // A token as the app: Meta answers a wrong app or secret with its own error object (code 101, 1…), not OAuth's.
+        services.AddSingleton<ISignInProbe>(provider => new ClientCredentialsProbe(SignInProviders.Facebook,
+            FacebookDefaults.TokenEndpoint, client.ClientId, client.ClientSecret, null, null,
+            provider.GetRequiredService<IHttpClientFactory>(), provider.GetRequiredService<ILogger<ClientCredentialsProbe>>()));
     }
 
     /// <summary>

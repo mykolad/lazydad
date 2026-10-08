@@ -23,6 +23,12 @@ public class SignInOptions
     /// <summary>Sign in with Telegram: a bot per environment (@BotFather's Login Widget settings). Off while its client id is empty.</summary>
     public OAuthClientOptions Telegram { get; set; } = new();
 
+    /// <summary>
+    /// Sign in with Facebook: a Meta app per environment (its App ID and App Secret). Off while its client id is empty.
+    /// The secret also checks Meta's data-deletion requests.
+    /// </summary>
+    public OAuthClientOptions Facebook { get; set; } = new();
+
     /// <summary>Sign in with Microsoft: an Entra app registration per environment. Off while its client id is empty.</summary>
     public MicrosoftClientOptions Microsoft { get; set; } = new();
 
