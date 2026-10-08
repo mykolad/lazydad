@@ -1510,48 +1510,53 @@ the privacy page's Facebook section as the status URL and a random confirmation 
 
 **13. The smoke tests' sign-in.** The smoke tests read and (from sign-in-only voting on) cast votes signed in, but
 providers block scripted logins and test accounts would need passwords. So each app trusts its environment's deploy
-identity instead: the runner already signs in to Azure as it, and gets an Entra token for `api://lazydad-smoke`, an app
+identity instead: the runner already signs in to Azure as it, and gets an Entra token for `api://<its app id>` (`lazydad-smoke`), an app
 registration that is only an audience (no secret, no permissions). The app accepts that token, from that identity alone,
 as one fixed voter, and only on `/me/votes` (and the vote endpoint, later). Anyone else in the tenant can get a token for
 the audience too, which is why the identity's object id is listed.
 
 ```bash
 TENANT=$(az account show --query tenantId -o tsv)
-SMOKE_APP=$(az ad app create --display-name lazydad-smoke --identifier-uris api://lazydad-smoke --query appId -o tsv)
+SMOKE_APP=$(az ad app create --display-name lazydad-smoke --query appId -o tsv)
+# Its identifier URI holds its own app id: the form Entra's identifier-URI protection always allows.
+AUDIENCE="api://$SMOKE_APP"
+az ad app update --id $SMOKE_APP --identifier-uris "$AUDIENCE"
 az ad sp create --id $SMOKE_APP -o none
 CD=$(az identity show -g $RG -n lazydad-github-cd --query principalId -o tsv)
 STAGING_DEPLOY=$(az identity show -g $RG -n lazydad-github-staging --query principalId -o tsv)
 
 az containerapp update -g $RG -n lazydad-app-staging --set-env-vars SignIn__Smoke__TenantId=$TENANT \
-  SignIn__Smoke__Audience=api://lazydad-smoke SignIn__Smoke__AllowedObjectIds__0=$STAGING_DEPLOY -o none
+  "SignIn__Smoke__Audience=$AUDIENCE" SignIn__Smoke__AllowedObjectIds__0=$STAGING_DEPLOY -o none
 for APP in lazydad-app lazydad-app-swedencentral; do
   az containerapp update -g $RG -n $APP --set-env-vars SignIn__Smoke__TenantId=$TENANT \
-    SignIn__Smoke__Audience=api://lazydad-smoke SignIn__Smoke__AllowedObjectIds__0=$CD -o none
+    "SignIn__Smoke__Audience=$AUDIENCE" SignIn__Smoke__AllowedObjectIds__0=$CD -o none
 done
 
 # Deploy Environment then gets the token and passes it to the smoke tests (masked, never logged).
-gh variable set SMOKE_TOKEN_RESOURCE --env staging    --body api://lazydad-smoke
-gh variable set SMOKE_TOKEN_RESOURCE --env production --body api://lazydad-smoke
+gh variable set SMOKE_TOKEN_RESOURCE --env staging    --body "$AUDIENCE"
+gh variable set SMOKE_TOKEN_RESOURCE --env production --body "$AUDIENCE"
 ```
 
 <details><summary>PowerShell 7</summary>
 
 ```powershell
 $TENANT = az account show --query tenantId -o tsv
-$SMOKE_APP = az ad app create --display-name lazydad-smoke --identifier-uris api://lazydad-smoke --query appId -o tsv
+$SMOKE_APP = az ad app create --display-name lazydad-smoke --query appId -o tsv
+$AUDIENCE = "api://$SMOKE_APP"
+az ad app update --id $SMOKE_APP --identifier-uris $AUDIENCE
 az ad sp create --id $SMOKE_APP -o none
 $CD = az identity show -g $RG -n lazydad-github-cd --query principalId -o tsv
 $STAGING_DEPLOY = az identity show -g $RG -n lazydad-github-staging --query principalId -o tsv
 
 az containerapp update -g $RG -n lazydad-app-staging --set-env-vars "SignIn__Smoke__TenantId=$TENANT" `
-  SignIn__Smoke__Audience=api://lazydad-smoke "SignIn__Smoke__AllowedObjectIds__0=$STAGING_DEPLOY" -o none
+  "SignIn__Smoke__Audience=$AUDIENCE" "SignIn__Smoke__AllowedObjectIds__0=$STAGING_DEPLOY" -o none
 foreach ($APP in 'lazydad-app', 'lazydad-app-swedencentral') {
   az containerapp update -g $RG -n $APP --set-env-vars "SignIn__Smoke__TenantId=$TENANT" `
-    SignIn__Smoke__Audience=api://lazydad-smoke "SignIn__Smoke__AllowedObjectIds__0=$CD" -o none
+    "SignIn__Smoke__Audience=$AUDIENCE" "SignIn__Smoke__AllowedObjectIds__0=$CD" -o none
 }
 
-gh variable set SMOKE_TOKEN_RESOURCE --env staging    --body api://lazydad-smoke
-gh variable set SMOKE_TOKEN_RESOURCE --env production --body api://lazydad-smoke
+gh variable set SMOKE_TOKEN_RESOURCE --env staging    --body "$AUDIENCE"
+gh variable set SMOKE_TOKEN_RESOURCE --env production --body "$AUDIENCE"
 ```
 
 </details>

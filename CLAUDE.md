@@ -164,7 +164,7 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   - `dev` (`DevelopmentSignInHandler`, in Development only: signs in at once; `?account=` picks the made-up account, to
     vote as several readers);
   - **the smoke tests' sign-in** (#80, `SmokeSignIn`): a JWT bearer scheme `smoke` that accepts only Entra tokens of
-    `SignIn:Smoke:TenantId` for `Audience` (`api://lazydad-smoke`, a registration with no secret) whose `oid` is in
+    `SignIn:Smoke:TenantId` for `Audience` (`api://<app id>` of the `lazydad-smoke` registration, which has no secret) whose `oid` is in
     `AllowedObjectIds` (the environment's deploy identity), as one fixed voter (`smoke:deploy`). Only the endpoints about
     the reader's votes ask for it (`SmokeSignIn.VoterAsync`: the cookie, else the token); everywhere else it's ignored.
     Not a reader's provider: never listed, never in a cookie. `/status` `signIn.smoke` (`on`/`off`). Runbook section 7,

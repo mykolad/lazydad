@@ -7,7 +7,7 @@ namespace LazyDad.Api.SignIn;
 /// <summary>
 /// How the smoke tests vote signed in without a reader's account: providers block scripted logins, and test accounts
 /// would need passwords kept somewhere. The runner already signs in to Azure as the environment's deploy identity (OIDC,
-/// no secret), so the app trusts exactly that identity's Entra token for <c>api://lazydad-smoke</c>, as one fixed voter,
+/// no secret), so the app trusts exactly that identity's Entra token for the <c>lazydad-smoke</c> registration, as one fixed voter,
 /// and only where a signed-in reader's votes are (<see cref="VoterAsync"/>): every other endpoint ignores it.
 /// </summary>
 public static class SmokeSignIn

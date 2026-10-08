@@ -79,7 +79,7 @@ public class SmokeSignInOptions
 {
     public string TenantId { get; set; } = string.Empty;
 
-    /// <summary>The app registration the token is for: <c>api://lazydad-smoke</c>, an audience with no secret.</summary>
+    /// <summary>The app registration the token is for: <c>api://&lt;app id&gt;</c> of <c>lazydad-smoke</c>, an audience with no secret.</summary>
     public string Audience { get; set; } = string.Empty;
 
     public List<string> AllowedObjectIds { get; set; } = [];
