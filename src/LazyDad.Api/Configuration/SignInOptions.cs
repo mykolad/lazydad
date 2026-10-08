@@ -29,6 +29,9 @@ public class SignInOptions
     /// </summary>
     public OAuthClientOptions Facebook { get; set; } = new();
 
+    /// <summary>The smoke tests' sign-in as the deploy identity (SmokeSignIn). Off while its audience is empty.</summary>
+    public SmokeSignInOptions Smoke { get; set; } = new();
+
     /// <summary>Sign in with Microsoft: an Entra app registration per environment. Off while its client id is empty.</summary>
     public MicrosoftClientOptions Microsoft { get; set; } = new();
 
@@ -63,4 +66,20 @@ public class MicrosoftClientOptions : OAuthClientOptions
     public string ManagedIdentityClientId { get; set; } = string.Empty;
 
     public bool UsesManagedIdentity => ManagedIdentityClientId.Length > 0;
+}
+
+/// <summary>
+/// Who the smoke tests' token may come from: Entra tokens of this tenant, for <see cref="Audience"/>, whose <c>oid</c> is
+/// one of <see cref="AllowedObjectIds"/> (the environment's deploy identity, lazydad-github-cd or lazydad-github-staging).
+/// </summary>
+public class SmokeSignInOptions
+{
+    public string TenantId { get; set; } = string.Empty;
+
+    /// <summary>The app registration the token is for: <c>api://&lt;app id&gt;</c> of <c>lazydad-smoke</c>, an audience with no secret.</summary>
+    public string Audience { get; set; } = string.Empty;
+
+    public List<string> AllowedObjectIds { get; set; } = [];
+
+    public bool Enabled => Audience.Length > 0;
 }

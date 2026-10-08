@@ -1,3 +1,4 @@
+using LazyDad.Api;
 using LazyDad.Api.Configuration;
 using LazyDad.Api.Networking;
 using LazyDad.Api.Services;
@@ -82,6 +83,24 @@ var app = builder.Build();
 app.Services.GetRequiredService<SimilarityMetrics>();
 app.Services.GetRequiredService<SignInMetrics>();
 
+// version: the image's commit (baked into the image as App__Version). revision: the Container Apps revision,
+// unique per rollout even when re-deploying the same commit (the platform sets
+// CONTAINER_APP_REVISION). Smoke tests wait for both, so they can't pass against a draining revision.
+var appVersion = app.Services.GetRequiredService<IOptions<AppInfoOptions>>().Value.Version;
+var appRevision = app.Configuration["CONTAINER_APP_REVISION"] ?? "local";
+// This process, new at every start: a restarted revision keeps its name, so the smoke tests' retry tells the processes
+// apart by this.
+var processId = Guid.NewGuid().ToString("N");
+
+// Which revision and process answered, on every answer: while the old revision drains, the smoke tests only count the
+// new one's (both already public on /healthz and /status).
+app.Use((context, next) =>
+{
+    context.Response.Headers[SmokeHeaders.Revision] = appRevision;
+    context.Response.Headers[SmokeHeaders.Process] = processId;
+    return next(context);
+});
+
 // Pass an explicit PhysicalFileProvider so the middleware is not affected by
 // the stale internal WebRootFileProvider (which is snapshotted before wwwroot exists).
 var fileProvider = new PhysicalFileProvider(wwwrootPath);
@@ -93,20 +112,14 @@ app.UseStaticFiles(new StaticFileOptions { FileProvider = fileProvider });
 app.UseAuthentication();
 app.UseRateLimiter();
 app.MapControllers();
-// version: the image's commit (baked into the image as App__Version). revision: the Container Apps revision,
-// unique per rollout even when re-deploying the same commit (the platform sets
-// CONTAINER_APP_REVISION). Smoke tests wait for both, so they can't pass against a draining revision.
-var appVersion = app.Services.GetRequiredService<IOptions<AppInfoOptions>>().Value.Version;
-var appRevision = app.Configuration["CONTAINER_APP_REVISION"] ?? "local";
 app.MapGet("/healthz", () => Results.Ok(new { status = "healthy", version = appVersion, revision = appRevision }));
-// This process, new at every start: a restarted revision keeps its name, so the smoke tests' retry tells the processes
-// apart by this.
-var processId = Guid.NewGuid().ToString("N");
 // What this process's scheduler did: its last tick per language, and the jokes it saved most recently (see SchedulerStatus).
 // Only jokes that still exist: one can be deleted later as a duplicate copy, by this replica or another. If the database
 // can't be reached, it reports what this process saved. signIn.keyRing: whether the sign-in cookies' key ring works here
-// (see KeyRingCheck); signIn.providers: each provider's state from its last probe (see SignInProbeService).
+// (see KeyRingCheck); signIn.providers: each provider's state from its last probe (see SignInProbeService);
+// signIn.smoke: whether this app trusts the deploy identity's token (see SmokeSignIn), which the smoke tests then must send.
 app.MapGet("/status", async (SchedulerStatus status, IJokeRepository jokes, KeyRingCheck keyRing, SignInProviderStatus providers,
+    IOptions<SignInOptions> signIn,
     CancellationToken cancellationToken) =>
 {
     var (ticks, savedJokes) = (status.LastTicks, status.SavedJokes);
@@ -124,7 +137,12 @@ app.MapGet("/status", async (SchedulerStatus status, IJokeRepository jokes, KeyR
         process = processId,
         ticks,
         savedJokes,
-        signIn = new { keyRing = keyRing.State, providers = providers.All },
+        signIn = new
+        {
+            keyRing = keyRing.State,
+            providers = providers.All,
+            smoke = signIn.Value.Enabled && signIn.Value.Smoke.Enabled ? "on" : "off",
+        },
     });
 });
 

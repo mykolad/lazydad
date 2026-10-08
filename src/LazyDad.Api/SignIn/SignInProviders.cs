@@ -23,5 +23,12 @@ public static class SignInProviders
     /// </summary>
     public static readonly IReadOnlyList<string> DisplayOrder = [GitHub, Google, Microsoft, Telegram, Facebook, Development];
 
+    /// <summary>
+    /// Not a reader's provider: the smoke tests' sign-in, as the environment's deploy identity, accepted only where a
+    /// signed-in reader's votes are (SmokeSignIn). It's never listed, never in a cookie, and has one voter key.
+    /// </summary>
+    public const string Smoke = "smoke";
+
+    /// <summary>A provider a reader signs in with (listed, and allowed in the cookie).</summary>
     public static bool IsKnown(string provider) => All.Contains(provider) || provider == Development;
 }

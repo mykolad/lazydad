@@ -147,16 +147,55 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
     [Fact]
     public async Task DeleteMyVotes_WhenSignedOut_IsUnauthorized()
     {
-        // Polled for the same reason as /me: the draining revision has no such endpoint (404 or 405).
-        var status = await target.PollAsync<HttpStatusCode>(async () =>
+        var status = await NewRevisionsAnswerAsync(() =>
         {
-            using var request = new HttpRequestMessage(HttpMethod.Delete, "me/votes");
+            var request = new HttpRequestMessage(HttpMethod.Delete, "me/votes");
             request.Headers.Add("X-LazyDad", "1");
-            using var response = await target.Client.SendAsync(request);
-            return response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed ? null : response.StatusCode;
-        }, SmokeTarget.ColdStartTimeout, "DELETE /me/votes to answer");
+            return request;
+        }, "DELETE /me/votes to answer");
 
         Assert.Equal(HttpStatusCode.Unauthorized, status);
+    }
+
+    // A request the draining revision may still answer: polled until the process under test does (its headers say so).
+    // Without an expected revision (a run by hand), any answer from a build that has the endpoint (not 404 or 405).
+    private Task<HttpStatusCode> NewRevisionsAnswerAsync(Func<HttpRequestMessage> request, string what)
+        => target.PollAsync<HttpStatusCode>(async () =>
+        {
+            using var message = request();
+            using var response = await target.Client.SendAsync(message);
+            return target.IsFromTheProcessUnderTest(response)
+                && response.StatusCode is not (HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed) ? response.StatusCode : null;
+        }, SmokeTarget.ColdStartTimeout, what + (target.ExpectedRevision is null ? "" : $" from revision '{target.ExpectedRevision}'"));
+
+    [Fact]
+    public async Task MyVotes_AnswerTheDeployIdentity_WhereTheAppTrustsIt_AndNobodySignedOut()
+    {
+        var smoke = await target.PollAsync<JsonElement>(async () =>
+        {
+            var json = await target.GetJsonAsync("status");
+            return target.IsFromTheProcessUnderTest(json) && json.TryGetProperty("signIn", out var signIn)
+                && signIn.TryGetProperty("smoke", out var state) ? state.Clone() : null;
+        }, SmokeTarget.ColdStartTimeout, $"revision '{target.ExpectedRevision}' to say whether it trusts the deploy identity");
+
+        Assert.Equal(HttpStatusCode.Unauthorized,
+            await NewRevisionsAnswerAsync(() => new HttpRequestMessage(HttpMethod.Get, "me/votes?ids=1"), "GET /me/votes to answer"));
+
+        // Both sides must agree: the app's SignIn:Smoke settings and the environment's SMOKE_TOKEN_RESOURCE variable.
+        if (smoke.GetString() == "off")
+        {
+            Assert.True(target.AccessToken is null, "The deploy sent SMOKE_ACCESS_TOKEN, but the app trusts no deploy identity (SignIn:Smoke).");
+            return;
+        }
+        Assert.True(target.AccessToken is not null,
+            "The app trusts the deploy identity (signIn.smoke is on), but the deploy sent no SMOKE_ACCESS_TOKEN: set the environment's SMOKE_TOKEN_RESOURCE variable.");
+        var status = await NewRevisionsAnswerAsync(() =>
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, "me/votes?ids=1");
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", target.AccessToken);
+            return request;
+        }, "GET /me/votes with the deploy identity's token to answer");
+        Assert.Equal(HttpStatusCode.OK, status);
     }
 
     [Fact]

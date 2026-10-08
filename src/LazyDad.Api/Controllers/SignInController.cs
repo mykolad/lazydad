@@ -18,6 +18,9 @@ public class SignInController : ControllerBase
     public const string RequestHeader = "X-LazyDad";
     public const string RequestHeaderValue = "1";
 
+    /// <summary>The most jokes one <c>GET /me/votes</c> asks about: a feed page's worth (JokesController.MaxPageSize).</summary>
+    public const int MaxVoteIds = JokesController.MaxPageSize;
+
     private readonly EnabledSignInProviders providers;
     private readonly SignInMetrics metrics;
     private readonly IVoteRepository votes;
@@ -76,11 +79,34 @@ public class SignInController : ControllerBase
     [HttpDelete("me/votes")]
     public async Task<IActionResult> DeleteMyVotes(CancellationToken cancellationToken)
     {
-        if (!SignInPrincipal.TryRead(User, out var voterKey, out _))
+        if (await SmokeSignIn.VoterAsync(HttpContext) is not { } voterKey)
             return Unauthorized();
         if (Request.Headers[RequestHeader] != RequestHeaderValue)
             return StatusCode(StatusCodes.Status403Forbidden);
         await votes.DeleteAllAsync(voterKey, cancellationToken);
         return NoContent();
+    }
+
+    /// <summary>
+    /// The signed-in reader's votes on these jokes (<c>ids</c>, comma-separated, at most <see cref="MaxVoteIds"/>, as on
+    /// one feed page): <c>{"&lt;id&gt;": 1 | -1}</c>, jokes without a vote left out. Always from the database, never the
+    /// read cache: a reader must see their own vote at once.
+    /// </summary>
+    [HttpGet("me/votes")]
+    public async Task<IActionResult> MyVotes([FromQuery] string? ids, CancellationToken cancellationToken)
+    {
+        if (await SmokeSignIn.VoterAsync(HttpContext) is not { } voterKey)
+            return Unauthorized();
+        var jokeIds = new HashSet<int>();
+        foreach (var part in (ids ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!int.TryParse(part, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var id))
+                return BadRequest("ids must be joke ids, comma-separated.");
+            jokeIds.Add(id);
+        }
+        if (jokeIds.Count > MaxVoteIds)
+            return BadRequest($"At most {MaxVoteIds} ids.");
+        var found = jokeIds.Count == 0 ? new Dictionary<int, int>() : await votes.GetAsync(voterKey, jokeIds, cancellationToken);
+        return Ok(found.ToDictionary(vote => vote.Key.ToString(System.Globalization.CultureInfo.InvariantCulture), vote => vote.Value));
     }
 }

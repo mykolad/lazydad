@@ -101,4 +101,25 @@ public class SignInOptionsValidatorTests
 
         Assert.Equal(valid, !(result.Failures ?? []).Any(f => f.Contains("SignIn:Microsoft")));
     }
+
+    [Theory]
+    [InlineData("api://lazydad-smoke", Tenant, Identity, true)]
+    [InlineData("", "", "", true)]
+    // No identity would trust nobody; a typo must not pass as one.
+    [InlineData("api://lazydad-smoke", Tenant, "", false)]
+    [InlineData("api://lazydad-smoke", Tenant, "lazydad-github-cd", false)]
+    [InlineData("api://lazydad-smoke", "", Identity, false)]
+    [InlineData("", Tenant, Identity, false)]
+    public void Validate_TheSmokeSignIn_NeedsItsTenant_AndTheIdentitiesItTrusts(string audience, string tenantId, string objectId, bool valid)
+    {
+        var options = new SignInOptions
+        {
+            VoterKeyPepper = Pepper,
+            Smoke = new() { Audience = audience, TenantId = tenantId, AllowedObjectIds = objectId.Length > 0 ? [objectId] : [] },
+        };
+
+        var result = Validate(options, KeyId, Environments.Production);
+
+        Assert.Equal(valid, !(result.Failures ?? []).Any(f => f.Contains("SignIn:Smoke")));
+    }
 }
