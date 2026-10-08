@@ -17,21 +17,23 @@ public static class SmokeSignIn
 
     public static void Add(AuthenticationBuilder authentication, SmokeSignInOptions smoke)
     {
+        // As Entra writes it in a token's issuer (lowercase), whatever case the setting has; issuers compare as strings.
+        var tenant = Guid.Parse(smoke.TenantId).ToString("D");
         authentication.AddJwtBearer(SignInProviders.Smoke, jwt =>
         {
-            jwt.Authority = $"https://login.microsoftonline.com/{smoke.TenantId}/v2.0";
+            jwt.Authority = $"https://login.microsoftonline.com/{tenant}/v2.0";
             jwt.MapInboundClaims = false;
             jwt.TokenValidationParameters.ValidAudience = smoke.Audience;
             // An audience-only registration gets v1 tokens unless it asks for v2; either is the same tenant's.
             jwt.TokenValidationParameters.ValidIssuers =
-                [$"https://sts.windows.net/{smoke.TenantId}/", $"https://login.microsoftonline.com/{smoke.TenantId}/v2.0"];
+                [$"https://sts.windows.net/{tenant}/", $"https://login.microsoftonline.com/{tenant}/v2.0"];
             jwt.Events = new JwtBearerEvents
             {
                 // Anyone in the tenant can get a token for the audience; only the deploy identity counts.
                 OnTokenValidated = context =>
                 {
                     var objectId = context.Principal?.FindFirst("oid")?.Value;
-                    if (context.Principal?.FindFirst("tid")?.Value != smoke.TenantId
+                    if (!string.Equals(context.Principal?.FindFirst("tid")?.Value, tenant, StringComparison.OrdinalIgnoreCase)
                         || objectId is null || !smoke.AllowedObjectIds.Contains(objectId, StringComparer.OrdinalIgnoreCase))
                         context.Fail("Not an identity the smoke sign-in trusts.");
                     return Task.CompletedTask;

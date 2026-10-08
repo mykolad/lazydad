@@ -26,12 +26,14 @@ public sealed partial class SignInTests
 
     private static readonly RsaSecurityKey EntraKey = new(RSA.Create(2048)) { KeyId = "entra-test-key" };
 
-    private async Task<(HttpClient Client, WebApplication App)> StartWithSmokeSignInAsync(bool on)
+    private Task<(HttpClient Client, WebApplication App)> StartWithSmokeSignInAsync(bool on) => StartWithSmokeSignInAsync(on, SmokeTenant);
+
+    private async Task<(HttpClient Client, WebApplication App)> StartWithSmokeSignInAsync(bool on, string tenantSetting)
     {
         var settings = Settings(Pepper, "");
         if (on)
         {
-            settings["SignIn:Smoke:TenantId"] = SmokeTenant;
+            settings["SignIn:Smoke:TenantId"] = tenantSetting;
             settings["SignIn:Smoke:Audience"] = SmokeAudience;
             settings["SignIn:Smoke:AllowedObjectIds:0"] = DeployIdentity;
         }
@@ -99,6 +101,17 @@ public sealed partial class SignInTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains("no-store", response.Headers.CacheControl!.ToString());
         Assert.Equal($$"""{"{{jokeId}}":-1}""", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task MyVotes_WithTheTenantSetInUppercase_StillTakeEntrasLowercaseTokens()
+    {
+        var (client, app) = await StartWithSmokeSignInAsync(on: true, SmokeTenant.ToUpperInvariant());
+        await SeedSmokeVoteAsync(app, 1);
+
+        using var response = await MyVotesAsync(client, "?ids=1", DeployToken(), null);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     public static TheoryData<string> RefusedTokens() => ["audience", "identity", "tenant", "issuer", "expired", "signature"];

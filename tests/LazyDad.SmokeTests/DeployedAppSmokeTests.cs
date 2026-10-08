@@ -147,26 +147,26 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
     [Fact]
     public async Task DeleteMyVotes_WhenSignedOut_IsUnauthorized()
     {
-        // Polled for the same reason as /me: the draining revision has no such endpoint (404 or 405).
-        var status = await target.PollAsync<HttpStatusCode>(async () =>
+        var status = await NewRevisionsAnswerAsync(() =>
         {
-            using var request = new HttpRequestMessage(HttpMethod.Delete, "me/votes");
+            var request = new HttpRequestMessage(HttpMethod.Delete, "me/votes");
             request.Headers.Add("X-LazyDad", "1");
-            using var response = await target.Client.SendAsync(request);
-            return response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed ? null : response.StatusCode;
-        }, SmokeTarget.ColdStartTimeout, "DELETE /me/votes to answer");
+            return request;
+        }, "DELETE /me/votes to answer");
 
         Assert.Equal(HttpStatusCode.Unauthorized, status);
     }
 
-    // A request the draining revision may still answer, without the endpoint (404 or 405): polled until the new one does.
+    // A request the draining revision may still answer: polled until the process under test does (its headers say so).
+    // Without an expected revision (a run by hand), any answer from a build that has the endpoint (not 404 or 405).
     private Task<HttpStatusCode> NewRevisionsAnswerAsync(Func<HttpRequestMessage> request, string what)
         => target.PollAsync<HttpStatusCode>(async () =>
         {
             using var message = request();
             using var response = await target.Client.SendAsync(message);
-            return response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed ? null : response.StatusCode;
-        }, SmokeTarget.ColdStartTimeout, what);
+            return target.IsFromTheProcessUnderTest(response)
+                && response.StatusCode is not (HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed) ? response.StatusCode : null;
+        }, SmokeTarget.ColdStartTimeout, what + (target.ExpectedRevision is null ? "" : $" from revision '{target.ExpectedRevision}'"));
 
     [Fact]
     public async Task MyVotes_AnswerTheDeployIdentity_WhereTheAppTrustsIt_AndNobodySignedOut()
