@@ -2305,12 +2305,13 @@ What the set-up job creates, all in `lazydad-loadtest-rg`, which is empty betwee
 |---|---|---|
 | `lazydad-app-loadtest`, in `lazydad-cae` (West Europe) | 0.25 vCPU / 0.5 GiB per replica, the image built from the branch | the *replicas* input (1–5); the scheduler and the leaderboard off (no LLM calls); the vote limit raised (all simulated visitors share your address); only your IP admitted (copied from staging's `home` rule) |
 | `lazydad-sql-loadtest` (Sweden Central), database `lazydad-db-loadtest` | Basic (5 DTU), Entra-only | the *jokes* input: synthetic jokes, two per 4 hours going back from now, with a few votes each and a Top 3 |
-| `lazydad-idp-loadtest`, in `lazydad-cae` | sign-in on, with all five providers and production's checks | the providers are a fake (`tests/load/FakeIdentityProvider.cs`) that approves every sign-in at once as a new account; the app reaches it through `SignIn:LoadTest:Authority`, with made-up clients, a pepper made for the run, and its key ring in the load test's database (no Key Vault key) |
+| `lazydad-idp-loadtest`, in `lazydad-cae` | sign-in on, with all five providers and production's checks | the providers are a fake (`tests/load/FakeIdentityProvider.cs`) that approves every sign-in at once as a new account; the app runs in the `LoadTest` environment and reaches it through `SignIn:LoadTest:Authority`, with made-up clients, a pepper made for the run, and its key ring in the load test's database (no Key Vault key) |
 | Images in `lazydad-loadtest` | | the branch's build, and the fake's (`idp-<commit>`) |
 
 The fake is open to everyone (readers' browsers are sent to it, and the app's replicas call it from addresses an allow
 list can't name in advance); that's harmless, since its sign-ins mean something only to the load-test app, which admits
-only you. The app refuses `SignIn:LoadTest:Authority` next to the scheduler or the smoke sign-in, and Deploy Environment
+only you, and it sends readers back only to that app's `/signin-<provider>` callbacks. The app refuses
+`SignIn:LoadTest:Authority` outside the `LoadTest` environment or next to the scheduler or the smoke sign-in, and Deploy Environment
 refuses to deploy an app that has it, so it can't reach staging or production. The real providers' speed isn't load
 tested: production measures it (`lazydad_signin_provider_duration_seconds`, section 11).
 

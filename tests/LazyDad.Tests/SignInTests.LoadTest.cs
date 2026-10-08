@@ -38,8 +38,8 @@ public sealed partial class SignInTests
         settings[$"SignIn:{section}:ClientSecret"] = FakeOpenIdProvider.ClientSecret;
         foreach (var (key, value) in extra)
             settings[key] = value;
-        // Production's environment: a load test runs the app as production does, only without a Key Vault key.
-        var app = await StartAsync(Environments.Production, settings,
+        // The load test's own environment: as production otherwise, only without a Key Vault key.
+        var app = await StartAsync(LazyDad.Api.Configuration.SignInOptionsValidator.LoadTestEnvironment, settings,
             services => services.AddHttpClient(SignInBackchannel.ClientName(provider)).ConfigurePrimaryHttpMessageHandler(() => fake));
         var client = Client(app);
 
@@ -63,7 +63,7 @@ public sealed partial class SignInTests
         settings["SignIn:LoadTest:Authority"] = FakeAuthority;
         settings[$"{section}:ClientId"] = "load-test";
         settings[$"{section}:ClientSecret"] = "load-test";
-        var client = Client(await StartAsync(Environments.Production, settings, _ => { }));
+        var client = Client(await StartAsync(LazyDad.Api.Configuration.SignInOptionsValidator.LoadTestEnvironment, settings, _ => { }));
 
         var (authorize, _) = await StartRemoteSignInAsync(client, provider, "/");
 

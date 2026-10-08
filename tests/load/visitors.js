@@ -59,7 +59,7 @@ export const options = {
     http_req_failed: [{ threshold: 'rate<0.02', abortOnFail: true, delayAbortEval: '1m' }],
     // A sign-in is four requests in a row (five with the page), so it gets more time than one request.
     signin_round_trip: [{ threshold: 'p(95)<4000', abortOnFail: true, delayAbortEval: '1m' }],
-    signin_completed: [{ threshold: 'rate>0.98', abortOnFail: true, delayAbortEval: '1m' }],
+    signin_completed: [{ threshold: 'rate>=0.98', abortOnFail: true, delayAbortEval: '1m' }],
   },
   summaryTrendStats: ['avg', 'med', 'p(95)', 'p(99)', 'max'],
 };

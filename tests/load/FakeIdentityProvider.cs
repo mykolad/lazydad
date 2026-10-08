@@ -41,13 +41,22 @@ string Origin(HttpRequest request) => $"{request.Scheme}://{request.Host}";
 
 app.MapGet("/healthz", () => Results.Ok(new { status = "healthy" }));
 
+// Readers go back only to the load-test app's sign-in callbacks: it's open to everyone, and would be an open redirect
+// otherwise. ALLOWED_REDIRECT_HOST is the app's host (the workflow sets it); without it, only this machine's.
+var allowedRedirectHost = app.Configuration["ALLOWED_REDIRECT_HOST"] ?? "localhost";
+string[] providers = ["github", "google", "microsoft", "telegram", "facebook"];
+
 // — authorize: every provider approves at once, as a new account —
 app.MapGet("/{provider}/authorize", (string provider, HttpRequest request) =>
 {
     var query = request.Query;
     var redirect = query["redirect_uri"].ToString();
-    if (!Uri.TryCreate(redirect, UriKind.Absolute, out _))
-        return Results.BadRequest("redirect_uri is required.");
+    if (!providers.Contains(provider))
+        return Results.NotFound();
+    if (!Uri.TryCreate(redirect, UriKind.Absolute, out var callback) || callback.Scheme is not ("https" or "http")
+        || !string.Equals(callback.Host, allowedRedirectHost, StringComparison.OrdinalIgnoreCase)
+        || callback.AbsolutePath != $"/signin-{provider}")
+        return Results.BadRequest($"redirect_uri must be https://{allowedRedirectHost}/signin-{provider}.");
     var code = Code.Write(new Grant(provider, RandomAccount(), query["nonce"].ToString(), query["client_id"].ToString()));
     return Results.Redirect(QueryHelpers.AddQueryString(redirect, new Dictionary<string, string?> { ["code"] = code, ["state"] = query["state"] }));
 });

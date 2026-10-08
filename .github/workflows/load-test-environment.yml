@@ -202,13 +202,16 @@ jobs:
         run: |
           pull_id=$(az identity show -g "$MAIN_RESOURCE_GROUP" -n lazydad-acr-pull --query id -o tsv)
           image="$REGISTRY/$REPOSITORY@${{ steps.idp-image.outputs.digest }}"
+          # It sends readers back only to the load-test app's callbacks (an open redirect otherwise): that app's address.
+          domain=$(az containerapp env show -g "$MAIN_RESOURCE_GROUP" -n "$CONTAINER_ENVIRONMENT" --query properties.defaultDomain -o tsv)
           if az containerapp show -g "$RESOURCE_GROUP" -n "$IDP" -o none 2> /dev/null; then
-            az containerapp update -g "$RESOURCE_GROUP" -n "$IDP" --image "$image" -o none
+            az containerapp update -g "$RESOURCE_GROUP" -n "$IDP" --image "$image" --set-env-vars "ALLOWED_REDIRECT_HOST=$APP.$domain" -o none
           else
             environment=$(az containerapp env show -g "$MAIN_RESOURCE_GROUP" -n "$CONTAINER_ENVIRONMENT" --query id -o tsv)
             az containerapp create -g "$RESOURCE_GROUP" -n "$IDP" --environment "$environment" --image "$image" \
               --user-assigned "$pull_id" --registry-server "$REGISTRY" --registry-identity "$pull_id" \
-              --ingress external --target-port 8080 --min-replicas 1 --max-replicas 1 --cpu 0.25 --memory 0.5Gi -o none
+              --ingress external --target-port 8080 --min-replicas 1 --max-replicas 1 --cpu 0.25 --memory 0.5Gi \
+              --env-vars "ALLOWED_REDIRECT_HOST=$APP.$domain" -o none
           fi
           fqdn=$(az containerapp show -g "$RESOURCE_GROUP" -n "$IDP" --query properties.configuration.ingress.fqdn -o tsv)
           echo "url=https://$fqdn" >> "$GITHUB_OUTPUT"
@@ -248,6 +251,7 @@ jobs:
             "OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-eu-north-0.grafana.net/otlp"
             "OTEL_EXPORTER_OTLP_HEADERS=secretref:otlp-headers"
             "OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=loadtest"
+            "ASPNETCORE_ENVIRONMENT=LoadTest"
             "SignIn__VoterKeyPepper=$pepper"
             "SignIn__LoadTest__Authority=$IDP_URL"
             "SignIn__GitHub__ClientId=load-test" "SignIn__GitHub__ClientSecret=load-test"

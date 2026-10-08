@@ -39,7 +39,7 @@ public class SignInOptionsValidator : IValidateOptions<SignInOptions>
         var keyId = keyRing.Value.KeyVaultKeyId;
         if (keyId.Length > 0 && !keyRing.Value.TryGetKeyId(out _))
             errors.Add($"{KeyRingOptions.SectionName}:KeyVaultKeyId must be a Key Vault key's https URL without a version (…/keys/<name>), was '{keyId}'.");
-        else if (keyId.Length == 0 && !environment.IsDevelopment() && !options.LoadTest.Enabled)
+        else if (keyId.Length == 0 && !environment.IsDevelopment() && !(options.LoadTest.Enabled && environment.IsEnvironment(LoadTestEnvironment)))
             errors.Add($"Sign-in is on, so {KeyRingOptions.SectionName}:KeyVaultKeyId must name the Key Vault key that protects " +
                 "the cookies' key ring (only Development and a load test may leave it unprotected).");
 
@@ -47,13 +47,19 @@ public class SignInOptionsValidator : IValidateOptions<SignInOptions>
         return Result(errors);
     }
 
-    // The fake identity provider signs anyone in: an app trusting it must be the load-test app, which never generates
-    // jokes (no model access, and production's scheduler would be the giveaway) and is never smoke-tested.
+    /// <summary>The environment only the Load Test Environment workflow runs the app in (ASPNETCORE_ENVIRONMENT).</summary>
+    public const string LoadTestEnvironment = "LoadTest";
+
+    // The fake identity provider signs anyone in: an app trusting it must be the load-test app. Settings alone can't
+    // prove that (a production app with its scheduler turned off would pass), so it also takes the environment only the
+    // load-test workflow sets; and the app never generates jokes nor is smoke-tested there.
     private void LoadTest(List<string> errors, SignInOptions options)
     {
         if (!options.LoadTest.Enabled)
             return;
         var section = $"{SignInOptions.SectionName}:LoadTest:Authority";
+        if (!environment.IsEnvironment(LoadTestEnvironment))
+            errors.Add($"{section} is only for the load test: the app must run in the {LoadTestEnvironment} environment, not {environment.EnvironmentName}.");
         if (!Uri.TryCreate(options.LoadTest.Authority, UriKind.Absolute, out var authority) || authority.Scheme is not ("https" or "http"))
             errors.Add($"{section} must be the fake identity provider's address.");
         if (jokeGeneration.Value.Languages.Any(language => language.Enabled))

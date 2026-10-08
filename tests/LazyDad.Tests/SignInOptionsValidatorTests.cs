@@ -104,13 +104,16 @@ public class SignInOptionsValidatorTests
     }
 
     [Theory]
-    [InlineData("https://lazydad-idp-loadtest.example.io", false, false, true)]
-    [InlineData("http://localhost:5299", false, false, true)]
-    // The fake signs anyone in: never next to the scheduler (the giveaway of staging or production) or the smoke sign-in.
-    [InlineData("https://lazydad-idp-loadtest.example.io", true, false, false)]
-    [InlineData("https://lazydad-idp-loadtest.example.io", false, true, false)]
-    [InlineData("lazydad-idp-loadtest", false, false, false)]
-    public void Validate_TheLoadTestsFakeProvider_OnlyWithoutTheSchedulerOrTheSmokeSignIn(string authority, bool scheduler, bool smoke, bool valid)
+    [InlineData("https://lazydad-idp-loadtest.example.io", "LoadTest", false, false, true)]
+    [InlineData("http://localhost:5299", "LoadTest", false, false, true)]
+    // The fake signs anyone in: only in the load test's own environment, never next to the scheduler or the smoke sign-in.
+    [InlineData("https://lazydad-idp-loadtest.example.io", "Production", false, false, false)]
+    [InlineData("https://lazydad-idp-loadtest.example.io", "Development", false, false, false)]
+    [InlineData("https://lazydad-idp-loadtest.example.io", "LoadTest", true, false, false)]
+    [InlineData("https://lazydad-idp-loadtest.example.io", "LoadTest", false, true, false)]
+    [InlineData("lazydad-idp-loadtest", "LoadTest", false, false, false)]
+    public void Validate_TheLoadTestsFakeProvider_OnlyInTheLoadTestsEnvironment_WithoutTheSchedulerOrTheSmokeSignIn(string authority,
+        string environment, bool scheduler, bool smoke, bool valid)
     {
         var options = new SignInOptions
         {
@@ -120,9 +123,9 @@ public class SignInOptionsValidatorTests
         };
         var jokes = new JokeGenerationOptions { Languages = [new() { Language = "Ukrainian", LanguageCode = "uk", Enabled = scheduler }] };
 
-        // Production's environment, without a Key Vault key: the load test's key ring is its own database's.
+        // Without a Key Vault key: the load test's key ring is its own database's.
         var result = new SignInOptionsValidator(Options.Create(new KeyRingOptions()), Options.Create(jokes),
-            Mock.Of<IHostEnvironment>(e => e.EnvironmentName == Environments.Production)).Validate(null, options);
+            Mock.Of<IHostEnvironment>(e => e.EnvironmentName == environment)).Validate(null, options);
 
         Assert.Equal(valid, result.Succeeded);
     }
