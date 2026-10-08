@@ -60,6 +60,7 @@ public class SignInOptionsValidatorTests
     [InlineData("Google", "client-id", "", true)]
     [InlineData("Google", "", "client-secret", false)]
     [InlineData("Telegram", "client-id", "", true)]
+    [InlineData("Facebook", "", "client-secret", true)]
     public void Validate_AProvidersClientIdAndSecret_GoTogether_EvenWithSignInOff(string provider, string clientId, string clientSecret, bool signInOn)
     {
         var client = new OAuthClientOptions { ClientId = clientId, ClientSecret = clientSecret };
