@@ -80,6 +80,19 @@ public sealed class SmokeTarget : IDisposable
         => (ExpectedRevision is null || status.GetProperty("revision").GetString() == ExpectedRevision)
             && (NotProcess is null || status.GetProperty("process").GetString() != NotProcess);
 
+    /// <summary>
+    /// Whether an answer came from the process under test, by the headers every answer carries
+    /// (<c>X-LazyDad-Revision</c>, <c>X-LazyDad-Process</c>): while the old revision drains it answers some requests, and
+    /// once it has the same endpoint, only these tell the two apart. An answer without them is an older build's.
+    /// </summary>
+    public bool IsFromTheProcessUnderTest(HttpResponseMessage response)
+    {
+        static string? Header(HttpResponseMessage response, string name)
+            => response.Headers.TryGetValues(name, out var values) ? values.FirstOrDefault() : null;
+        return (ExpectedRevision is null || Header(response, "X-LazyDad-Revision") == ExpectedRevision)
+            && (NotProcess is null || Header(response, "X-LazyDad-Process") is { } process && process != NotProcess);
+    }
+
     /// <summary>Enabled languages and their models, from the deployed appsettings.json.</summary>
     public static IReadOnlyDictionary<string, IReadOnlyList<string>> ConfiguredLanguages()
     {

@@ -326,7 +326,8 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
   Deploys remove any `App__Version` container setting, so the image is the only source.
 - `/healthz` returns `{status, version, revision}`: `version` is the image commit (short SHA),
   `revision` is the platform's `CONTAINER_APP_REVISION`, unique per rollout. Smoke tests wait for both; Traffic
-  Manager's health checks expect its `200`.
+  Manager's health checks expect its `200`. Every answer also carries `X-LazyDad-Revision` and `X-LazyDad-Process`
+  (`SmokeHeaders`), so a smoke check of an endpoint the draining revision has too counts only the new process's answers.
 - `/status` returns the version, revision and this process's last scheduler tick per language
   (succeeded, saved joke ids and models, leaderboard outcome, and the error type only, no details). It lists only jokes
   that still exist (a saved one can be deleted later as a duplicate copy, by any replica); without the database, all.
