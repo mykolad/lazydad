@@ -58,7 +58,12 @@ over the five providers. New thresholds: a sign-in's round trip (the click to th
 least 98% of sign-ins completing. With more than one replica, a sign-in's steps land on different replicas, so the
 shared key ring is exercised.
 
-Checked locally only so far (SQL Server 2022 in Docker, one app on a laptop, 60 jokes, every visitor signing in): 25
-sign-ins across the providers, all completed, round trip p95 11 ms, no failed request. The first run in Azure, with 2
-replicas, goes here, next to the real providers' latency from production (`lazydad_signin_provider_duration_seconds`,
-the dashboard's sign-in panels), which a load test can't measure.
+k6 follows a sign-in's redirects one at a time and reads which process answered its start and its callback
+(`X-LazyDad-Process`); with `-e REPLICAS=2` or more, a run fails unless more than 10% of sign-ins crossed processes.
+
+Checked locally only so far (SQL Server 2022 in Docker, 60 jokes, every visitor signing in): with one app, 25
+sign-ins across the providers, all completed, round trip p95 11 ms; with two app processes behind a round-robin proxy,
+25 sign-ins, all started on one process and finished on the other, all completed, round trip p95 62 ms; no failed
+request either time. The first run in Azure, with 2 replicas, goes here, next to the real providers' latency from
+production (`lazydad_signin_provider_duration_seconds`, the dashboard's sign-in panels), which a load test can't
+measure.

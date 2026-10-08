@@ -346,7 +346,7 @@ jobs:
             echo "- Database: \`$DATABASE\` on \`$SQL_SERVER\` (Basic, 5 DTU), ${count:-?} jokes"
             echo "- Sign-in: all five providers at the fake identity provider, ${{ steps.idp.outputs.url }} (every sign-in a new made-up account)"
             echo "- Run the load from your machine (it admits your IP only):"
-            echo "  \`k6 run -e BASE_URL=$URL tests/load/visitors.js\`"
+            echo "  \`k6 run -e BASE_URL=$URL -e REPLICAS=${{ inputs.replicas }} tests/load/visitors.js\`"
             echo "- Grafana: the LazyDad dashboard with App \`$APP\`."
             echo "- When you're done: approve **tear-down** in this run (Review deployments). Reject it to keep the environment."
           } >> "$GITHUB_STEP_SUMMARY"

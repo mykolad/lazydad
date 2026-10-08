@@ -1,7 +1,7 @@
 // Simulated visitors for the load-test app (Load Test Environment workflow; infra/deployment-setup.md, section 12,
 // "Load test"). Run with k6 (https://k6.io) from an address the app admits:
 //
-//   k6 run -e BASE_URL=https://lazydad-app-loadtest.<environment domain> tests/load/visitors.js
+//   k6 run -e BASE_URL=https://lazydad-app-loadtest.<environment domain> -e REPLICAS=<the app's replicas> tests/load/visitors.js
 //
 // Each visitor does what app.js does in a browser: loads the page and its files, the summary, the Top 3, the first 20
 // jokes and who's signed in (/me); about 30% then sign in (SIGN_IN_SHARE), each with one of the five providers, which the
@@ -37,6 +37,11 @@ const PROVIDERS = ['github', 'google', 'microsoft', 'telegram', 'facebook'];
 // token exchange and id token check, the cookie, and the page. And whether it ended signed in.
 const signInRoundTrip = new Trend('signin_round_trip', true);
 const signInCompleted = new Rate('signin_completed');
+// Whether a sign-in's callback landed on another process than its start (X-LazyDad-Process): with several replicas,
+// the share that proves the shared key ring works, as for a sign-in that starts in one region and ends in the other.
+const signInCrossProcess = new Rate('signin_cross_process');
+// The app's replicas (the workflow's *replicas* input): with more than one, some sign-ins must cross.
+const REPLICAS = Number(__ENV.REPLICAS || '1');
 
 export const options = {
   scenarios: {
@@ -60,6 +65,8 @@ export const options = {
     // A sign-in is four requests in a row (five with the page), so it gets more time than one request.
     signin_round_trip: [{ threshold: 'p(95)<4000', abortOnFail: true, delayAbortEval: '1m' }],
     signin_completed: [{ threshold: 'rate>=0.98', abortOnFail: true, delayAbortEval: '1m' }],
+    // Checked at the end: with two replicas, about half should.
+    signin_cross_process: REPLICAS > 1 ? ['rate>0.1'] : [],
   },
   summaryTrendStats: ['avg', 'med', 'p(95)', 'p(99)', 'max'],
 };
@@ -90,17 +97,23 @@ function vote(items) {
 }
 
 // As the page's sign-in button does: to the app, which sends the reader to the provider, which (the fake) sends them
-// straight back with a code; the app exchanges it, sets the cookie and returns to the page. k6 follows the redirects and
-// keeps the cookies, as a browser does.
+// straight back with a code; the app exchanges it, sets the cookie and returns to the page. Each redirect is followed
+// here, one request at a time, to see which process answered the start and which the callback; k6 keeps the cookies,
+// as a browser does.
 function signIn() {
   const provider = PROVIDERS[Math.floor(Math.random() * PROVIDERS.length)];
   const started = Date.now();
-  const response = http.get(`${BASE_URL}/auth/signin/${provider}?returnUrl=%2F`, { tags: { name: 'signin' }, redirects: 5 });
-  const landed = response.status === 200 && response.url.replace(/\/$/, '') === BASE_URL;
-  const me = landed ? http.get(`${BASE_URL}/me`, Object.assign({ tags: { name: 'me' } }, json)) : null;
+  const step = (url, name) => http.get(url, { tags: { name }, redirects: 0 });
+  const start = step(`${BASE_URL}/auth/signin/${provider}?returnUrl=%2F`, 'signin start');
+  const approved = start.status === 302 ? step(start.headers.Location, 'signin provider') : null;
+  const callback = approved && approved.status === 302 ? step(approved.headers.Location, 'signin callback') : null;
+  const back = callback && callback.status === 302 && callback.headers.Location === '/' ? get('', 'page') : null;
+  const me = back && back.status === 200 ? http.get(`${BASE_URL}/me`, Object.assign({ tags: { name: 'me' } }, json)) : null;
   const signedIn = me !== null && me.status === 200 && me.json('signedIn') === true;
   signInRoundTrip.add(Date.now() - started, { provider });
   signInCompleted.add(signedIn, { provider });
+  if (signedIn)
+    signInCrossProcess.add(start.headers['X-Lazydad-Process'] !== callback.headers['X-Lazydad-Process'], { provider });
   check(signedIn, { 'signed in': ok => ok });
 }
 

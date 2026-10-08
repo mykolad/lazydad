@@ -2440,7 +2440,7 @@ gh variable set AZURE_CLIENT_ID -R $REPO --env loadtest --body (az identity show
 2. From your machine (k6: `winget install k6 --source winget`, or the release zip):
 
    ```bash
-   k6 run -e BASE_URL=https://lazydad-app-loadtest.<environment domain> tests/load/visitors.js
+   k6 run -e BASE_URL=https://lazydad-app-loadtest.<environment domain> -e REPLICAS=<replicas> tests/load/visitors.js
    ```
 
    Each simulated visitor loads the page as a browser does (its files, the summary, the Top 3, the first 20 jokes, and
@@ -2449,8 +2449,10 @@ gh variable set AZURE_CLIENT_ID -R $REPO --env loadtest --body (az identity show
    in 3-minute steps of about 10, 50, 100, 200 and 400 at once; k6 stops early when p95 latency passes 2 seconds, more
    than 2% of requests fail, a sign-in's round trip passes 4 seconds at p95, or fewer than 98% of sign-ins complete.
    `-e STAGES=10,50`, `-e STEP=1m` and `-e SIGN_IN_SHARE=0.5` change the steps and the share that signs in. With
-   *replicas* above 1, a sign-in's steps land on different replicas, as a sign-in that starts in one region and ends in
-   the other does in production.
+   *replicas* above 1 (pass the same number as `-e REPLICAS`), a sign-in's steps land on different replicas, as a
+   sign-in that starts in one region and ends in the other does in production: k6 follows each redirect itself, reads
+   which process answered the start and the callback (`X-LazyDad-Process`), and fails the run unless more than 10% of
+   sign-ins crossed (`signin_cross_process`).
 3. Watch Grafana (*App* `lazydad-app-loadtest`: requests, latency, CPU and memory against the limits), and afterwards
    Azure's view of the containers and the database:
 
