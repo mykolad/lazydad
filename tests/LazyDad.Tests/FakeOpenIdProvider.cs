@@ -15,10 +15,12 @@ namespace LazyDad.Tests;
 /// </summary>
 public sealed class FakeOpenIdProvider : HttpMessageHandler
 {
-    public const string ClientId = "test-client-id";
+    public const string ClientId = "6731de76-14a6-49ae-97bc-6eba6914391e";
     public const string ClientSecret = "test-client-secret";
     public const string Code = "the-code";
     public const string KeyId = "test-key";
+    /// <summary>The managed identity's token it accepts instead of the secret (a federated credential).</summary>
+    public const string Assertion = "test-managed-identity-token";
 
     private readonly OpenIdProvider endpoints;
     private readonly RsaSecurityKey key = new(RSA.Create(2048)) { KeyId = KeyId };
@@ -49,6 +51,20 @@ public sealed class FakeOpenIdProvider : HttpMessageHandler
     /// <summary>The last successful token exchange's form, as sent.</summary>
     public Dictionary<string, string> TokenRequest { get; private set; } = [];
 
+    /// <summary>Where it gives the app a token for itself (the client credentials grant), if anywhere: Microsoft's probe.</summary>
+    public string? ClientCredentialsEndpoint { get; set; }
+
+    // The client proves itself with its secret, or with the managed identity's token.
+    private static bool Authenticated(Dictionary<string, string> form)
+        => form.GetValueOrDefault("client_id") == ClientId
+            && (form.GetValueOrDefault("client_secret") == ClientSecret
+                || (form.GetValueOrDefault("client_assertion_type") == IClientAssertion.Type && form.GetValueOrDefault("client_assertion") == Assertion));
+
+    private static async Task<Dictionary<string, string>> FormAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        => (await request.Content!.ReadAsStringAsync(cancellationToken)).Split('&')
+            .Select(pair => pair.Split('='))
+            .ToDictionary(pair => WebUtility.UrlDecode(pair[0]), pair => WebUtility.UrlDecode(pair[1]));
+
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var uri = request.RequestUri!.AbsoluteUri;
@@ -66,12 +82,17 @@ public sealed class FakeOpenIdProvider : HttpMessageHandler
         if (uri == JwksUri)
             return Json(HttpStatusCode.OK, JsonSerializer.Serialize(new { keys = new[] { JsonWebKeyConverter.ConvertFromRSASecurityKey(PublicKey()) } },
                 new JsonSerializerOptions { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull }));
+        if (request.Method == HttpMethod.Post && uri == ClientCredentialsEndpoint)
+        {
+            var form = await FormAsync(request, cancellationToken);
+            return Authenticated(form) && form.GetValueOrDefault("grant_type") == "client_credentials"
+                ? Json(HttpStatusCode.OK, """{"access_token": "test-app-token", "token_type": "Bearer", "expires_in": 3600}""")
+                : Json(HttpStatusCode.Unauthorized, """{"error": "invalid_client"}""");
+        }
         if (request.Method == HttpMethod.Post && uri == endpoints.TokenEndpoint)
         {
-            var form = (await request.Content!.ReadAsStringAsync(cancellationToken)).Split('&')
-                .Select(pair => pair.Split('='))
-                .ToDictionary(pair => WebUtility.UrlDecode(pair[0]), pair => WebUtility.UrlDecode(pair[1]));
-            if (form.GetValueOrDefault("client_id") != ClientId || form.GetValueOrDefault("client_secret") != ClientSecret)
+            var form = await FormAsync(request, cancellationToken);
+            if (!Authenticated(form))
                 return Json(HttpStatusCode.Unauthorized, """{"error": "invalid_client"}""");
             if (form.GetValueOrDefault("code") != Code)
                 return Json(HttpStatusCode.BadRequest, """{"error": "invalid_grant"}""");

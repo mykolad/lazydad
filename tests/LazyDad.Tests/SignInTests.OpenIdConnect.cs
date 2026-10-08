@@ -12,24 +12,46 @@ namespace LazyDad.Tests;
 /// <summary>The OpenID Connect providers, each against a fake of itself (<see cref="FakeOpenIdProvider"/>).</summary>
 public sealed partial class SignInTests
 {
-    // Each OpenID Connect provider: its settings section and its endpoints.
-    private static readonly Dictionary<string, (string Section, OpenIdProvider Endpoints)> OpenIdProviderSettings = new()
+    private const string MicrosoftTenant = "3f1a6c2e-5b7d-4e8f-9a0b-1c2d3e4f5a6b";
+
+    // Each OpenID Connect provider: its settings section and endpoints, any settings it needs besides its client, and how
+    // its fake answers like it.
+    private static readonly Dictionary<string, (string Section, OpenIdProvider Endpoints, Dictionary<string, string?> Settings,
+        Action<FakeOpenIdProvider> Prepare)> OpenIdProviderSettings = new()
     {
-        [SignInProviders.Google] = ("Google", OpenIdProviders.Google),
+        [SignInProviders.Google] = ("Google", OpenIdProviders.Google, [], _ => { }),
+        // Each token names its own tenant as the issuer; the probe asks the registration's tenant for an app token.
+        [SignInProviders.Microsoft] = ("Microsoft", OpenIdProviders.Microsoft, new() { ["SignIn:Microsoft:TenantId"] = MicrosoftTenant }, fake =>
+        {
+            fake.Issuer = $"https://login.microsoftonline.com/{MicrosoftTenant}/v2.0";
+            fake.ExtraClaims["tid"] = MicrosoftTenant;
+            fake.ClientCredentialsEndpoint = OpenIdProviders.MicrosoftTenantTokenEndpoint(MicrosoftTenant);
+        }),
     };
 
     private async Task<(HttpClient Client, WebApplication App, FakeOpenIdProvider Provider)> StartWithOpenIdProviderAsync(string provider,
-        string clientSecret)
+        Action<Dictionary<string, string?>> settings, Action<IServiceCollection> configure)
     {
-        var (section, endpoints) = OpenIdProviderSettings[provider];
+        var (section, endpoints, extra, prepare) = OpenIdProviderSettings[provider];
         var fake = new FakeOpenIdProvider(endpoints);
-        var settings = Settings(Pepper, "");
-        settings[$"SignIn:{section}:ClientId"] = FakeOpenIdProvider.ClientId;
-        settings[$"SignIn:{section}:ClientSecret"] = clientSecret;
-        var app = await StartAsync(Environments.Development, settings,
-            services => services.AddHttpClient(SignInBackchannel.ClientName(provider)).ConfigurePrimaryHttpMessageHandler(() => fake));
+        prepare(fake);
+        var all = Settings(Pepper, "");
+        all[$"SignIn:{section}:ClientId"] = FakeOpenIdProvider.ClientId;
+        all[$"SignIn:{section}:ClientSecret"] = FakeOpenIdProvider.ClientSecret;
+        foreach (var (key, value) in extra)
+            all[key] = value;
+        settings(all);
+        var app = await StartAsync(Environments.Development, all, services =>
+        {
+            services.AddHttpClient(SignInBackchannel.ClientName(provider)).ConfigurePrimaryHttpMessageHandler(() => fake);
+            configure(services);
+        });
         return (Client(app), app, fake);
     }
+
+    private Task<(HttpClient Client, WebApplication App, FakeOpenIdProvider Provider)> StartWithOpenIdProviderAsync(string provider,
+        string clientSecret)
+        => StartWithOpenIdProviderAsync(provider, settings => settings[$"SignIn:{OpenIdProviderSettings[provider].Section}:ClientSecret"] = clientSecret, _ => { });
 
     private Task<(HttpClient Client, WebApplication App, FakeOpenIdProvider Provider)> StartWithOpenIdProviderAsync(string provider)
         => StartWithOpenIdProviderAsync(provider, FakeOpenIdProvider.ClientSecret);
@@ -168,6 +190,56 @@ public sealed partial class SignInTests
                 && cookies.Any(c => c.StartsWith($"{SignInSetup.CookieName}=;", StringComparison.Ordinal)), $"/{path} signed the reader out.");
         }
         Assert.True((await MeAsync(client, cookie)).GetProperty("signedIn").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Microsoft_RefusesAnIssuerThatIsNotTheTokensOwnTenant()
+    {
+        // A token from one tenant claiming another's issuer: with "common", any tenant's tokens are welcome, but only as itself.
+        var (client, _, fake) = await StartWithOpenIdProviderAsync(SignInProviders.Microsoft);
+        fake.Issuer = "https://login.microsoftonline.com/9188040d-6c67-4c5b-b112-36a304b66dad/v2.0";
+
+        using var response = await SignInThroughAsync(client, SignInProviders.Microsoft, fake, "/");
+
+        Assert.Equal(SignInEvents.FailedRedirect, response.Headers.Location!.OriginalString);
+        Assert.False(SignedIn(response));
+    }
+
+    private sealed class FakeManagedIdentity(string token) : IClientAssertion
+    {
+        public Task<string> GetAsync(CancellationToken cancellationToken) => Task.FromResult(token);
+    }
+
+    // Microsoft with no secret: the app registration trusts the managed identity, whose token it sends instead.
+    private Task<(HttpClient Client, WebApplication App, FakeOpenIdProvider Provider)> StartWithMicrosoftAndAManagedIdentityAsync(string token)
+        => StartWithOpenIdProviderAsync(SignInProviders.Microsoft,
+            settings =>
+            {
+                settings["SignIn:Microsoft:ClientSecret"] = "";
+                settings["SignIn:Microsoft:ManagedIdentityClientId"] = "8d0f1c7e-0000-4000-8000-000000000001";
+            },
+            services => services.AddSingleton<IClientAssertion>(new FakeManagedIdentity(token)));
+
+    [Fact]
+    public async Task Microsoft_WithAManagedIdentity_SendsItsTokenInsteadOfASecret()
+    {
+        var (client, app, fake) = await StartWithMicrosoftAndAManagedIdentityAsync(FakeOpenIdProvider.Assertion);
+
+        using var response = await SignInThroughAsync(client, SignInProviders.Microsoft, fake, "/");
+
+        Assert.True(SignedIn(response));
+        Assert.Equal(FakeOpenIdProvider.Assertion, fake.TokenRequest["client_assertion"]);
+        Assert.Equal(IClientAssertion.Type, fake.TokenRequest["client_assertion_type"]);
+        Assert.False(fake.TokenRequest.ContainsKey("client_secret"));
+        Assert.Equal(ProviderState.Valid, await ProbedAsync(app, SignInProviders.Microsoft));
+    }
+
+    [Fact]
+    public async Task Microsoft_WithAManagedIdentityTheRegistrationDoesNotTrust_IsInvalid()
+    {
+        var (_, app, _) = await StartWithMicrosoftAndAManagedIdentityAsync("another-identity's-token");
+
+        Assert.Equal(ProviderState.Invalid, await ProbedAsync(app, SignInProviders.Microsoft));
     }
 
     [Fact]

@@ -102,7 +102,7 @@ public sealed class OAuthCodeProbe : ISignInProbe
     }
 
     // The "error" of an OAuth error answer (it never carries a secret); null if the body isn't one.
-    private static string? ErrorCode(string body)
+    internal static string? ErrorCode(string body)
     {
         try
         {

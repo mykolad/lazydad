@@ -181,6 +181,7 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
     {
         ["github"] = "https://github.com/login/oauth/authorize",
         ["google"] = "https://accounts.google.com/o/oauth2/v2/auth",
+        ["microsoft"] = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
     };
 
     [Fact]

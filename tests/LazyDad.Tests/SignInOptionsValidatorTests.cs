@@ -67,4 +67,36 @@ public class SignInOptionsValidatorTests
 
         Assert.Contains(Validate(options, KeyId, Environments.Production).Failures!, f => f.Contains($"SignIn:{provider}"));
     }
+
+    private const string Tenant = "3f1a6c2e-5b7d-4e8f-9a0b-1c2d3e4f5a6b";
+    private const string App = "6731de76-14a6-49ae-97bc-6eba6914391e";
+    private const string Identity = "8d0f1c7e-0000-4000-8000-000000000001";
+
+    [Theory]
+    [InlineData(App, Tenant, "secret", "", true)]
+    [InlineData(App, Tenant, "", Identity, true)]
+    [InlineData("", "", "", "", true)]
+    // A secret and a managed identity both: which one proves the app would be a guess.
+    [InlineData(App, Tenant, "secret", Identity, false)]
+    [InlineData(App, Tenant, "", "", false)]
+    [InlineData(App, "", "secret", "", false)]
+    [InlineData(App, "contoso.onmicrosoft.com", "secret", "", false)]
+    // Entra ids are GUIDs.
+    [InlineData("my-app", Tenant, "secret", "", false)]
+    [InlineData(App, Tenant, "", "lazydad-production", false)]
+    [InlineData("", Tenant, "secret", "", false)]
+    [InlineData("", "", "", Identity, false)]
+    public void Validate_Microsoft_NeedsItsTenant_AndASecretOrAManagedIdentity(string clientId, string tenantId, string secret,
+        string managedIdentity, bool valid)
+    {
+        var options = new SignInOptions
+        {
+            VoterKeyPepper = Pepper,
+            Microsoft = new() { ClientId = clientId, TenantId = tenantId, ClientSecret = secret, ManagedIdentityClientId = managedIdentity },
+        };
+
+        var result = Validate(options, KeyId, Environments.Production);
+
+        Assert.Equal(valid, !(result.Failures ?? []).Any(f => f.Contains("SignIn:Microsoft")));
+    }
 }

@@ -23,6 +23,7 @@ public class SignInOptionsValidator : IValidateOptions<SignInOptions>
         var errors = new List<string>();
         Client(errors, "GitHub", options.GitHub);
         Client(errors, "Google", options.Google);
+        Microsoft(errors, options.Microsoft);
         if (!options.Enabled)
             return Result(errors);
 
@@ -48,5 +49,26 @@ public class SignInOptionsValidator : IValidateOptions<SignInOptions>
     {
         if (client.ClientId.Length > 0 != client.ClientSecret.Length > 0)
             errors.Add($"{SignInOptions.SectionName}:{provider} needs both ClientId and ClientSecret, or neither.");
+    }
+
+    // A client id, its tenant, and exactly one way to prove itself: a secret or a managed identity. Nothing at all is off.
+    private static void Microsoft(List<string> errors, MicrosoftClientOptions microsoft)
+    {
+        var section = $"{SignInOptions.SectionName}:Microsoft";
+        if (!microsoft.Configured)
+        {
+            if (microsoft.ClientSecret.Length > 0 || microsoft.TenantId.Length > 0 || microsoft.UsesManagedIdentity)
+                errors.Add($"{section} has settings but no ClientId.");
+            return;
+        }
+        // Entra ids are GUIDs: a mangled one should stop startup, not the first sign-in.
+        if (!Guid.TryParseExact(microsoft.ClientId, "D", out _))
+            errors.Add($"{section}:ClientId must be the app registration's client id (a GUID).");
+        if (!Guid.TryParseExact(microsoft.TenantId, "D", out _))
+            errors.Add($"{section}:TenantId must be the app registration's tenant id (a GUID).");
+        if (microsoft.UsesManagedIdentity && !Guid.TryParseExact(microsoft.ManagedIdentityClientId, "D", out _))
+            errors.Add($"{section}:ManagedIdentityClientId must be the managed identity's client id (a GUID).");
+        if (microsoft.ClientSecret.Length > 0 == microsoft.UsesManagedIdentity)
+            errors.Add($"{section} needs either ClientSecret or ManagedIdentityClientId (a federated credential), not both.");
     }
 }
