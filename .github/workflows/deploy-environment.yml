@@ -295,6 +295,16 @@ jobs:
       # The smoke tests vote signed in as this environment's deploy identity, which the app trusts for exactly this
       # audience (SignIn:Smoke; runbook section 7, step 13). Only where the environment's SMOKE_TOKEN_RESOURCE variable is
       # set: before the owner's setup there's no such app registration, and the smoke tests check the app agrees.
+      # Logged in again first: a token for a new audience needs a fresh GitHub OIDC assertion, and the first login's has
+      # expired by now (minutes), however long the ARM token it got still lasts.
+      - name: Log in again for the smoke tests' token
+        if: ${{ vars.SMOKE_TOKEN_RESOURCE != '' }}
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
       - name: Get the deploy identity's token for the smoke tests
         if: ${{ vars.SMOKE_TOKEN_RESOURCE != '' }}
         env:
