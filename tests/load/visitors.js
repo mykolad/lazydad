@@ -1,14 +1,18 @@
 // Simulated visitors for the load-test app (Load Test Environment workflow; infra/deployment-setup.md, section 12,
 // "Load test"). Run with k6 (https://k6.io) from an address the app admits:
 //
-//   k6 run -e BASE_URL=https://lazydad-app-loadtest.<environment domain> tests/load/visitors.js
+//   k6 run -e BASE_URL=https://lazydad-app-loadtest.<environment domain> -e REPLICAS=<the app's replicas> tests/load/visitors.js
 //
-// Each visitor does what app.js does in a browser: loads the page and its files, the summary, the Top 3 and the first
-// 20 jokes; then up to 10 times reads for about 15 seconds, votes on two jokes of the batch on screen, and scrolls,
+// Each visitor does what app.js does in a browser: loads the page and its files, the summary, the Top 3, the first 20
+// jokes and who's signed in (/me); about 30% then sign in (SIGN_IN_SHARE), each with one of the five providers, which the
+// load-test app finds at a fake identity provider (tests/load/FakeIdentityProvider.cs) that approves at once as a new
+// account; then up to 10 times reads for about 15 seconds, votes on two jokes of the batch on screen, and scrolls,
 // which loads the next 20. Visitors keep arriving in steps (STAGES below), so the number on the page at once grows
-// until the app slows down or fails; k6 then stops the run (the thresholds).
+// until the app slows down or fails; k6 then stops the run (the thresholds). With more than one replica, a sign-in's
+// steps land on different replicas, as one that starts in one region and finishes in the other does in production.
 import http from 'k6/http';
 import { check, sleep } from 'k6';
+import { Rate, Trend } from 'k6/metrics';
 
 const BASE_URL = (__ENV.BASE_URL || '').replace(/\/$/, '');
 if (!BASE_URL) throw new Error('Set BASE_URL, e.g. -e BASE_URL=https://lazydad-app-loadtest.<environment domain>');
@@ -26,6 +30,18 @@ const STEP = __ENV.STEP || '3m';
 // prepared dropped 202 visits at about 250 at once). A visit lasts under 3 minutes, so 1.5 × the largest step is
 // enough; each takes a few MB on the machine running k6.
 const VUS = Math.max(50, Math.ceil(Math.max(...STAGES) * 1.5));
+const SIGN_IN_SHARE = Number(__ENV.SIGN_IN_SHARE || '0.3');
+const PROVIDERS = ['github', 'google', 'microsoft', 'telegram', 'facebook'];
+
+// A sign-in from the click to the page again: the app, the provider's (fake, instant) approval, the callback with its
+// token exchange and id token check, the cookie, and the page. And whether it ended signed in.
+const signInRoundTrip = new Trend('signin_round_trip', true);
+const signInCompleted = new Rate('signin_completed');
+// Whether a sign-in's callback landed on another process than its start (X-LazyDad-Process): with several replicas,
+// the share that proves the shared key ring works, as for a sign-in that starts in one region and ends in the other.
+const signInCrossProcess = new Rate('signin_cross_process');
+// The app's replicas (the workflow's *replicas* input): with more than one, some sign-ins must cross.
+const REPLICAS = Number(__ENV.REPLICAS || '1');
 
 export const options = {
   scenarios: {
@@ -46,6 +62,11 @@ export const options = {
     // Stop once the app clearly can't keep up (after a minute, so a cold start doesn't count).
     http_req_duration: [{ threshold: 'p(95)<2000', abortOnFail: true, delayAbortEval: '1m' }],
     http_req_failed: [{ threshold: 'rate<0.02', abortOnFail: true, delayAbortEval: '1m' }],
+    // A sign-in is four requests in a row (five with the page), so it gets more time than one request.
+    signin_round_trip: [{ threshold: 'p(95)<4000', abortOnFail: true, delayAbortEval: '1m' }],
+    signin_completed: [{ threshold: 'rate>=0.98', abortOnFail: true, delayAbortEval: '1m' }],
+    // Checked at the end: with two replicas, about half should.
+    signin_cross_process: REPLICAS > 1 ? ['rate>0.1'] : [],
   },
   summaryTrendStats: ['avg', 'med', 'p(95)', 'p(99)', 'max'],
 };
@@ -75,6 +96,27 @@ function vote(items) {
   }
 }
 
+// As the page's sign-in button does: to the app, which sends the reader to the provider, which (the fake) sends them
+// straight back with a code; the app exchanges it, sets the cookie and returns to the page. Each redirect is followed
+// here, one request at a time, to see which process answered the start and which the callback; k6 keeps the cookies,
+// as a browser does.
+function signIn() {
+  const provider = PROVIDERS[Math.floor(Math.random() * PROVIDERS.length)];
+  const started = Date.now();
+  const step = (url, name) => http.get(url, { tags: { name }, redirects: 0 });
+  const start = step(`${BASE_URL}/auth/signin/${provider}?returnUrl=%2F`, 'signin start');
+  const approved = start.status === 302 ? step(start.headers.Location, 'signin provider') : null;
+  const callback = approved && approved.status === 302 ? step(approved.headers.Location, 'signin callback') : null;
+  const back = callback && callback.status === 302 && callback.headers.Location === '/' ? get('', 'page') : null;
+  const me = back && back.status === 200 ? http.get(`${BASE_URL}/me`, Object.assign({ tags: { name: 'me' } }, json)) : null;
+  const signedIn = me !== null && me.status === 200 && me.json('signedIn') === true;
+  signInRoundTrip.add(Date.now() - started, { provider });
+  signInCompleted.add(signedIn, { provider });
+  if (signedIn)
+    signInCrossProcess.add(start.headers['X-Lazydad-Process'] !== callback.headers['X-Lazydad-Process'], { provider });
+  check(signedIn, { 'signed in': ok => ok });
+}
+
 export default function () {
   // The page, then what it loads: its files, then the summary, the Top 3 and the first batch, in parallel.
   check(get('', 'page'), { 'page 200': r => r.status === 200 });
@@ -86,16 +128,19 @@ export default function () {
     ['GET', `${BASE_URL}/favicon.svg`, null, { tags: { name: 'static' } }],
     ['GET', `${BASE_URL}/site.webmanifest`, null, { tags: { name: 'static' } }],
   ]);
-  // app.js asks for these three at once (Promise.all).
-  const [summary, top, first] = http.batch([
+  // app.js asks for these at once (Promise.all), and who's signed in.
+  const [summary, top, first, me] = http.batch([
     ['GET', `${BASE_URL}/jokes/summary`, null, Object.assign({ tags: { name: 'summary' } }, json)],
     ['GET', `${BASE_URL}/jokes/top`, null, Object.assign({ tags: { name: 'top' } }, json)],
     ['GET', `${BASE_URL}/jokes/feed?sort=new&limit=${PAGE_SIZE}`, null, Object.assign({ tags: { name: 'feed' } }, json)],
+    ['GET', `${BASE_URL}/me`, null, Object.assign({ tags: { name: 'me' } }, json)],
   ]);
   check(summary, { 'summary 200': r => r.status === 200 });
   check(top, { 'top 200': r => r.status === 200 });
   check(first, { 'feed 200': r => r.status === 200 });
+  check(me, { 'me 200': r => r.status === 200 });
   let page = first.status === 200 ? first.json() : null;
+  if (Math.random() < SIGN_IN_SHARE) signIn();
 
   for (let i = 0; i < SCROLLS && page && page.items.length > 0; i++) {
     sleep(READ_MIN + Math.random() * (READ_MAX - READ_MIN));

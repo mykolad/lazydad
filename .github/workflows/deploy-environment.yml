@@ -101,6 +101,17 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      # The load test's fake identity provider signs anyone in: an app pointed at it must never be staging or production
+      # (the app itself refuses it next to the scheduler, too). Checked before anything changes.
+      - name: Refuse the load test's sign-in setting
+        run: |
+          found=$(az containerapp show -n "${{ inputs.app-name }}" -g "$RESOURCE_GROUP" \
+            --query "properties.template.containers[0].env[?name=='SignIn__LoadTest__Authority'] | length(@)" -o tsv)
+          if [ "${found:-0}" != "0" ]; then
+            echo "::error::${{ inputs.app-name }} has SignIn__LoadTest__Authority, the load test's fake identity provider. Remove it: az containerapp update -n ${{ inputs.app-name }} -g $RESOURCE_GROUP --remove-env-vars SignIn__LoadTest__Authority"
+            exit 1
+          fi
+
       # The runner's IP is unpredictable: it's allowed through the SQL firewall only while migrating,
       # and through the app's IP restrictions (if it has any) only during the smoke tests.
       - name: Detect runner IP

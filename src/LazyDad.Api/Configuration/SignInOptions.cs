@@ -29,6 +29,9 @@ public class SignInOptions
     /// </summary>
     public OAuthClientOptions Facebook { get; set; } = new();
 
+    /// <summary>A load test's fake identity provider (ProviderEndpoints). Never on staging or production.</summary>
+    public LoadTestSignInOptions LoadTest { get; set; } = new();
+
     /// <summary>The smoke tests' sign-in as the deploy identity (SmokeSignIn). Off while its audience is empty.</summary>
     public SmokeSignInOptions Smoke { get; set; } = new();
 
@@ -82,4 +85,17 @@ public class SmokeSignInOptions
     public List<string> AllowedObjectIds { get; set; } = [];
 
     public bool Enabled => Audience.Length > 0;
+}
+
+/// <summary>
+/// Points every configured provider at the load test's fake identity provider (<c>tests/load/FakeIdentityProvider.cs</c>),
+/// which signs anyone in as a made-up account. Only for the load-test app: the validator refuses it while the scheduler or
+/// the smoke sign-in is on, and Deploy Environment refuses to deploy an app that has it.
+/// </summary>
+public class LoadTestSignInOptions
+{
+    /// <summary>The fake's address, e.g. <c>https://lazydad-idp-loadtest.&lt;environment domain&gt;</c>.</summary>
+    public string Authority { get; set; } = string.Empty;
+
+    public bool Enabled => Authority.Length > 0;
 }

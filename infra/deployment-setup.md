@@ -2310,14 +2310,22 @@ What the set-up job creates, all in `lazydad-loadtest-rg`, which is empty betwee
 |---|---|---|
 | `lazydad-app-loadtest`, in `lazydad-cae` (West Europe) | 0.25 vCPU / 0.5 GiB per replica, the image built from the branch | the *replicas* input (1–5); the scheduler and the leaderboard off (no LLM calls); the vote limit raised (all simulated visitors share your address); only your IP admitted (copied from staging's `home` rule) |
 | `lazydad-sql-loadtest` (Sweden Central), database `lazydad-db-loadtest` | Basic (5 DTU), Entra-only | the *jokes* input: synthetic jokes, two per 4 hours going back from now, with a few votes each and a Top 3 |
-| Images in `lazydad-loadtest` | | the branch's build |
+| `lazydad-idp-loadtest`, in `lazydad-cae` | sign-in on, with all five providers and production's checks | the providers are a fake (`tests/load/FakeIdentityProvider.cs`) that approves every sign-in at once as a new account; the app runs in the `LoadTest` environment and reaches it through `SignIn:LoadTest:Authority`, with made-up clients, a pepper made for the run, and its key ring in the load test's database (no Key Vault key) |
+| Images in `lazydad-loadtest` | | the branch's build, and the fake's (`idp-<commit>`) |
+
+The fake is open to everyone (readers' browsers are sent to it, and the app's replicas call it from addresses an allow
+list can't name in advance); that's harmless, since its sign-ins mean something only to the load-test app, which admits
+only you, and it sends readers back only to that app's `/signin-<provider>` callbacks. The app refuses
+`SignIn:LoadTest:Authority` outside the `LoadTest` environment or next to the scheduler or the smoke sign-in, and Deploy Environment
+refuses to deploy an app that has it, so it can't reach staging or production. The real providers' speed isn't load
+tested: production measures it (`lazydad_signin_provider_duration_seconds`, section 11).
 
 The app sends telemetry to Grafana as `lazydad-app-loadtest` (pick it in the dashboard's *App* selector) with staging's
 token, `OtlpHeadersStaging` (write-only, and branch code can read it anyway through staging); the alert rules only
 match production's apps. Each replica counts toward Grafana's host-hours (section 11) while it runs. Cost: a few cents an hour for the app and the Basic database; under a dollar if
 it's left for a day.
 
-The run then waits at its **tear-down** job: approve it in the run (*Review deployments*) to delete the app, the SQL
+The run then waits at its **tear-down** job: approve it in the run (*Review deployments*) to delete the apps, the SQL
 server and the images; reject it to keep the environment, e.g. to change the replicas with another run (which updates
 the app and keeps the database). *tear-down-only* deletes whatever an earlier run left.
 
@@ -2432,13 +2440,19 @@ gh variable set AZURE_CLIENT_ID -R $REPO --env loadtest --body (az identity show
 2. From your machine (k6: `winget install k6 --source winget`, or the release zip):
 
    ```bash
-   k6 run -e BASE_URL=https://lazydad-app-loadtest.<environment domain> tests/load/visitors.js
+   k6 run -e BASE_URL=https://lazydad-app-loadtest.<environment domain> -e REPLICAS=<replicas> tests/load/visitors.js
    ```
 
-   Each simulated visitor loads the page as a browser does (its files, the summary, the Top 3, the first 20 jokes),
-   then up to 10 times reads for about 15 seconds, votes on two jokes of the batch and scrolls to the next 20. New
-   visitors arrive in 3-minute steps of about 10, 50, 100, 200 and 400 at once; k6 stops early when p95 latency
-   passes 2 seconds or more than 2% of requests fail. `-e STAGES=10,50` and `-e STEP=1m` change the steps.
+   Each simulated visitor loads the page as a browser does (its files, the summary, the Top 3, the first 20 jokes, and
+   `/me`); about 30% then sign in with a random provider (through the fake, following the redirects); then up to 10
+   times it reads for about 15 seconds, votes on two jokes of the batch and scrolls to the next 20. New visitors arrive
+   in 3-minute steps of about 10, 50, 100, 200 and 400 at once; k6 stops early when p95 latency passes 2 seconds, more
+   than 2% of requests fail, a sign-in's round trip passes 4 seconds at p95, or fewer than 98% of sign-ins complete.
+   `-e STAGES=10,50`, `-e STEP=1m` and `-e SIGN_IN_SHARE=0.5` change the steps and the share that signs in. With
+   *replicas* above 1 (pass the same number as `-e REPLICAS`), a sign-in's steps land on different replicas, as a
+   sign-in that starts in one region and ends in the other does in production: k6 follows each redirect itself, reads
+   which process answered the start and the callback (`X-LazyDad-Process`), and fails the run unless more than 10% of
+   sign-ins crossed (`signin_cross_process`).
 3. Watch Grafana (*App* `lazydad-app-loadtest`: requests, latency, CPU and memory against the limits), and afterwards
    Azure's view of the containers and the database:
 

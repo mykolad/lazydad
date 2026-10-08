@@ -491,10 +491,19 @@ branch's image (into `lazydad-loadtest`), creates a Basic SQL database (prod's t
 synthetic jokes (`tests/load/Seed.cs`; the *jokes* input), and runs `lazydad-app-loadtest` in `lazydad-cae` at prod's
 size with the *replicas* input, the scheduler off, the vote limit raised, only the owner's IP admitted (copied from
 staging's `home` rule, never written to the repo or logs) and telemetry to Grafana with staging's token (no alerts). Everything is in
-`lazydad-loadtest-rg`, all `lazydad-github-loadtest` can change. The run then waits at tear-down for the owner's
+`lazydad-loadtest-rg`, all `lazydad-github-loadtest` can change. Sign-in is on, with all five providers at a **fake
+identity provider** (`tests/load/FakeIdentityProvider.cs`, a file-based app, run as `lazydad-idp-loadtest` and open to
+all: its sign-ins mean something only to the load-test app, and it sends readers back only to that app's callbacks): it plays each provider's endpoints (OpenID Connect discovery,
+keys and signed id tokens for Google, Microsoft and Telegram; GitHub's and Facebook's OAuth and user endpoints) and
+approves at once as a new random account (the account travels inside the code; one replica, since its signing key is per process). The app points every
+provider at it with `SignIn:LoadTest:Authority` (`ProviderEndpoints`; the checks stay production's), keeps its key ring in
+the load test's database without a Key Vault key, and refuses that setting outside the `LoadTest` environment (which only
+the workflow sets) or next to an enabled language or the smoke
+sign-in; Deploy Environment refuses to deploy an app that has it. The run then waits at tear-down for the owner's
 approval (the `loadtest-teardown` environment). The load comes from the owner's machine: `k6 run -e BASE_URL=…
-tests/load/visitors.js`, which plays visitors (page, then read about 15 s, vote twice, scroll; up to 10 scrolls) in
-growing steps until p95 > 2 s or errors > 2%. Runbook section 12, "Load test".
+tests/load/visitors.js`, which plays visitors (page and `/me`, about 30% then sign in with a random provider
+(`SIGN_IN_SHARE`), then read about 15 s, vote twice, scroll; up to 10 scrolls) in growing steps until p95 > 2 s,
+errors > 2%, a sign-in's round trip p95 > 4 s or under 98% of sign-ins completing. Runbook section 12, "Load test".
 
 `tsg/redeploy.ps1` is only a manual fallback now. It skips staging, migrations and smoke tests.
 
