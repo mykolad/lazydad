@@ -63,10 +63,12 @@ public sealed class ClientCredentialsProbe : ISignInProbe
                 logger.LogWarning("The {Provider} sign-in probe got {Status} from the token endpoint.", Provider, (int)response.StatusCode);
                 return ProviderState.Unreachable;
             }
-            if (response.IsSuccessStatusCode)
+            var body = await response.Content.ReadAsStringAsync(timeout.Token);
+            // Only a token proves the credential works; a success without one is an answer the sign-in couldn't use either.
+            if (response.IsSuccessStatusCode && HasAccessToken(body))
                 return ProviderState.Valid;
 
-            var error = OAuthCodeProbe.ErrorCode(await response.Content.ReadAsStringAsync(timeout.Token));
+            var error = OAuthCodeProbe.ErrorCode(body);
             logger.LogError("{Provider} refused the app's credentials ({Status}, error {Error}): sign-in with it fails.",
                 Provider, (int)response.StatusCode, error ?? "(none)");
             return ProviderState.Invalid;
@@ -81,6 +83,21 @@ public sealed class ClientCredentialsProbe : ISignInProbe
             // The managed identity couldn't get its token: the app's own setup, so the sign-in would fail too.
             logger.LogError(ex, "The {Provider} sign-in probe couldn't get the managed identity's token for the client assertion.", Provider);
             return ProviderState.Invalid;
+        }
+    }
+
+    private static bool HasAccessToken(string body)
+    {
+        try
+        {
+            using var json = System.Text.Json.JsonDocument.Parse(body);
+            return json.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+                && json.RootElement.TryGetProperty("access_token", out var token)
+                && token.ValueKind == System.Text.Json.JsonValueKind.String && !string.IsNullOrEmpty(token.GetString());
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return false;
         }
     }
 }

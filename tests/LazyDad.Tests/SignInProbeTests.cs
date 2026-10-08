@@ -54,6 +54,24 @@ public sealed class SignInProbeTests : IDisposable
         Assert.Equal(expected, await ProbeAsync());
     }
 
+    // Microsoft's and Facebook's way: a token as the app itself. Only a token counts.
+    [Theory]
+    [InlineData(HttpStatusCode.OK, """{"access_token": "app-token", "token_type": "Bearer"}""", ProviderState.Valid)]
+    [InlineData(HttpStatusCode.OK, """{"token_type": "Bearer"}""", ProviderState.Invalid)]
+    [InlineData(HttpStatusCode.OK, """{"access_token": ""}""", ProviderState.Invalid)]
+    [InlineData(HttpStatusCode.OK, "<html>not json</html>", ProviderState.Invalid)]
+    [InlineData(HttpStatusCode.Unauthorized, """{"error": "invalid_client"}""", ProviderState.Invalid)]
+    [InlineData(HttpStatusCode.BadRequest, """{"error": {"message": "Error validating client secret.", "type": "OAuthException", "code": 1}}""", ProviderState.Invalid)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, "", ProviderState.Unreachable)]
+    public async Task ClientCredentialsProbe_IsValidOnlyWithAToken(HttpStatusCode status, string body, ProviderState expected)
+    {
+        provider.Answer = () => new HttpResponseMessage(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+        var probe = new ClientCredentialsProbe(SignInProviders.GitHub, "https://provider.example/token", "client-id", "client-secret", null, null,
+            services.GetRequiredService<IHttpClientFactory>(), NullLogger<ClientCredentialsProbe>.Instance);
+
+        Assert.Equal(expected, await probe.ProbeAsync(CancellationToken.None));
+    }
+
     [Theory]
     [InlineData(typeof(HttpRequestException))]
     [InlineData(typeof(TaskCanceledException))]
