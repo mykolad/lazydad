@@ -130,6 +130,18 @@ public class SignInOptionsValidatorTests
         Assert.Equal(valid, result.Succeeded);
     }
 
+    [Fact]
+    public void Validate_TheLoadTestsFakeProvider_IsCheckedEvenWithSignInOff()
+    {
+        // No pepper, so nobody could sign in; the setting is still a mistake outside the load test.
+        var options = new SignInOptions { LoadTest = new() { Authority = "https://lazydad-idp-loadtest.example.io" } };
+
+        var result = new SignInOptionsValidator(Options.Create(new KeyRingOptions()), Options.Create(new JokeGenerationOptions()),
+            Mock.Of<IHostEnvironment>(e => e.EnvironmentName == Environments.Production)).Validate(null, options);
+
+        Assert.Contains(result.Failures!, f => f.Contains("SignIn:LoadTest"));
+    }
+
     [Theory]
     [InlineData("api://lazydad-smoke", Tenant, Identity, true)]
     [InlineData("", "", "", true)]

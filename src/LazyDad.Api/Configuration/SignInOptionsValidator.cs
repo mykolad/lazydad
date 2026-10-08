@@ -29,6 +29,7 @@ public class SignInOptionsValidator : IValidateOptions<SignInOptions>
         Client(errors, "Facebook", options.Facebook);
         Microsoft(errors, options.Microsoft);
         Smoke(errors, options.Smoke);
+        LoadTest(errors, options);
         if (!options.Enabled)
             return Result(errors);
 
@@ -43,7 +44,6 @@ public class SignInOptionsValidator : IValidateOptions<SignInOptions>
             errors.Add($"Sign-in is on, so {KeyRingOptions.SectionName}:KeyVaultKeyId must name the Key Vault key that protects " +
                 "the cookies' key ring (only Development and a load test may leave it unprotected).");
 
-        LoadTest(errors, options);
         return Result(errors);
     }
 
