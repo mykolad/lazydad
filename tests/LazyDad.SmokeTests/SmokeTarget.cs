@@ -34,7 +34,7 @@ public sealed class SmokeTarget : IDisposable
     }
 
     /// <summary>
-    /// <c>SMOKE_ACCESS_TOKEN</c>: the deploy identity's Entra token for <c>api://lazydad-smoke</c>, which the app accepts
+    /// <c>SMOKE_ACCESS_TOKEN</c>: the deploy identity's Entra token for the <c>lazydad-smoke</c> registration, which the app accepts
     /// as one fixed voter where a signed-in reader's votes are (SmokeSignIn). Deploy Environment gets it with
     /// <c>az account get-access-token</c> where the environment's <c>SMOKE_TOKEN_RESOURCE</c> variable is set.
     /// </summary>
