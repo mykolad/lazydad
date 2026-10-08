@@ -31,9 +31,6 @@ public sealed partial class SignInTests
         [SignInProviders.Telegram] = ("Telegram", OpenIdProviders.Telegram, [], fake => fake.ErrorsWith200 = true),
     };
 
-    // The providers asked for no nonce (Telegram's documentation has none).
-    private static readonly HashSet<string> WithoutNonce = [SignInProviders.Telegram];
-
     private async Task<(HttpClient Client, WebApplication App, FakeOpenIdProvider Provider)> StartWithOpenIdProviderAsync(string provider,
         Action<Dictionary<string, string?>> settings, Action<IServiceCollection> configure)
     {
@@ -116,7 +113,7 @@ public sealed partial class SignInTests
         // No email, no profile.
         Assert.Equal("openid", query["scope"].ToString());
         Assert.Equal("S256", query["code_challenge_method"].ToString());
-        Assert.Equal(!WithoutNonce.Contains(provider), query.ContainsKey("nonce"));
+        Assert.NotEmpty(query["nonce"].ToString());
     }
 
     [Theory]
@@ -144,7 +141,7 @@ public sealed partial class SignInTests
     {
         var data = new TheoryData<string, string>();
         foreach (var provider in OpenIdProviderSettings.Keys)
-            foreach (var forgery in new[] { "issuer", "audience", "signature", "nonce", "subject" }.Where(f => f != "nonce" || !WithoutNonce.Contains(provider)))
+            foreach (var forgery in new[] { "issuer", "audience", "signature", "nonce", "subject" })
                 data.Add(provider, forgery);
         return data;
     }

@@ -139,11 +139,10 @@ public static class SignInSetup
             AddMicrosoft(authentication, services, options.Microsoft);
         if (options.Telegram.Configured)
         {
-            // Telegram's documentation sends no nonce, so none is asked for (one in a token is still checked); PKCE and the
-            // state already tie the answer to this browser's sign-in. Its tokens are RS256 unless the bot is switched to
-            // EdDSA or ES256K, which .NET can't check (runbook).
-            OpenIdConnect(authentication, services, SignInProviders.Telegram, OpenIdProviders.Telegram, options.Telegram,
-                telegram => telegram.ProtocolValidator.RequireNonce = false);
+            // Its tokens are RS256 unless the bot is switched to EdDSA or ES256K, which .NET can't check (runbook). Its
+            // documentation doesn't mention the nonce, but OpenID Connect requires a provider to echo one; the runbook's
+            // sign-in by hand is what proves it does.
+            OpenIdConnect(authentication, services, SignInProviders.Telegram, OpenIdProviders.Telegram, options.Telegram, _ => { });
             // It checks the client before the code, answering 200 with the error in the body, like GitHub.
             services.AddSingleton<ISignInProbe>(provider => OAuthCodeProbe.Standard(SignInProviders.Telegram,
                 OpenIdProviders.Telegram.TokenEndpoint, options.Telegram, provider));

@@ -141,8 +141,8 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
     client, so its probe is `ClientCredentialsProbe` (a token as the app from its own tenant). Runbook section 7, step 10;
   - **Telegram** (#78): its OpenID Connect at `oauth.telegram.org`, a bot per environment (@BotFather's Login Widget:
     client id and secret, allowed URLs; RS256, since .NET can't check its EdDSA or ES256K tokens). `SignIn:Telegram:ClientId`
-    and `ClientSecret` (`TelegramClientSecret` / `…Staging`; runbook section 7, step 11). Never the `phone` scope. No
-    nonce asked for (its documentation has none). Errors come back as 200 with the error in the body. "Log in with
+    and `ClientSecret` (`TelegramClientSecret` / `…Staging`; runbook section 7, step 11). Never the `phone` scope. Its
+    documentation doesn't mention the nonce (the app sends one anyway: OpenID Connect requires the echo). Errors come back as 200 with the error in the body. "Log in with
     Telegram", in its blue darkened to pass WCAG AA;
   - **provider health:** each provider's handler talks to it through a named HTTP client (`SignInBackchannel`, which tests
     replace with a fake provider) that times every call into `lazydad_signin_provider_duration_seconds{provider,

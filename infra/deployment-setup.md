@@ -1421,9 +1421,9 @@ az containerapp update -g $RG -n $APP --set-env-vars `
 
 Telegram checks the client before the code (it answers a made-up client with `invalid_client`), so the probe works as
 for Google; `/status` shows `telegram` as `valid`. Sign in by hand once on each environment: Telegram's documentation
-doesn't say whether its id tokens carry a nonce, so the app asks for none (PKCE and the state cover the same ground),
-and it doesn't name its token errors either. If the hand check fails, the bot's support (@BotSupport, `#oidc`) is the
-place to ask.
+doesn't mention the nonce, which OpenID Connect requires a provider to echo (the app sends one, as with Google), nor
+its token errors. If the hand check fails with a nonce error, Telegram doesn't echo it, and the code has to stop asking
+for one for Telegram; the bot's support (@BotSupport, `#oidc`) is the place to ask about anything else.
 
 ## 8. Database users
 
