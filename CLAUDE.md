@@ -495,7 +495,7 @@ staging's `home` rule, never written to the repo or logs) and telemetry to Grafa
 identity provider** (`tests/load/FakeIdentityProvider.cs`, a file-based app, run as `lazydad-idp-loadtest` and open to
 all: its sign-ins mean something only to the load-test app, and it sends readers back only to that app's callbacks): it plays each provider's endpoints (OpenID Connect discovery,
 keys and signed id tokens for Google, Microsoft and Telegram; GitHub's and Facebook's OAuth and user endpoints) and
-approves at once as a new random account, keeping no state (the account travels inside the code). The app points every
+approves at once as a new random account (the account travels inside the code; one replica, since its signing key is per process). The app points every
 provider at it with `SignIn:LoadTest:Authority` (`ProviderEndpoints`; the checks stay production's), keeps its key ring in
 the load test's database without a Key Vault key, and refuses that setting outside the `LoadTest` environment (which only
 the workflow sets) or next to an enabled language or the smoke

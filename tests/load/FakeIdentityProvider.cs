@@ -11,8 +11,9 @@
 //
 // Each provider lives under /<provider>: Google, Microsoft and Telegram as OpenID Connect (discovery, signing keys, a
 // signed id token), GitHub and Facebook as their OAuth endpoints and user endpoint. /authorize approves at once, with no
-// login page, as a new random account. It keeps no state: the account and the nonce travel inside the code it hands out,
-// so any number of replicas, and restarts between a redirect and its callback, are fine. It checks no client id, secret
+// login page, as a new random account. The account and the nonce travel inside the code it hands out, so nothing about a
+// sign-in is kept between the redirect and the callback. Its signing key, though, is made per process: run it as one
+// replica (the workflow does), or one replica's published keys won't match another's tokens. It checks no client id, secret
 // or code verifier: the load test measures the app, not the provider. The real providers' speed comes from production's
 // metrics (lazydad_signin_provider_duration_seconds).
 
