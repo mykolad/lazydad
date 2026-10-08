@@ -183,6 +183,7 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
         ["google"] = "https://accounts.google.com/o/oauth2/v2/auth",
         ["microsoft"] = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
         ["telegram"] = "https://oauth.telegram.org/auth",
+        ["facebook"] = "https://www.facebook.com/v22.0/dialog/oauth",
     };
 
     [Fact]

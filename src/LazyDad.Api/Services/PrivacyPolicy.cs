@@ -61,6 +61,9 @@ internal static class PrivacyPolicy
               вашими голосами: видалення працює лише з вашого входу. Ви також можете поскаржитися до органу із захисту
               даних там, де живете.</p>
             <p><button type="button" class="ld-btn ld-btn--danger" data-delete-votes hidden>Видалити мої голоси</button></p>
+            <p data-section="facebook-deletion">Якщо ви входили через Facebook, можна й видалити LazyDad з вашого акаунта
+              Facebook (Налаштування → Програми та сайти). Facebook повідомить LazyDad, і ваші голоси, віддані з цим
+              акаунтом, одразу видаляться. Про сам запит нічого не зберігається.</p>
 
             <h3>Сервіси, через які проходять дані</h3>
             <ul>
@@ -120,6 +123,9 @@ internal static class PrivacyPolicy
               matched to your votes: deleting works only while you’re signed in. You can also complain to the data
               protection authority where you live.</p>
             <p><button type="button" class="ld-btn ld-btn--danger" data-delete-votes hidden>Delete my votes</button></p>
+            <p data-section="facebook-deletion">If you signed in with Facebook, you can also remove LazyDad from your
+              Facebook account (Settings → Apps and websites). Facebook tells LazyDad, and the votes you cast with that
+              account are deleted at once. Nothing about the request is kept.</p>
 
             <h3>Services your data passes through</h3>
             <ul>

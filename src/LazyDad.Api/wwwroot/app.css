@@ -159,6 +159,9 @@ svg { display: block; flex: none; }
 /* Telegram's blue, darkened from its #54a9eb (2.5:1 with white) to pass WCAG AA (4.7:1). */
 .ld-provider--telegram, .ld-provider--telegram:hover { background: #1f78bd; color: #fff; }
 .ld-provider--telegram:hover { background: #1b6aa6; }
+/* Meta's current blue (#0866ff, 4.8:1 with white), not the older #1877f2, which falls short of WCAG AA. */
+.ld-provider--facebook, .ld-provider--facebook:hover { background: #0866ff; color: #fff; }
+.ld-provider--facebook:hover { background: #0659d6; }
 .ld-keep { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 14px; font-weight: 600; }
 .ld-keep input { width: 20px; height: 20px; margin: 0; accent-color: var(--color-selected); cursor: pointer; }
 .ld-dialog-actions { display: flex; flex-wrap: wrap; gap: 10px; }

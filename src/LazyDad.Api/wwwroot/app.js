@@ -36,7 +36,7 @@
       place: 'Місце', stopRotation: 'Зупинити зміну Топ-3', startRotation: 'Відновити зміну Топ-3', langGroup: 'Мова', themeGroup: 'Тема', sort: 'Порядок',
       signIn: 'Увійти', signInTitle: 'Увійти в LazyDad', close: 'Закрити', dismiss: 'Закрити повідомлення',
       signInWhy: 'Увійдіть з акаунтом, який у вас уже є. LazyDad не зберігає ні імені, ні пошти, ні фото: лише код, обчислений з акаунта, щоб рахувати один голос на жарт.',
-      signInWith: name => `Увійти через ${name}`, logInWith: name => `Увійти через ${name}`, account: name => `Ви увійшли через ${name}`, signedIn: name => `Ви увійшли через ${name}`,
+      signInWith: name => `Увійти через ${name}`, logInWith: name => `Увійти через ${name}`, continueWith: name => `Продовжити з ${name}`, account: name => `Ви увійшли через ${name}`, signedIn: name => `Ви увійшли через ${name}`,
       signOut: 'Вийти', signedOut: 'Ви вийшли', signOutFailed: 'Не вдалося вийти. Спробуйте ще раз.',
       signInFailed: 'Не вдалося увійти. Спробуйте ще раз або оберіть інший спосіб.',
       privacy: 'Конфіденційність', privacyTitle: 'Конфіденційність — LazyDad', privacyLink: 'Як LazyDad поводиться з вашими даними',
@@ -62,7 +62,7 @@
       place: 'Place', stopRotation: 'Pause the Top 3 rotation', startRotation: 'Resume the Top 3 rotation', langGroup: 'Language', themeGroup: 'Theme', sort: 'Sort',
       signIn: 'Sign in', signInTitle: 'Sign in to LazyDad', close: 'Close', dismiss: 'Dismiss',
       signInWhy: 'Sign in with an account you already have. LazyDad keeps no name, email or photo: only a code worked out from the account, to count one vote per joke.',
-      signInWith: name => `Sign in with ${name}`, logInWith: name => `Log in with ${name}`, account: name => `Signed in with ${name}`, signedIn: name => `You’re signed in with ${name}`,
+      signInWith: name => `Sign in with ${name}`, logInWith: name => `Log in with ${name}`, continueWith: name => `Continue with ${name}`, account: name => `Signed in with ${name}`, signedIn: name => `You’re signed in with ${name}`,
       signOut: 'Sign out', signedOut: 'You’ve signed out', signOutFailed: 'Couldn’t sign out. Try again.',
       signInFailed: 'Signing in didn’t work. Try again, or choose another way.',
       privacy: 'Privacy', privacyTitle: 'Privacy — LazyDad', privacyLink: 'How LazyDad handles your data',
@@ -121,6 +121,12 @@
       // The paper plane in its circle.
       mark: '<svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="12" fill="#fff"/><path fill="#1f78bd" d="M5.43 11.87 17 7.41c.54-.2 1.01.13.83.94l-1.97 9.28c-.15.66-.54.82-1.09.51l-3-2.21-1.45 1.39c-.16.16-.3.3-.61.3l.21-3.05 5.56-5.02c.24-.21-.05-.33-.38-.12l-6.87 4.33-2.96-.92c-.64-.2-.66-.64.14-.97z"/></svg>',
       label: strings => strings.logInWith('Telegram')
+    },
+    facebook: {
+      name: 'Facebook',
+      // The white "f" in its circle (Meta's brand resources).
+      mark: '<svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path fill="#fff" d="M24 12.07C24 5.41 18.63 0 12 0S0 5.4 0 12.07C0 18.1 4.39 23.1 10.13 24v-8.44H7.08v-3.49h3.04V9.41c0-3.02 1.8-4.7 4.54-4.7 1.31 0 2.68.24 2.68.24v2.97h-1.5c-1.5 0-1.96.93-1.96 1.89v2.26h3.32l-.53 3.5h-2.8V24C19.62 23.1 24 18.1 24 12.07"/></svg>',
+      label: strings => strings.continueWith('Facebook')
     },
     // Development only: a made-up account, no provider.
     dev: { name: 'Dev', mark: ICON.user, label: strings => strings.signInWith('Dev') }
@@ -428,6 +434,9 @@
     }
     document.title = t().privacyTitle;
     showView('privacy');
+    // Both languages are in the page, so a fragment (Meta's deletion status link) names a section in each: go to the shown one.
+    const section = location.hash.slice(1);
+    if (section) $$('.ld-doc [data-section]').find(el => el.dataset.section === section && el.offsetParent !== null)?.scrollIntoView();
     if (state.count === null) loadSummary().catch(() => { /* the header stays empty */ });
   }
 
