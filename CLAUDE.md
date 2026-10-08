@@ -141,8 +141,8 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
     client, so its probe is `ClientCredentialsProbe` (a token as the app from its own tenant). Runbook section 7, step 10;
   - **Telegram** (#78): its OpenID Connect at `oauth.telegram.org`, a bot per environment (@BotFather's Login Widget:
     client id and secret, allowed URLs; RS256, since .NET can't check its EdDSA or ES256K tokens). `SignIn:Telegram:ClientId`
-    and `ClientSecret` (`TelegramClientSecret` / `…Staging`; runbook section 7, step 11). Never the `phone` scope. No
-    nonce asked for (its documentation has none). Errors come back as 200 with the error in the body. "Log in with
+    and `ClientSecret` (`TelegramClientSecret` / `…Staging`; runbook section 7, step 11). Never the `phone` scope. Its
+    documentation doesn't mention the nonce (the app sends one anyway: OpenID Connect requires the echo). Errors come back as 200 with the error in the body. "Log in with
     Telegram", in its blue darkened to pass WCAG AA;
   - **Facebook** (#79): ASP.NET Core's Facebook handler with `public_profile` only (no app review) and only the `id` field,
     the app-scoped user id (unique to the Meta app: replacing it makes every Facebook voter new). `SignIn:Facebook:ClientId`
