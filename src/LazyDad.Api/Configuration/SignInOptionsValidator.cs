@@ -61,8 +61,13 @@ public class SignInOptionsValidator : IValidateOptions<SignInOptions>
                 errors.Add($"{section} has settings but no ClientId.");
             return;
         }
-        if (!Guid.TryParse(microsoft.TenantId, out _))
+        // Entra ids are GUIDs: a mangled one should stop startup, not the first sign-in.
+        if (!Guid.TryParseExact(microsoft.ClientId, "D", out _))
+            errors.Add($"{section}:ClientId must be the app registration's client id (a GUID).");
+        if (!Guid.TryParseExact(microsoft.TenantId, "D", out _))
             errors.Add($"{section}:TenantId must be the app registration's tenant id (a GUID).");
+        if (microsoft.UsesManagedIdentity && !Guid.TryParseExact(microsoft.ManagedIdentityClientId, "D", out _))
+            errors.Add($"{section}:ManagedIdentityClientId must be the managed identity's client id (a GUID).");
         if (microsoft.ClientSecret.Length > 0 == microsoft.UsesManagedIdentity)
             errors.Add($"{section} needs either ClientSecret or ManagedIdentityClientId (a federated credential), not both.");
     }

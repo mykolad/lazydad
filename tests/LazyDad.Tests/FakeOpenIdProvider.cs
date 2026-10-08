@@ -15,7 +15,7 @@ namespace LazyDad.Tests;
 /// </summary>
 public sealed class FakeOpenIdProvider : HttpMessageHandler
 {
-    public const string ClientId = "test-client-id";
+    public const string ClientId = "6731de76-14a6-49ae-97bc-6eba6914391e";
     public const string ClientSecret = "test-client-secret";
     public const string Code = "the-code";
     public const string KeyId = "test-key";
