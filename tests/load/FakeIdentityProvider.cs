@@ -56,7 +56,7 @@ app.MapGet("/{provider}/authorize", (string provider, HttpRequest request) =>
     if (!Uri.TryCreate(redirect, UriKind.Absolute, out var callback) || callback.Scheme is not ("https" or "http")
         || !string.Equals(callback.Host, allowedRedirectHost, StringComparison.OrdinalIgnoreCase)
         || callback.AbsolutePath != $"/signin-{provider}")
-        return Results.BadRequest($"redirect_uri must be https://{allowedRedirectHost}/signin-{provider}.");
+        return Results.BadRequest($"redirect_uri must be http(s)://{allowedRedirectHost}[:port]/signin-{provider}.");
     var code = Code.Write(new Grant(provider, RandomAccount(), query["nonce"].ToString(), query["client_id"].ToString()));
     return Results.Redirect(QueryHelpers.AddQueryString(redirect, new Dictionary<string, string?> { ["code"] = code, ["state"] = query["state"] }));
 });
