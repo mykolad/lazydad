@@ -63,6 +63,8 @@ public sealed class SignInProbeTests : IDisposable
     [InlineData(HttpStatusCode.Unauthorized, """{"error": "invalid_client"}""", ProviderState.Invalid)]
     [InlineData(HttpStatusCode.BadRequest, """{"error": {"message": "Error validating client secret.", "type": "OAuthException", "code": 1}}""", ProviderState.Invalid)]
     [InlineData(HttpStatusCode.ServiceUnavailable, "", ProviderState.Unreachable)]
+    [InlineData(HttpStatusCode.BadRequest, """{"error": "temporarily_unavailable"}""", ProviderState.Unreachable)]
+    [InlineData(HttpStatusCode.BadRequest, """{"error": "server_error"}""", ProviderState.Unreachable)]
     public async Task ClientCredentialsProbe_IsValidOnlyWithAToken(HttpStatusCode status, string body, ProviderState expected)
     {
         provider.Answer = () => new HttpResponseMessage(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };

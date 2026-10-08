@@ -1276,16 +1276,43 @@ az containerapp update -g $RG -n lazydad-app-staging --set-env-vars "SignIn__Mic
 On each registration's **Branding & properties** page in the Entra admin center: the name `LazyDad` (staging: `LazyDad
 (staging)`), the sloth logo, the home page `https://lazydad.fyi`, the privacy statement `https://lazydad.fyi/privacy`.
 Settings that don't fit together (an id that isn't a GUID, a client id without the tenant, both a secret and a managed identity, or neither)
-stop the new revision at startup. `/status` shows `microsoft` as `valid` once the probe got a token as the app. **The
-staging secret expires after a year:** before then, run the `credential reset … --append` line again, restart the
-staging app, sign in, and delete the old secret (`az ad app credential list` / `delete`); an expired one shows as
-`invalid`.
+stop the new revision at startup. `/status` shows `microsoft` as `valid` once the probe got a token as the app.
+
+**The staging secret expires after a year** (an expired one shows as `invalid`). Before then, add a new one, restart the
+staging app so it reads it, sign in, and delete the old one (`az ad app credential list --id $STAGING_APP`, then
+`az ad app credential delete --id $STAGING_APP --key-id <its keyId>`):
+
+```bash
+STAGING_APP=$(az containerapp show -g $RG -n lazydad-app-staging \
+  --query "properties.template.containers[0].env[?name=='SignIn__Microsoft__ClientId'].value | [0]" -o tsv)
+az keyvault secret set --vault-name lazydad-kv -n MicrosoftClientSecretStaging -o none --value "$(az ad app credential reset \
+  --id $STAGING_APP --append --display-name lazydad-staging --end-date $(date -u -d '+1 year' +%F) --query password -o tsv)"
+az containerapp revision restart -g $RG -n lazydad-app-staging \
+  --revision $(az containerapp show -g $RG -n lazydad-app-staging --query properties.latestReadyRevisionName -o tsv)
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$STAGING_APP = az containerapp show -g $RG -n lazydad-app-staging `
+  --query "properties.template.containers[0].env[?name=='SignIn__Microsoft__ClientId'].value | [0]" -o tsv
+$END = (Get-Date).ToUniversalTime().AddYears(1).ToString('yyyy-MM-dd')
+az keyvault secret set --vault-name lazydad-kv -n MicrosoftClientSecretStaging -o none --value (az ad app credential reset `
+  --id $STAGING_APP --append --display-name lazydad-staging --end-date $END --query password -o tsv)
+az containerapp revision restart -g $RG -n lazydad-app-staging `
+  --revision (az containerapp show -g $RG -n lazydad-app-staging --query properties.latestReadyRevisionName -o tsv)
+```
+
+</details>
 
 **Production with a secret instead** (only if Microsoft refuses `lazydad-production`'s token): a secret in Key Vault
 that `lazydad-production` can read, referenced by both prod apps, which drop the managed identity in the same update (a
 secret and a managed identity together stop the revision at startup). The secret then expires yearly like staging's.
 
 ```bash
+PROD_APP=$(az containerapp show -g $RG -n lazydad-app \
+  --query "properties.template.containers[0].env[?name=='SignIn__Microsoft__ClientId'].value | [0]" -o tsv)
+KV_ID=$(az keyvault show -n lazydad-kv --query id -o tsv)
 az keyvault secret set --vault-name lazydad-kv -n MicrosoftClientSecret -o none --value "$(az ad app credential reset \
   --id $PROD_APP --append --display-name lazydad-production --end-date $(date -u -d '+1 year' +%F) --query password -o tsv)"
 PROD=$(az identity show -g $RG -n lazydad-production --query principalId -o tsv)
@@ -1304,6 +1331,9 @@ done
 <details><summary>PowerShell 7</summary>
 
 ```powershell
+$PROD_APP = az containerapp show -g $RG -n lazydad-app `
+  --query "properties.template.containers[0].env[?name=='SignIn__Microsoft__ClientId'].value | [0]" -o tsv
+$KV_ID = az keyvault show -n lazydad-kv --query id -o tsv
 $END = (Get-Date).ToUniversalTime().AddYears(1).ToString('yyyy-MM-dd')
 az keyvault secret set --vault-name lazydad-kv -n MicrosoftClientSecret -o none --value (az ad app credential reset `
   --id $PROD_APP --append --display-name lazydad-production --end-date $END --query password -o tsv)
