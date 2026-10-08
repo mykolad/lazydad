@@ -501,8 +501,8 @@ the load test's database without a Key Vault key, and refuses that setting next 
 sign-in; Deploy Environment refuses to deploy an app that has it. The run then waits at tear-down for the owner's
 approval (the `loadtest-teardown` environment). The load comes from the owner's machine: `k6 run -e BASE_URL=…
 tests/load/visitors.js`, which plays visitors (page and `/me`, about 30% then sign in with a random provider
-(`SIGN_IN_SHARE`), then read about 15 s, vote twice, scroll; up to 10 scrolls) in growing steps until p95 > 2 s, errors
-> 2%, a sign-in's round trip p95 > 4 s or under 98% of sign-ins completing. Runbook section 12, "Load test".
+(`SIGN_IN_SHARE`), then read about 15 s, vote twice, scroll; up to 10 scrolls) in growing steps until p95 > 2 s,
+errors > 2%, a sign-in's round trip p95 > 4 s or under 98% of sign-ins completing. Runbook section 12, "Load test".
 
 `tsg/redeploy.ps1` is only a manual fallback now. It skips staging, migrations and smoke tests.
 
