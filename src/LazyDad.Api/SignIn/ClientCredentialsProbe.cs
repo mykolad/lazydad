@@ -69,6 +69,12 @@ public sealed class ClientCredentialsProbe : ISignInProbe
                 return ProviderState.Valid;
 
             var error = OAuthCodeProbe.ErrorCode(body);
+            // RFC 6749's errors for a provider having trouble, which Entra sends with a 400: its outage, not the credentials.
+            if (error is "server_error" or "temporarily_unavailable")
+            {
+                logger.LogWarning("The {Provider} sign-in probe got {Error} from the token endpoint.", Provider, error);
+                return ProviderState.Unreachable;
+            }
             logger.LogError("{Provider} refused the app's credentials ({Status}, error {Error}): sign-in with it fails.",
                 Provider, (int)response.StatusCode, error ?? "(none)");
             return ProviderState.Invalid;
