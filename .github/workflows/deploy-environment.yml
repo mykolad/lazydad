@@ -281,6 +281,18 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      # The smoke tests vote signed in as this environment's deploy identity, which the app trusts for exactly this
+      # audience (SignIn:Smoke; runbook section 7, step 13). Only where the environment's SMOKE_TOKEN_RESOURCE variable is
+      # set: before the owner's setup there's no such app registration, and the smoke tests check the app agrees.
+      - name: Get the deploy identity's token for the smoke tests
+        if: ${{ vars.SMOKE_TOKEN_RESOURCE != '' }}
+        env:
+          RESOURCE: ${{ vars.SMOKE_TOKEN_RESOURCE }}
+        run: |
+          token=$(az account get-access-token --resource "$RESOURCE" --query accessToken -o tsv)
+          echo "::add-mask::$token"
+          echo "SMOKE_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"
+
       - name: Smoke tests
         env:
           SMOKE_BASE_URL: ${{ steps.app.outputs.url }}

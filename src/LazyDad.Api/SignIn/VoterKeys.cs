@@ -29,7 +29,7 @@ public class VoterKeys
     {
         if (pepper is null)
             throw new InvalidOperationException($"Sign-in is off: {SignInOptions.SectionName}:VoterKeyPepper is empty.");
-        if (!SignInProviders.IsKnown(provider))
+        if (!SignInProviders.IsKnown(provider) && provider != SignInProviders.Smoke)
             throw new ArgumentException($"'{provider}' isn't a sign-in provider.", nameof(provider));
         ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
 

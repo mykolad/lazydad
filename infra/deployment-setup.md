@@ -1478,6 +1478,59 @@ check for the data deletion callback URL, and, if Cloudflare challenges it, turn
 and Block AI bots stay). A forged or unsigned request gets `400`; with Facebook off, `404`. The callback answers with
 the privacy page's Facebook section as the status URL and a random confirmation code; nothing about the request is kept.
 
+**13. The smoke tests' sign-in.** The smoke tests read and (from sign-in-only voting on) cast votes signed in, but
+providers block scripted logins and test accounts would need passwords. So each app trusts its environment's deploy
+identity instead: the runner already signs in to Azure as it, and gets an Entra token for `api://lazydad-smoke`, an app
+registration that is only an audience (no secret, no permissions). The app accepts that token, from that identity alone,
+as one fixed voter, and only on `/me/votes` (and the vote endpoint, later). Anyone else in the tenant can get a token for
+the audience too, which is why the identity's object id is listed.
+
+```bash
+TENANT=$(az account show --query tenantId -o tsv)
+SMOKE_APP=$(az ad app create --display-name lazydad-smoke --identifier-uris api://lazydad-smoke --query appId -o tsv)
+az ad sp create --id $SMOKE_APP -o none
+CD=$(az identity show -g $RG -n lazydad-github-cd --query principalId -o tsv)
+STAGING_DEPLOY=$(az identity show -g $RG -n lazydad-github-staging --query principalId -o tsv)
+
+az containerapp update -g $RG -n lazydad-app-staging --set-env-vars SignIn__Smoke__TenantId=$TENANT \
+  SignIn__Smoke__Audience=api://lazydad-smoke SignIn__Smoke__AllowedObjectIds__0=$STAGING_DEPLOY -o none
+for APP in lazydad-app lazydad-app-swedencentral; do
+  az containerapp update -g $RG -n $APP --set-env-vars SignIn__Smoke__TenantId=$TENANT \
+    SignIn__Smoke__Audience=api://lazydad-smoke SignIn__Smoke__AllowedObjectIds__0=$CD -o none
+done
+
+# Deploy Environment then gets the token and passes it to the smoke tests (masked, never logged).
+gh variable set SMOKE_TOKEN_RESOURCE --env staging    --body api://lazydad-smoke
+gh variable set SMOKE_TOKEN_RESOURCE --env production --body api://lazydad-smoke
+```
+
+<details><summary>PowerShell 7</summary>
+
+```powershell
+$TENANT = az account show --query tenantId -o tsv
+$SMOKE_APP = az ad app create --display-name lazydad-smoke --identifier-uris api://lazydad-smoke --query appId -o tsv
+az ad sp create --id $SMOKE_APP -o none
+$CD = az identity show -g $RG -n lazydad-github-cd --query principalId -o tsv
+$STAGING_DEPLOY = az identity show -g $RG -n lazydad-github-staging --query principalId -o tsv
+
+az containerapp update -g $RG -n lazydad-app-staging --set-env-vars "SignIn__Smoke__TenantId=$TENANT" `
+  SignIn__Smoke__Audience=api://lazydad-smoke "SignIn__Smoke__AllowedObjectIds__0=$STAGING_DEPLOY" -o none
+foreach ($APP in 'lazydad-app', 'lazydad-app-swedencentral') {
+  az containerapp update -g $RG -n $APP --set-env-vars "SignIn__Smoke__TenantId=$TENANT" `
+    SignIn__Smoke__Audience=api://lazydad-smoke "SignIn__Smoke__AllowedObjectIds__0=$CD" -o none
+}
+
+gh variable set SMOKE_TOKEN_RESOURCE --env staging    --body api://lazydad-smoke
+gh variable set SMOKE_TOKEN_RESOURCE --env production --body api://lazydad-smoke
+```
+
+</details>
+
+`/status` shows `signIn.smoke` as `on` once an app trusts the identity, and the smoke tests require both sides to
+agree: `on` without a token (the variable is missing) or a token while `off` fails the deploy, so set both before the
+next deploy. Branch previews run as `lazydad-github-staging`, so they get staging's token. A setting that's off (no
+tenant, no or a malformed object id) stops the revision at startup.
+
 ## 8. Database users
 
 Nobody has a password: every user is an Entra identity, created by you as the server's Entra admin. Each app can

@@ -26,6 +26,7 @@ public class SignInOptionsValidator : IValidateOptions<SignInOptions>
         Client(errors, "Telegram", options.Telegram);
         Client(errors, "Facebook", options.Facebook);
         Microsoft(errors, options.Microsoft);
+        Smoke(errors, options.Smoke);
         if (!options.Enabled)
             return Result(errors);
 
@@ -51,6 +52,23 @@ public class SignInOptionsValidator : IValidateOptions<SignInOptions>
     {
         if (client.ClientId.Length > 0 != client.ClientSecret.Length > 0)
             errors.Add($"{SignInOptions.SectionName}:{provider} needs both ClientId and ClientSecret, or neither.");
+    }
+
+    // The audience, its tenant, and at least one identity to trust, all of them ids; nothing at all is off. Trusting
+    // everyone in the tenant by accident (no ids) must stop startup.
+    private static void Smoke(List<string> errors, SmokeSignInOptions smoke)
+    {
+        var section = $"{SignInOptions.SectionName}:Smoke";
+        if (!smoke.Enabled)
+        {
+            if (smoke.TenantId.Length > 0 || smoke.AllowedObjectIds.Count > 0)
+                errors.Add($"{section} has settings but no Audience.");
+            return;
+        }
+        if (!Guid.TryParseExact(smoke.TenantId, "D", out _))
+            errors.Add($"{section}:TenantId must be the tenant id (a GUID).");
+        if (smoke.AllowedObjectIds.Count == 0 || !smoke.AllowedObjectIds.All(id => Guid.TryParseExact(id, "D", out _)))
+            errors.Add($"{section}:AllowedObjectIds must list the deploy identity's object id (GUIDs), at least one.");
     }
 
     // A client id, its tenant, and exactly one way to prove itself: a secret or a managed identity. Nothing at all is off.

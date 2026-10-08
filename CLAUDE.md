@@ -81,7 +81,7 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   `GET /jokes/summary` → `{count, nextBatchAt}`; `POST /jokes/{id}/vote {value, previous}` → `{up, down}`;
   `GET /jokes/{id}` (cached like the feed); `GET /jokes/{id}/similar?limit=(≤ 12)` → the most similar jokes;
   `GET /me` → `{signedIn, provider}`, `GET /auth/signin/{provider}?returnUrl=[&persist=true]`, `POST /auth/signout`,
-  `DELETE /me/votes` → `204` (signed in, else `401`) (never cached; sign-out and deleting only with the page's
+  `GET /me/votes?ids=(≤ 50)` → `{"<id>": 1 | -1}`, `DELETE /me/votes` → `204` (signed in, else `401`) (never cached; sign-out and deleting only with the page's
   `X-LazyDad: 1` header, which another site's form can't send).
 - **Read cache** (`JokeReadCache`, `ReadCache:Seconds`, 30 by default, 0 = off): the joke count, the Top 3, each joke by id, the
   similarity index and each feed page (by sort, cursor and size) are kept in memory per replica (at most 20,000 rows), since every visitor reads
@@ -162,7 +162,13 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
     the provider's outage, not the deploy's) or doesn't redirect with this app's `/signin-<provider>` callback;
     `LazyDadSignInProviderDown` alerts after 30 minutes not `valid`;
   - `dev` (`DevelopmentSignInHandler`, in Development only: signs in at once; `?account=` picks the made-up account, to
-    vote as several readers).
+    vote as several readers);
+  - **the smoke tests' sign-in** (#80, `SmokeSignIn`): a JWT bearer scheme `smoke` that accepts only Entra tokens of
+    `SignIn:Smoke:TenantId` for `Audience` (`api://lazydad-smoke`, a registration with no secret) whose `oid` is in
+    `AllowedObjectIds` (the environment's deploy identity), as one fixed voter (`smoke:deploy`). Only the endpoints about
+    the reader's votes ask for it (`SmokeSignIn.VoterAsync`: the cookie, else the token); everywhere else it's ignored.
+    Not a reader's provider: never listed, never in a cookie. `/status` `signIn.smoke` (`on`/`off`). Runbook section 7,
+    step 13; `GET /me/votes?ids=` (≤ 50) → `{"<id>": 1 | -1}`, never cached.
 - One loop per enabled language runs concurrently via `Task.WhenAll`: a startup tick, then a delay to each regular
   due time. **Due times are fixed UTC times** (`TickSchedule`: every whole `IntervalHours` since midnight UTC, so
   00:00, 04:00, 08:00 … for 4 h), the same for every replica and unchanged by restarts. After a startup tick the
@@ -435,7 +441,7 @@ the leaderboard is populated with valid ranks, that `app.js`/`app.css`, `/jokes/
 are served, that a joke's page (`/j/<id>`) carries its link-preview tags and `/jokes/<id>/similar` answers, that the vote endpoint answers (with a no-op vote, so it never changes the counts), that `/me` answers signed out
 (and `no-store`), that the new revision's key ring check is `ok` (every deployed app has sign-in configured, so `off` fails too),
 that no sign-in provider is `invalid` and each configured one redirects with the app's own callback, that the page offers
-exactly the providers `/status` shows as enabled, that `/privacy` is served in both languages, and that `DELETE /me/votes` signed out is `401`.
+exactly the providers `/status` shows as enabled, that `/privacy` is served in both languages, that `/me/votes` signed out is `401`, and that it answers the deploy identity's token wherever `/status` says the app trusts it (`signIn.smoke`; Deploy Environment gets the token with `az account get-access-token` when the environment's `SMOKE_TOKEN_RESOURCE` variable is set, masked).
 To run them against staging locally:
 
 ```

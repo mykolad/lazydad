@@ -30,7 +30,15 @@ public sealed class SmokeTarget : IDisposable
         ExpectedVersion = NullIfBlank(Environment.GetEnvironmentVariable("SMOKE_EXPECTED_VERSION"));
         ExpectedRevision = NullIfBlank(Environment.GetEnvironmentVariable("SMOKE_EXPECTED_REVISION"));
         NotProcess = NullIfBlank(Environment.GetEnvironmentVariable("SMOKE_NOT_PROCESS"));
+        AccessToken = NullIfBlank(Environment.GetEnvironmentVariable("SMOKE_ACCESS_TOKEN"));
     }
+
+    /// <summary>
+    /// <c>SMOKE_ACCESS_TOKEN</c>: the deploy identity's Entra token for <c>api://lazydad-smoke</c>, which the app accepts
+    /// as one fixed voter where a signed-in reader's votes are (SmokeSignIn). Deploy Environment gets it with
+    /// <c>az account get-access-token</c> where the environment's <c>SMOKE_TOKEN_RESOURCE</c> variable is set.
+    /// </summary>
+    public string? AccessToken { get; }
 
     public HttpClient Client { get; }
     public string? ExpectedVersion { get; }

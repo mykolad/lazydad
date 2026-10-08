@@ -109,6 +109,8 @@ public static class SignInSetup
         var options = builder.Configuration.GetSection(SignInOptions.SectionName).Get<SignInOptions>() ?? new SignInOptions();
         if (!options.Enabled)
             return;
+        if (options.Smoke.Enabled)
+            SmokeSignIn.Add(authentication, options.Smoke);
         if (builder.Environment.IsDevelopment())
             authentication.AddScheme<AuthenticationSchemeOptions, DevelopmentSignInHandler>(SignInProviders.Development, null);
         if (options.GitHub.Configured)
