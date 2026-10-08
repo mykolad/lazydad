@@ -47,3 +47,18 @@ left in the database is mostly votes (this test votes twice every 15 seconds per
 do), and the app's CPU (about 87% at 860 at once) is the next limit, so about 850 visitors at once is comfortable. The
 database's workers (Basic allows 30 at once) briefly hit 100% a few times without a failed request; S0 would add
 headroom there.
+
+## 2026-10-08: sign-in (#81), the scenario
+
+Sign-in joined the test: every provider points at a fake identity provider (`tests/load/FakeIdentityProvider.cs`,
+`lazydad-idp-loadtest`) that approves at once as a new account, so the whole path in the app runs under load (the
+redirect, the callback with its token exchange and id token check, the key ring, the cookie) without the real providers,
+which would block scripted logins. Every visitor now also reads `/me`, as the page does, and about 30% sign in, spread
+over the five providers. New thresholds: a sign-in's round trip (the click to the page again) under 4 s at p95, and at
+least 98% of sign-ins completing. With more than one replica, a sign-in's steps land on different replicas, so the
+shared key ring is exercised.
+
+Checked locally only so far (SQL Server 2022 in Docker, one app on a laptop, 60 jokes, every visitor signing in): 25
+sign-ins across the providers, all completed, round trip p95 11 ms, no failed request. The first run in Azure, with 2
+replicas, goes here, next to the real providers' latency from production (`lazydad_signin_provider_duration_seconds`,
+the dashboard's sign-in panels), which a load test can't measure.

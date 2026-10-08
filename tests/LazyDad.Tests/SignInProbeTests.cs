@@ -24,7 +24,7 @@ public sealed class SignInProbeTests : IDisposable
         var collection = new ServiceCollection().AddMetrics().AddLogging();
         collection.AddHttpClient(SignInBackchannel.ClientName(SignInProviders.GitHub)).ConfigurePrimaryHttpMessageHandler(() => provider);
         collection.AddSingleton(new EnabledSignInProviders([SignInProviders.GitHub]));
-        collection.AddSingleton<ISignInProbe>(services => OAuthCodeProbe.GitHub(Client, services));
+        collection.AddSingleton<ISignInProbe>(services => OAuthCodeProbe.GitHub(AspNet.Security.OAuth.GitHub.GitHubAuthenticationDefaults.TokenEndpoint, Client, services));
         collection.AddSingleton<SignInProviderStatus>();
         collection.AddSingleton<SignInMetrics>();
         services = collection.BuildServiceProvider();

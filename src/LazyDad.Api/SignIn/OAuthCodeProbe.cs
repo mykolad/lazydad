@@ -42,8 +42,8 @@ public sealed class OAuthCodeProbe : ISignInProbe
     /// (https://docs.github.com/en/apps/oauth-apps/maintaining-oauth-apps/troubleshooting-oauth-app-access-token-request-errors).
     /// The standard OAuth errors (RFC 6749) count too.
     /// </summary>
-    public static OAuthCodeProbe GitHub(OAuthClientOptions client, IServiceProvider services)
-        => new(SignInProviders.GitHub, AspNet.Security.OAuth.GitHub.GitHubAuthenticationDefaults.TokenEndpoint, client,
+    public static OAuthCodeProbe GitHub(string tokenEndpoint, OAuthClientOptions client, IServiceProvider services)
+        => new(SignInProviders.GitHub, tokenEndpoint, client,
             new HashSet<string> { "bad_verification_code", "invalid_grant" },
             new HashSet<string> { "incorrect_client_credentials", "invalid_client", "unauthorized_client", "redirect_uri_mismatch" },
             services.GetRequiredService<IHttpClientFactory>(), services.GetRequiredService<ILogger<OAuthCodeProbe>>());

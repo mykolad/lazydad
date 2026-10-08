@@ -56,12 +56,17 @@ public static class SignInSetup
         // Vault key. The validator requires that key wherever sign-in is on, except in Development. Without it (a local
         // run), the ring stays on this machine (ASP.NET's default): a local run often points at production's database,
         // and must never add an unencrypted key to production's ring, nor need production's Key Vault key.
+        var options = builder.Configuration.GetSection(SignInOptions.SectionName).Get<SignInOptions>() ?? new SignInOptions();
         var dataProtection = services.AddDataProtection().SetApplicationName(ApplicationName);
         var keyRing = builder.Configuration.GetSection(KeyRingOptions.SectionName).Get<KeyRingOptions>() ?? new KeyRingOptions();
         if (keyRing.TryGetKeyId(out var keyId))
             dataProtection
                 .PersistKeysToDbContext<LazyDadDbContext>()
                 .ProtectKeysWithAzureKeyVault(keyId, new DefaultAzureCredential());
+        // A load test's throwaway database (the validator allows this only there): shared by its replicas, so a sign-in
+        // that starts on one can finish on another, without a Key Vault key the load-test identity has no access to.
+        else if (options.LoadTest.Enabled)
+            dataProtection.PersistKeysToDbContext<LazyDadDbContext>();
 
         var authentication = services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
             .AddCookie(cookie =>
@@ -106,9 +111,9 @@ public static class SignInSetup
         // Each provider is an authentication scheme named after it (EnabledSignInProviders lists them), registered only
         // while sign-in is on and the provider is configured;
         // Development's signs in at once, only in Development.
-        var options = builder.Configuration.GetSection(SignInOptions.SectionName).Get<SignInOptions>() ?? new SignInOptions();
         if (!options.Enabled)
             return;
+        var endpoints = ProviderEndpoints.For(options.LoadTest.Authority);
         if (options.Smoke.Enabled)
             SmokeSignIn.Add(authentication, options.Smoke);
         if (builder.Environment.IsDevelopment())
@@ -121,37 +126,40 @@ public static class SignInSetup
                 // No scopes: the public profile is enough, and its numeric id is the account id (never the login, which
                 // the reader can change). GitHub ids are public, which is why the voter key is keyed with the pepper.
                 github.Scope.Clear();
+                github.AuthorizationEndpoint = endpoints.GitHub.Authorize;
+                github.TokenEndpoint = endpoints.GitHub.Token;
+                github.UserInformationEndpoint = endpoints.GitHub.UserInfo;
                 github.Events.OnTicketReceived = context
                     => SignInEvents.OnTicketReceived(context, SignInProviders.GitHub, p => p.FindFirstValue(ClaimTypes.NameIdentifier));
             });
             Backchannel<GitHubAuthenticationOptions>(services, SignInProviders.GitHub, uri =>
-                uri.AbsoluteUri == GitHubAuthenticationDefaults.TokenEndpoint ? SignInBackchannel.Token
-                : uri.AbsoluteUri == GitHubAuthenticationDefaults.UserInformationEndpoint ? SignInBackchannel.UserInfo
+                uri.AbsoluteUri == endpoints.GitHub.Token ? SignInBackchannel.Token
+                : uri.AbsoluteUri == endpoints.GitHub.UserInfo ? SignInBackchannel.UserInfo
                 : SignInBackchannel.Other);
-            services.AddSingleton<ISignInProbe>(provider => OAuthCodeProbe.GitHub(options.GitHub, provider));
+            services.AddSingleton<ISignInProbe>(provider => OAuthCodeProbe.GitHub(endpoints.GitHub.Token, options.GitHub, provider));
         }
         if (options.Google.Configured)
         {
             // Google's id tokens name their issuer with or without the scheme (its OpenID Connect documentation).
-            OpenIdConnect(authentication, services, SignInProviders.Google, OpenIdProviders.Google, options.Google,
+            OpenIdConnect(authentication, services, SignInProviders.Google, endpoints.Google, options.Google,
                 google => google.TokenValidationParameters.ValidIssuers = [OpenIdProviders.Google.Authority, "accounts.google.com"]);
-            services.AddSingleton<ISignInProbe>(provider => OAuthCodeProbe.Standard(SignInProviders.Google, OpenIdProviders.Google.TokenEndpoint,
+            services.AddSingleton<ISignInProbe>(provider => OAuthCodeProbe.Standard(SignInProviders.Google, endpoints.Google.TokenEndpoint,
                 options.Google, provider));
         }
         if (options.Microsoft.Configured)
-            AddMicrosoft(authentication, services, options.Microsoft);
+            AddMicrosoft(authentication, services, endpoints, options.Microsoft);
         if (options.Telegram.Configured)
         {
             // Its tokens are RS256 unless the bot is switched to EdDSA or ES256K, which .NET can't check (runbook). Its
             // documentation doesn't mention the nonce, but OpenID Connect requires a provider to echo one; the runbook's
             // sign-in by hand is what proves it does.
-            OpenIdConnect(authentication, services, SignInProviders.Telegram, OpenIdProviders.Telegram, options.Telegram, _ => { });
+            OpenIdConnect(authentication, services, SignInProviders.Telegram, endpoints.Telegram, options.Telegram, _ => { });
             // It checks the client before the code, answering 200 with the error in the body, like GitHub.
             services.AddSingleton<ISignInProbe>(provider => OAuthCodeProbe.Standard(SignInProviders.Telegram,
-                OpenIdProviders.Telegram.TokenEndpoint, options.Telegram, provider));
+                endpoints.Telegram.TokenEndpoint, options.Telegram, provider));
         }
         if (options.Facebook.Configured)
-            AddFacebook(authentication, services, options.Facebook);
+            AddFacebook(authentication, services, endpoints.Facebook, options.Facebook);
     }
 
     /// <summary>
@@ -159,11 +167,15 @@ public static class SignInSetup
     /// user id, unique to the Meta app (replacing the app makes every Facebook voter new). Meta requires a data-deletion
     /// callback (FacebookDeletionController).
     /// </summary>
-    private static void AddFacebook(AuthenticationBuilder authentication, IServiceCollection services, OAuthClientOptions client)
+    private static void AddFacebook(AuthenticationBuilder authentication, IServiceCollection services, OAuthEndpoints endpoints,
+        OAuthClientOptions client)
     {
         authentication.AddFacebook(SignInProviders.Facebook, facebook =>
         {
             Remote(facebook, SignInProviders.Facebook, client);
+            facebook.AuthorizationEndpoint = endpoints.Authorize;
+            facebook.TokenEndpoint = endpoints.Token;
+            facebook.UserInformationEndpoint = endpoints.UserInfo;
             // The handler would ask for the email and read the name; neither is wanted.
             facebook.Scope.Clear();
             facebook.Scope.Add("public_profile");
@@ -174,12 +186,12 @@ public static class SignInSetup
         });
         // The user endpoint's address carries the fields and the app secret proof in its query.
         Backchannel<FacebookOptions>(services, SignInProviders.Facebook, uri =>
-            uri.GetLeftPart(UriPartial.Path) == FacebookDefaults.TokenEndpoint ? SignInBackchannel.Token
-            : uri.GetLeftPart(UriPartial.Path) == FacebookDefaults.UserInformationEndpoint ? SignInBackchannel.UserInfo
+            uri.GetLeftPart(UriPartial.Path) == endpoints.Token ? SignInBackchannel.Token
+            : uri.GetLeftPart(UriPartial.Path) == endpoints.UserInfo ? SignInBackchannel.UserInfo
             : SignInBackchannel.Other);
         // A token as the app: Meta answers a wrong app or secret with its own error object (code 101, 1…), not OAuth's.
         services.AddSingleton<ISignInProbe>(provider => new ClientCredentialsProbe(SignInProviders.Facebook,
-            FacebookDefaults.TokenEndpoint, client.ClientId, client.ClientSecret, null, null,
+            endpoints.Token, client.ClientId, client.ClientSecret, null, null,
             provider.GetRequiredService<IHttpClientFactory>(), provider.GetRequiredService<ILogger<ClientCredentialsProbe>>()));
     }
 
@@ -188,11 +200,12 @@ public static class SignInSetup
     /// registration, so replacing the registration makes every Microsoft voter new. The registration proves itself with a
     /// secret, or with a token of a managed identity it trusts (no secret at all).
     /// </summary>
-    private static void AddMicrosoft(AuthenticationBuilder authentication, IServiceCollection services, MicrosoftClientOptions microsoft)
+    private static void AddMicrosoft(AuthenticationBuilder authentication, IServiceCollection services, ProviderEndpoints endpoints,
+        MicrosoftClientOptions microsoft)
     {
         if (microsoft.UsesManagedIdentity)
             services.AddSingleton<IClientAssertion>(new ManagedIdentityAssertion(microsoft.ManagedIdentityClientId));
-        OpenIdConnect(authentication, services, SignInProviders.Microsoft, OpenIdProviders.Microsoft, microsoft, oidc =>
+        OpenIdConnect(authentication, services, SignInProviders.Microsoft, endpoints.Microsoft, microsoft, oidc =>
         {
             oidc.TokenValidationParameters.IssuerValidator = OpenIdProviders.MicrosoftIssuer;
             if (microsoft.UsesManagedIdentity)
@@ -206,7 +219,7 @@ public static class SignInSetup
                 };
         });
         services.AddSingleton<ISignInProbe>(provider => new ClientCredentialsProbe(SignInProviders.Microsoft,
-            OpenIdProviders.MicrosoftTenantTokenEndpoint(microsoft.TenantId), microsoft.ClientId, microsoft.ClientSecret,
+            endpoints.MicrosoftTenantToken(microsoft.TenantId), microsoft.ClientId, microsoft.ClientSecret,
             microsoft.UsesManagedIdentity ? provider.GetRequiredService<IClientAssertion>() : null,
             // Any resource will do; the app needs no permission on it to get a token for itself.
             "https://graph.microsoft.com/.default",
@@ -225,6 +238,8 @@ public static class SignInSetup
         authentication.AddOpenIdConnect(provider, oidc =>
         {
             oidc.Authority = endpoints.Authority;
+            // Every provider is https; a load test's fake on a developer's machine may not be.
+            oidc.RequireHttpsMetadata = endpoints.Authority.StartsWith("https://", StringComparison.Ordinal);
             oidc.ClientId = client.ClientId;
             oidc.ClientSecret = client.ClientSecret;
             oidc.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;

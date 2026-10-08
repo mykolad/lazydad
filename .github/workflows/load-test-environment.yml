@@ -4,7 +4,8 @@ name: Load Test Environment
 # branch's image, creates a SQL server with a Basic database (prod's tier) in Sweden Central filled with synthetic
 # jokes, and runs the app in lazydad-cae (West Europe) at prod's size with the chosen number of replicas, admitting
 # only the owner's IP (staging's "home" rule) and sending telemetry to Grafana as lazydad-app-loadtest (no alerts:
-# the rules match production's apps only). The run then waits at "tear-down": approve it in the run (Review
+# the rules match production's apps only), with sign-in on: every provider at a fake identity provider, a second app
+# (tests/load/FakeIdentityProvider.cs). The run then waits at "tear-down": approve it in the run (Review
 # deployments) to delete everything, or reject it to keep the environment, e.g. to change the replicas with a new run.
 # The load itself comes from the owner's machine, not GitHub's runners: tests/load/visitors.js (runbook section 12,
 # "Load test").
@@ -43,6 +44,7 @@ env:
   MAIN_RESOURCE_GROUP: lazydad-rg
   APP: lazydad-app-loadtest
   APP_IDENTITY: lazydad-loadtest-app
+  IDP: lazydad-idp-loadtest
   CONTAINER_ENVIRONMENT: lazydad-cae
   SQL_SERVER: lazydad-sql-loadtest
   DATABASE: lazydad-db-loadtest
@@ -124,6 +126,23 @@ jobs:
             echo "digest=${digest#*@}"
           } >> "$GITHUB_OUTPUT"
 
+      # The fake identity provider (tests/load/FakeIdentityProvider.cs, a file-based app), in its own image next to the app's.
+      - name: Build and push the fake identity provider
+        id: idp-image
+        run: |
+          dotnet publish tests/load/FakeIdentityProvider.cs -c Release -o idp
+          image="$REGISTRY/$REPOSITORY:idp-${{ steps.image.outputs.tag }}"
+          docker build -t "$image" -f - idp <<'EOF'
+          FROM mcr.microsoft.com/dotnet/aspnet:10.0
+          WORKDIR /app
+          COPY . .
+          USER $APP_UID
+          ENTRYPOINT ["dotnet", "FakeIdentityProvider.dll"]
+          EOF
+          docker push -q "$image"
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$image")
+          echo "digest=${digest#*@}" >> "$GITHUB_OUTPUT"
+
       - name: Detect runner IP
         id: runner
         run: echo "ip=$(curl -fsS https://api.ipify.org)" >> "$GITHUB_OUTPUT"
@@ -175,20 +194,51 @@ jobs:
         if: ${{ always() && steps.firewall.outputs.rule != '' }}
         run: az sql server firewall-rule delete -g "$RESOURCE_GROUP" -s "$SQL_SERVER" -n "${{ steps.firewall.outputs.rule }}"
 
+      # Open to everyone, unlike the app: readers' browsers (k6, from the owner's machine) are sent to it and the app's
+      # replicas call it, from addresses an allow list can't name in advance. That's harmless: its sign-ins mean
+      # something only to the load-test app (SignIn:LoadTest:Authority), which admits the owner alone, and it holds nothing.
+      - name: Create or update the fake identity provider
+        id: idp
+        run: |
+          pull_id=$(az identity show -g "$MAIN_RESOURCE_GROUP" -n lazydad-acr-pull --query id -o tsv)
+          image="$REGISTRY/$REPOSITORY@${{ steps.idp-image.outputs.digest }}"
+          if az containerapp show -g "$RESOURCE_GROUP" -n "$IDP" -o none 2> /dev/null; then
+            az containerapp update -g "$RESOURCE_GROUP" -n "$IDP" --image "$image" -o none
+          else
+            environment=$(az containerapp env show -g "$MAIN_RESOURCE_GROUP" -n "$CONTAINER_ENVIRONMENT" --query id -o tsv)
+            az containerapp create -g "$RESOURCE_GROUP" -n "$IDP" --environment "$environment" --image "$image" \
+              --user-assigned "$pull_id" --registry-server "$REGISTRY" --registry-identity "$pull_id" \
+              --ingress external --target-port 8080 --min-replicas 1 --max-replicas 1 --cpu 0.25 --memory 0.5Gi -o none
+          fi
+          fqdn=$(az containerapp show -g "$RESOURCE_GROUP" -n "$IDP" --query properties.configuration.ingress.fqdn -o tsv)
+          echo "url=https://$fqdn" >> "$GITHUB_OUTPUT"
+          for _ in $(seq 1 30); do
+            curl -fsS --max-time 10 "https://$fqdn/healthz" -o /dev/null && exit 0
+            sleep 10
+          done
+          echo "::error::The fake identity provider didn't answer within 5 minutes."
+          exit 1
+
       # Production's size and settings, with: the chosen replicas; the scheduler and the leaderboard off (no LLM calls,
       # and the app has no model access); the vote limit raised (every simulated visitor comes from one address); and
       # staging's Grafana token (OtlpHeadersStaging: a write-only token that branch code can already read), read as
-      # lazydad-loadtest-app.
+      # lazydad-loadtest-app; and sign-in on, with all five providers at the fake identity provider (made-up clients:
+      # it checks none) and a pepper of its own for this run.
       - name: Create or update the app
         id: app
         env:
           REPLICAS: ${{ inputs.replicas }}
+          IDP_URL: ${{ steps.idp.outputs.url }}
         run: |
           pull_id=$(az identity show -g "$MAIN_RESOURCE_GROUP" -n lazydad-acr-pull --query id -o tsv)
           app_id=$(az identity show -g "$MAIN_RESOURCE_GROUP" -n "$APP_IDENTITY" --query id -o tsv)
           client=$(az identity show -g "$MAIN_RESOURCE_GROUP" -n "$APP_IDENTITY" --query clientId -o tsv)
           image="$REGISTRY/$REPOSITORY@${{ steps.image.outputs.digest }}"
           suffix="lt${{ github.run_id }}-${{ github.run_attempt }}"
+          pepper=$(openssl rand -base64 32)
+          echo "::add-mask::$pepper"
+          # Microsoft's client and tenant ids must look like Entra's (GUIDs); the fake accepts any.
+          fake_guid=00000000-0000-4000-8000-00000000f4c3
           settings=(
             "ConnectionStrings__DefaultConnection=Server=tcp:$SQL_SERVER.database.windows.net,1433;Authentication=Active Directory Managed Identity;Encrypt=True;Database=$DATABASE;User Id=$client"
             "AZURE_CLIENT_ID=$client"
@@ -198,6 +248,13 @@ jobs:
             "OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-eu-north-0.grafana.net/otlp"
             "OTEL_EXPORTER_OTLP_HEADERS=secretref:otlp-headers"
             "OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=loadtest"
+            "SignIn__VoterKeyPepper=$pepper"
+            "SignIn__LoadTest__Authority=$IDP_URL"
+            "SignIn__GitHub__ClientId=load-test" "SignIn__GitHub__ClientSecret=load-test"
+            "SignIn__Google__ClientId=load-test" "SignIn__Google__ClientSecret=load-test"
+            "SignIn__Telegram__ClientId=load-test" "SignIn__Telegram__ClientSecret=load-test"
+            "SignIn__Facebook__ClientId=load-test" "SignIn__Facebook__ClientSecret=load-test"
+            "SignIn__Microsoft__ClientId=$fake_guid" "SignIn__Microsoft__TenantId=$fake_guid" "SignIn__Microsoft__ClientSecret=load-test"
           )
           if az containerapp show -g "$RESOURCE_GROUP" -n "$APP" -o none 2> /dev/null; then
             az containerapp update -g "$RESOURCE_GROUP" -n "$APP" --image "$image" --revision-suffix "$suffix" \
@@ -283,6 +340,7 @@ jobs:
             echo "### Load test environment ready"
             echo "- App: $URL, image \`$REPOSITORY:${{ steps.image.outputs.tag }}\` ($GITHUB_REF_NAME), ${{ inputs.replicas }} replica(s) of 0.25 vCPU / 0.5 GiB"
             echo "- Database: \`$DATABASE\` on \`$SQL_SERVER\` (Basic, 5 DTU), ${count:-?} jokes"
+            echo "- Sign-in: all five providers at the fake identity provider, ${{ steps.idp.outputs.url }} (every sign-in a new made-up account)"
             echo "- Run the load from your machine (it admits your IP only):"
             echo "  \`k6 run -e BASE_URL=$URL tests/load/visitors.js\`"
             echo "- Grafana: the LazyDad dashboard with App \`$APP\`."
@@ -317,12 +375,14 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Delete the app, the SQL server and the images
+      - name: Delete the apps, the SQL server and the images
         run: |
-          if az containerapp show -g "$RESOURCE_GROUP" -n "$APP" -o none 2> /dev/null; then
-            az containerapp delete -g "$RESOURCE_GROUP" -n "$APP" --yes -o none
-            echo "Deleted $APP."
-          fi
+          for app in "$APP" "$IDP"; do
+            if az containerapp show -g "$RESOURCE_GROUP" -n "$app" -o none 2> /dev/null; then
+              az containerapp delete -g "$RESOURCE_GROUP" -n "$app" --yes -o none
+              echo "Deleted $app."
+            fi
+          done
           if az sql server show -g "$RESOURCE_GROUP" -n "$SQL_SERVER" -o none 2> /dev/null; then
             az sql server delete -g "$RESOURCE_GROUP" -n "$SQL_SERVER" --yes -o none
             echo "Deleted $SQL_SERVER and its database."
