@@ -156,6 +156,9 @@ svg { display: block; flex: none; }
 .ld-provider--microsoft:hover { background: #f8f8f8; }
 [data-theme="dark"] .ld-provider--microsoft { background: #2f2f2f; color: #fff; box-shadow: none; }
 [data-theme="dark"] .ld-provider--microsoft:hover { background: #3b3b3b; }
+/* Telegram's blue, darkened from its #54a9eb (2.5:1 with white) to pass WCAG AA (4.7:1). */
+.ld-provider--telegram, .ld-provider--telegram:hover { background: #1f78bd; color: #fff; }
+.ld-provider--telegram:hover { background: #1b6aa6; }
 .ld-keep { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 14px; font-weight: 600; }
 .ld-keep input { width: 20px; height: 20px; margin: 0; accent-color: var(--color-selected); cursor: pointer; }
 .ld-dialog-actions { display: flex; flex-wrap: wrap; gap: 10px; }

@@ -21,6 +21,10 @@ public static class OpenIdProviders
     public static readonly OpenIdProvider Microsoft = new("https://login.microsoftonline.com/common/v2.0",
         "https://login.microsoftonline.com/common/oauth2/v2.0/token", "https://login.microsoftonline.com/common/oauth2/v2.0/authorize");
 
+    /// <summary>Telegram's OpenID Connect (https://core.telegram.org/bots/telegram-login): a bot is the client.</summary>
+    public static readonly OpenIdProvider Telegram = new("https://oauth.telegram.org",
+        "https://oauth.telegram.org/token", "https://oauth.telegram.org/auth");
+
     /// <summary>Where the Microsoft probe asks for a token as the app: the registration's own tenant.</summary>
     public static string MicrosoftTenantTokenEndpoint(string tenantId) => $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token";
 

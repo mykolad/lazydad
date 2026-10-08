@@ -27,6 +27,8 @@ public sealed partial class SignInTests
             fake.ExtraClaims["tid"] = MicrosoftTenant;
             fake.ClientCredentialsEndpoint = OpenIdProviders.MicrosoftTenantTokenEndpoint(MicrosoftTenant);
         }),
+        // Errors come back as 200 with the error in the body.
+        [SignInProviders.Telegram] = ("Telegram", OpenIdProviders.Telegram, [], fake => fake.ErrorsWith200 = true),
     };
 
     private async Task<(HttpClient Client, WebApplication App, FakeOpenIdProvider Provider)> StartWithOpenIdProviderAsync(string provider,
@@ -80,7 +82,8 @@ public sealed partial class SignInTests
     {
         var (authorize, cookies) = await StartRemoteSignInAsync(client, provider, returnUrl);
         var query = QueryHelpers.ParseQuery(authorize.Query);
-        fake.Nonce ??= query["nonce"].ToString();
+        if (query.TryGetValue("nonce", out var nonce))
+            fake.Nonce ??= nonce.ToString();
         return await ProviderCallbackAsync(client, provider, cookies,
             $"code={FakeOpenIdProvider.Code}&state={Uri.EscapeDataString(query["state"].ToString())}");
     }

@@ -103,7 +103,7 @@ public static class SignInSetup
             });
 
         // Each provider is an authentication scheme named after it (EnabledSignInProviders lists them), registered only
-        // while sign-in is on and the provider is configured. The rest come with their issues (#78, #79);
+        // while sign-in is on and the provider is configured. Facebook comes with its issue (#79);
         // Development's signs in at once, only in Development.
         var options = builder.Configuration.GetSection(SignInOptions.SectionName).Get<SignInOptions>() ?? new SignInOptions();
         if (!options.Enabled)
@@ -137,6 +137,16 @@ public static class SignInSetup
         }
         if (options.Microsoft.Configured)
             AddMicrosoft(authentication, services, options.Microsoft);
+        if (options.Telegram.Configured)
+        {
+            // Its tokens are RS256 unless the bot is switched to EdDSA or ES256K, which .NET can't check (runbook). Its
+            // documentation doesn't mention the nonce, but OpenID Connect requires a provider to echo one; the runbook's
+            // sign-in by hand is what proves it does.
+            OpenIdConnect(authentication, services, SignInProviders.Telegram, OpenIdProviders.Telegram, options.Telegram, _ => { });
+            // It checks the client before the code, answering 200 with the error in the body, like GitHub.
+            services.AddSingleton<ISignInProbe>(provider => OAuthCodeProbe.Standard(SignInProviders.Telegram,
+                OpenIdProviders.Telegram.TokenEndpoint, options.Telegram, provider));
+        }
     }
 
     /// <summary>

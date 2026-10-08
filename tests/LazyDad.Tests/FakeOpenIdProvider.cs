@@ -51,6 +51,9 @@ public sealed class FakeOpenIdProvider : HttpMessageHandler
     /// <summary>The last successful token exchange's form, as sent.</summary>
     public Dictionary<string, string> TokenRequest { get; private set; } = [];
 
+    /// <summary>Answers errors with 200 and the error in the body, as Telegram (and GitHub) do.</summary>
+    public bool ErrorsWith200 { get; set; }
+
     /// <summary>Where it gives the app a token for itself (the client credentials grant), if anywhere: Microsoft's probe.</summary>
     public string? ClientCredentialsEndpoint { get; set; }
 
@@ -93,9 +96,9 @@ public sealed class FakeOpenIdProvider : HttpMessageHandler
         {
             var form = await FormAsync(request, cancellationToken);
             if (!Authenticated(form))
-                return Json(HttpStatusCode.Unauthorized, """{"error": "invalid_client"}""");
+                return Json(ErrorsWith200 ? HttpStatusCode.OK : HttpStatusCode.Unauthorized, """{"error": "invalid_client"}""");
             if (form.GetValueOrDefault("code") != Code)
-                return Json(HttpStatusCode.BadRequest, """{"error": "invalid_grant"}""");
+                return Json(ErrorsWith200 ? HttpStatusCode.OK : HttpStatusCode.BadRequest, """{"error": "invalid_grant"}""");
             TokenRequest = form;
             return Json(HttpStatusCode.OK, JsonSerializer.Serialize(new
             {
