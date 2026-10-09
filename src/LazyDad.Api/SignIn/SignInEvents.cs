@@ -1,6 +1,6 @@
+using System.Security.Claims;
 using LazyDad.Api.Telemetry;
 using Microsoft.AspNetCore.Authentication;
-using System.Security.Claims;
 
 namespace LazyDad.Api.SignIn;
 

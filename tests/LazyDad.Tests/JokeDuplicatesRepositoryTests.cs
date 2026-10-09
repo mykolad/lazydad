@@ -1,7 +1,7 @@
+using System.Data.Common;
 using LazyDad.Data;
 using LazyDad.Data.Entities;
 using LazyDad.Data.Repositories;
-using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 

@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Azure.Identity;
 using LazyDad.Api.Configuration;
 using LazyDad.Api.Telemetry;
@@ -7,7 +8,6 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OAuth;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Options;
-using System.Security.Claims;
 
 namespace LazyDad.Api.SignIn;
 

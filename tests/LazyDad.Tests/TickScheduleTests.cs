@@ -1,3 +1,4 @@
+using System.Globalization;
 using LazyDad.Api.Services;
 
 namespace LazyDad.Tests;
@@ -6,7 +7,7 @@ public class TickScheduleTests
 {
     private static readonly TimeSpan FourHours = TimeSpan.FromHours(4);
 
-    private static DateTime Utc(string time) => DateTime.SpecifyKind(DateTime.Parse($"2026-09-28T{time}"), DateTimeKind.Utc);
+    private static DateTime Utc(string time) => DateTime.SpecifyKind(DateTime.Parse($"2026-09-28T{time}", CultureInfo.InvariantCulture), DateTimeKind.Utc);
 
     [Theory]
     [InlineData("10:37:00", "12:00:00")]

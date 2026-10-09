@@ -1,5 +1,5 @@
-using System.Collections.Concurrent;
 using System.ClientModel;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using LazyDad.Api.Configuration;
 using LazyDad.Api.Telemetry;
@@ -292,7 +292,7 @@ public class JokeSchedulerService : BackgroundService
     /// this and the leaderboard's write fails only that update, which the next tick makes again. If the database can't
     /// say, all of them.
     /// </summary>
-    private async Task<IReadOnlyList<Joke>> StillThereAsync(IReadOnlyList<Joke> jokes, CancellationToken stoppingToken)
+    private async Task<IReadOnlyList<Joke>> StillThereAsync(List<Joke> jokes, CancellationToken stoppingToken)
     {
         if (jokes.Count == 0)
             return jokes;
