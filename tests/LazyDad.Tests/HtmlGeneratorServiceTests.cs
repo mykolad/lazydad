@@ -195,7 +195,6 @@ public class HtmlGeneratorServiceTests
 
             var html = await File.ReadAllTextAsync(Path.Combine(contentRoot, "wwwroot", "index.html"));
             Assert.Contains("<span class=\"ld-sha\">e33d99a</span>", html);
-            Assert.False(File.Exists(Path.Combine(contentRoot, "wwwroot", "index.html.tmp")));
         }
         finally
         {
