@@ -254,5 +254,5 @@ static double Cosine(double[] a, double[] b)
     return na == 0 || nb == 0 ? 0 : dot / Math.Sqrt(na * nb);
 }
 
-record Joke(int Id, string Text, string? Explanation, int Up, int Down);
-record JevAnswer(string Topic, Dictionary<string, double> TopicProbabilities, string Wordplay, Dictionary<string, double> WordplayProbabilities, double CostUsd);
+sealed record Joke(int Id, string Text, string? Explanation, int Up, int Down);
+sealed record JevAnswer(string Topic, Dictionary<string, double> TopicProbabilities, string Wordplay, Dictionary<string, double> WordplayProbabilities, double CostUsd);

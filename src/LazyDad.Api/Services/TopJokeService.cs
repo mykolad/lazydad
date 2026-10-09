@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using LazyDad.Api.Configuration;
@@ -160,19 +161,19 @@ public class TopJokeService
     internal static string BuildSystemPrompt(string language, int slots)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"You are a discerning comedy judge ranking dad jokes written in {language}.");
-        sb.AppendLine($"From the candidate jokes provided, choose the {slots} best and rank them, best first.");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"You are a discerning comedy judge ranking dad jokes written in {language}.");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"From the candidate jokes provided, choose the {slots} best and rank them, best first.");
         sb.AppendLine();
         sb.AppendLine("Judging criteria, in order of importance:");
         sb.AppendLine("- Quality of the pun or wordplay: does the twist actually land for a native speaker?");
         sb.AppendLine("- The groan factor: the best dad jokes make you laugh and roll your eyes at once.");
         sb.AppendLine("- Originality: penalize stale, widely known jokes and weak translations of English puns.");
-        sb.AppendLine($"- Natural, grammatical {language}.");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"- Natural, grammatical {language}.");
         sb.AppendLine("- Brevity and family-friendliness.");
         sb.AppendLine();
         sb.AppendLine("Rules:");
         sb.AppendLine("- Jokes marked CURRENT already hold a top spot. Only displace or reorder them if a candidate is clearly better.");
-        sb.AppendLine($"- Return exactly {slots} distinct joke ids, taken only from the candidate list.");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"- Return exactly {slots} distinct joke ids, taken only from the candidate list.");
         sb.AppendLine("- For each pick, give a one-sentence reason in English (max 200 characters).");
 
         return sb.ToString();
@@ -187,7 +188,7 @@ public class TopJokeService
         foreach (var joke in candidates)
         {
             var marker = currentRanks.TryGetValue(joke.Id, out var rank) ? $" (CURRENT #{rank})" : string.Empty;
-            sb.AppendLine($"[id={joke.Id}]{marker} {joke.Text.ReplaceLineEndings(" ")}");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"[id={joke.Id}]{marker} {joke.Text.ReplaceLineEndings(" ")}");
         }
 
         return sb.ToString();

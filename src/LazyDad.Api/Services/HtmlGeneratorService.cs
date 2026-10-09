@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using LazyDad.Api.Configuration;
@@ -209,13 +210,13 @@ public class HtmlGeneratorService
             .Append("<meta property=\"og:type\" content=\"website\">")
             .Append("<meta property=\"og:site_name\" content=\"LazyDad\">")
             .Append("<meta property=\"og:locale\" content=\"uk_UA\">")
-            .Append($"<meta property=\"og:title\" content=\"{EscapeHtml(page.ShareTitle)}\">")
-            .Append($"<meta property=\"og:description\" content=\"{EscapeHtml(page.Description)}\">")
+            .Append(CultureInfo.InvariantCulture, $"<meta property=\"og:title\" content=\"{EscapeHtml(page.ShareTitle)}\">")
+            .Append(CultureInfo.InvariantCulture, $"<meta property=\"og:description\" content=\"{EscapeHtml(page.Description)}\">")
             .Append("<meta name=\"twitter:card\" content=\"summary\">");
         if (page.Url is { } url)
-            tags.Append($"<meta property=\"og:url\" content=\"{EscapeHtml(url)}\"><link rel=\"canonical\" href=\"{EscapeHtml(url)}\">");
+            tags.Append(CultureInfo.InvariantCulture, $"<meta property=\"og:url\" content=\"{EscapeHtml(url)}\"><link rel=\"canonical\" href=\"{EscapeHtml(url)}\">");
         if (page.ImageUrl is { } image)
-            tags.Append($"<meta property=\"og:image\" content=\"{EscapeHtml(image)}\">");
+            tags.Append(CultureInfo.InvariantCulture, $"<meta property=\"og:image\" content=\"{EscapeHtml(image)}\">");
         return tags.ToString();
     }
 

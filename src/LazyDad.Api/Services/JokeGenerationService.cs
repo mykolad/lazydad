@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using LazyDad.Api.Configuration;
 using LazyDad.Data.Repositories;
@@ -98,7 +99,7 @@ public class JokeGenerationService
             sb.AppendLine("- Do NOT repeat any of the following already-used jokes, and don't reuse their openings, characters or");
             sb.AppendLine("  structure (e.g. the same first words, or the same \"someone took X because they heard Y\" template):");
             foreach (var joke in recentJokes)
-                sb.AppendLine($"  * {OneLine(joke)}");
+                sb.AppendLine(CultureInfo.InvariantCulture, $"  * {OneLine(joke)}");
         }
 
         if (repeated.Count > 0)
@@ -106,10 +107,10 @@ public class JokeGenerationService
             // The recent jokes above are only the latest few; these are older jokes the model came up with again.
             sb.AppendLine("- Your previous answer repeated a joke the site already has. Write a completely different joke, not these:");
             foreach (var joke in repeated)
-                sb.AppendLine($"  * {OneLine(joke)}");
+                sb.AppendLine(CultureInfo.InvariantCulture, $"  * {OneLine(joke)}");
         }
 
-        sb.AppendLine($"- Respond with the joke, then a line with only {Separator}, then one sentence in English (at most 200");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"- Respond with the joke, then a line with only {Separator}, then one sentence in English (at most 200");
         sb.AppendLine("  characters) explaining the wordplay to someone who didn't get it. Nothing else: no numbering, no quotes, no");
         sb.AppendLine("  labels such as \"Joke:\" or \"Explanation:\".");
 
