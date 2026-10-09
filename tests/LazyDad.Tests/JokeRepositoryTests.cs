@@ -39,16 +39,6 @@ public sealed class JokeRepositoryTests : IDisposable
     }
 
     [Fact]
-    public async Task GetByLanguageAsync_FiltersByLanguageNewestFirst()
-    {
-        await using var context = CreateContext();
-
-        var jokes = await new JokeRepository(context).GetByLanguageAsync("Ukrainian", CancellationToken.None);
-
-        Assert.Equal(["uk-new", "uk-mid", "uk-old"], jokes.Select(j => j.Text));
-    }
-
-    [Fact]
     public async Task GetRecentByLanguageAsync_ReturnsRequestedCountNewestFirst()
     {
         await using var context = CreateContext();

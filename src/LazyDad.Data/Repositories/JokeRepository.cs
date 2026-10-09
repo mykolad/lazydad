@@ -14,12 +14,7 @@ public class JokeRepository : IJokeRepository
 
     public async Task<List<Joke>> GetAllAsync(CancellationToken cancellationToken)
         => await context.Jokes
-            .OrderByDescending(j => j.GeneratedAt)
-            .ToListAsync(cancellationToken);
-
-    public async Task<List<Joke>> GetByLanguageAsync(string language, CancellationToken cancellationToken)
-        => await context.Jokes
-            .Where(j => j.Language == language)
+            .AsNoTracking()
             .OrderByDescending(j => j.GeneratedAt)
             .ToListAsync(cancellationToken);
 

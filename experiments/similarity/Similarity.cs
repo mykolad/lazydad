@@ -26,7 +26,7 @@ using System.Text.Json.Nodes;
 using Azure.Core;
 using Azure.Identity;
 
-const string JokesUrl = "https://lazydad.fyi/jokes";
+const string FeedUrl = "https://lazydad.fyi/jokes/feed?sort=new&limit=50";
 const string JevUrl = "https://jevtypesafeai.com/api/v1/decide";
 const string EmbeddingsUrl = "https://lazydad-openai-resource.cognitiveservices.azure.com/openai/deployments/text-embedding-3-small/embeddings?api-version=2024-10-21";
 const int EmbeddingDimensions = 512;
@@ -78,9 +78,16 @@ var wordplay = new Dictionary<string, string>
 using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
 http.DefaultRequestHeaders.UserAgent.ParseAdd("LazyDadSimilarityExperiment/1.0");
 
-// 1. Production's jokes (the public API: text, explanation, votes; nothing about visitors).
-var jokes = (await http.GetFromJsonAsync<List<Joke>>(JokesUrl, json))!
-    .Where(j => !string.IsNullOrWhiteSpace(j.Text)).OrderBy(j => j.Id).ToList();
+// 1. Production's jokes (the page's feed, page by page: text, explanation, votes; nothing about visitors).
+var allJokes = new List<Joke>();
+for (string? next = null; ;)
+{
+    var page = (await http.GetFromJsonAsync<FeedPage>(next is null ? FeedUrl : $"{FeedUrl}&after={Uri.EscapeDataString(next)}", json))!;
+    allJokes.AddRange(page.Items);
+    if ((next = page.Next) is null)
+        break;
+}
+var jokes = allJokes.Where(j => !string.IsNullOrWhiteSpace(j.Text)).OrderBy(j => j.Id).ToList();
 Console.WriteLine($"{jokes.Count} jokes.");
 // What both methods see: the joke and, if it has one, why it's funny.
 string Input(Joke j) => string.IsNullOrWhiteSpace(j.Explanation) ? j.Text : $"{j.Text}\n\n(Why it's funny: {j.Explanation})";
@@ -255,4 +262,5 @@ static double Cosine(double[] a, double[] b)
 }
 
 record Joke(int Id, string Text, string? Explanation, int Up, int Down);
+sealed record FeedPage(List<Joke> Items, string? Next);
 record JevAnswer(string Topic, Dictionary<string, double> TopicProbabilities, string Wordplay, Dictionary<string, double> WordplayProbabilities, double CostUsd);

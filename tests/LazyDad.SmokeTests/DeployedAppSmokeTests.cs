@@ -162,14 +162,6 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
     }
 
     [Fact]
-    public async Task JokesApi_ReturnsAJsonArray()
-    {
-        var jokes = await target.PollAsync<JsonElement>(async () => await target.GetJsonAsync("jokes"), SmokeTarget.ColdStartTimeout, "/jokes");
-
-        Assert.Equal(JsonValueKind.Array, jokes.ValueKind);
-    }
-
-    [Fact]
     public async Task ThisRevision_SavesAJokeInEveryLanguage()
     {
         // The new revision generates on startup and lists each joke on /status as soon as it's saved (in-memory, so
@@ -196,15 +188,14 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
         // The id the deploy's retry relies on to tell a restarted process from the old one.
         Assert.False(string.IsNullOrWhiteSpace(status.GetProperty("process").GetString()), "/status reports no process id.");
 
-        var jokes = await target.GetJsonAsync("jokes");
-        var persisted = jokes.EnumerateArray().ToDictionary(j => j.GetProperty("id").GetInt32(), j => j.GetProperty("model").GetString());
         foreach (var joke in status.GetProperty("savedJokes").EnumerateArray())
         {
             var language = joke.GetProperty("language").GetString()!;
             var model = joke.GetProperty("model").GetString();
             Assert.Contains(model, configured[language]);
             // What the revision says it saved is really in the DB and served by the API.
-            Assert.Equal(model, persisted.GetValueOrDefault(joke.GetProperty("id").GetInt32()));
+            var persisted = await target.GetJsonAsync($"jokes/{joke.GetProperty("id").GetInt32()}");
+            Assert.Equal(model, persisted.GetProperty("model").GetString());
         }
     }
 
