@@ -24,19 +24,22 @@ public class TopJokeService
     private readonly ILlmClientFactory llmClientFactory;
     private readonly IOptions<TopJokesOptions> options;
     private readonly ILogger<TopJokeService> logger;
+    private readonly TimeProvider time;
 
     public TopJokeService(
         IJokeRepository jokeRepository,
         ITopJokeRepository topJokeRepository,
         ILlmClientFactory llmClientFactory,
         IOptions<TopJokesOptions> options,
-        ILogger<TopJokeService> logger)
+        ILogger<TopJokeService> logger,
+        TimeProvider time)
     {
         this.jokeRepository = jokeRepository;
         this.topJokeRepository = topJokeRepository;
         this.llmClientFactory = llmClientFactory;
         this.options = options;
         this.logger = logger;
+        this.time = time;
     }
 
     /// <summary>Asks the judge whether <paramref name="newJokes"/> change the leaderboard.</summary>
@@ -97,7 +100,7 @@ public class TopJokeService
             return false;
         }
 
-        var now = DateTime.UtcNow;
+        var now = time.GetUtcNow().UtcDateTime;
         var entries = picks
             .Select((pick, index) => new TopJoke
             {

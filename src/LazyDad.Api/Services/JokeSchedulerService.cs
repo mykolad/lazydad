@@ -17,6 +17,7 @@ public class JokeSchedulerService : BackgroundService
     private readonly SchedulerMetrics metrics;
     private readonly JokeReadCache readCache;
     private readonly ILogger<JokeSchedulerService> logger;
+    private readonly TimeProvider time;
     // Identifies this process in SchedulerLocks: the machine (the Container Apps replica) plus a per-process part.
     private readonly string instanceId =
         $"{(Environment.MachineName.Length > 60 ? Environment.MachineName[..60] : Environment.MachineName)}/{Guid.NewGuid():N}";
@@ -27,7 +28,8 @@ public class JokeSchedulerService : BackgroundService
         SchedulerStatus status,
         SchedulerMetrics metrics,
         JokeReadCache readCache,
-        ILogger<JokeSchedulerService> logger)
+        ILogger<JokeSchedulerService> logger,
+        TimeProvider time)
     {
         this.scopeFactory = scopeFactory;
         this.options = options;
@@ -35,7 +37,10 @@ public class JokeSchedulerService : BackgroundService
         this.metrics = metrics;
         this.readCache = readCache;
         this.logger = logger;
+        this.time = time;
     }
+
+    private DateTime UtcNow => time.GetUtcNow().UtcDateTime;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -53,7 +58,7 @@ public class JokeSchedulerService : BackgroundService
         // the earliest due time, which must stay in the past until every startup tick has completed.
         foreach (var language in enabledLanguages.Where(l => l.LlmModels.Count > 0))
         {
-            status.RecordNextTick(language.Language, DateTime.UtcNow);
+            status.RecordNextTick(language.Language, UtcNow);
             metrics.Initialize(language.Language, language.LlmModels.Select(m => m.Model));
         }
         // Grafana must receive those zeros before a tick can add to them (see ExportNowAsync).
@@ -80,7 +85,7 @@ public class JokeSchedulerService : BackgroundService
         // restart adds its startup batch but doesn't move the rhythm. The first regular one is at least half a
         // period away, so a restart just before a due time doesn't make two batches minutes apart.
         var period = TimeSpan.FromHours(language.IntervalHours);
-        var nextTick = TickSchedule.FirstDueAfterStartup(DateTime.UtcNow, period);
+        var nextTick = TickSchedule.FirstDueAfterStartup(UtcNow, period);
         await RunTickAsync(language, startup: true, nextTick, stoppingToken);
         // The page's countdown to the next batch.
         status.RecordNextTick(language.Language, nextTick);
@@ -89,16 +94,16 @@ public class JokeSchedulerService : BackgroundService
         // an overrunning one and fires it at once, while the published due time is already in the future.
         while (true)
         {
-            var wait = nextTick - DateTime.UtcNow;
+            var wait = nextTick - UtcNow;
             if (wait > TimeSpan.Zero)
-                await Task.Delay(wait, stoppingToken);
+                await Task.Delay(wait, time, stoppingToken);
             stoppingToken.ThrowIfCancellationRequested();
 
             await RunTickAsync(language, startup: false, TickSchedule.NextDue(nextTick, period), stoppingToken);
             // Advance only once the tick (jokes and leaderboard) is done: until then the due time
             // stays in the past, which tells the page to keep polling for the batch. Due times that
             // passed while an overrunning tick ran are skipped, not run back to back.
-            nextTick = TickSchedule.NextDue(DateTime.UtcNow, period);
+            nextTick = TickSchedule.NextDue(UtcNow, period);
             status.RecordNextTick(language.Language, nextTick);
         }
     }
@@ -118,7 +123,7 @@ public class JokeSchedulerService : BackgroundService
         {
             if (!await TakeTurnAsync(language, startup, nextDue, stoppingToken))
             {
-                status.Record(new TickStatus(language.Language, DateTime.UtcNow, true, [], "skipped", null));
+                status.Record(new TickStatus(language.Language, UtcNow, true, [], "skipped", null));
                 metrics.RecordTick(language.Language, "skipped");
                 logger.LogInformation("Skipped the '{Language}' tick: another replica generated this period, or it came too late.", language.Language);
                 return;
@@ -126,7 +131,7 @@ public class JokeSchedulerService : BackgroundService
 
             var (saved, leaderboard) = await GenerateAndPersistAsync(language, stoppingToken);
             status.Record(new TickStatus(
-                language.Language, DateTime.UtcNow, true,
+                language.Language, UtcNow, true,
                 saved.Select(j => new GeneratedJoke(j.Id, j.Model)).ToList(), leaderboard, null));
             metrics.RecordTick(language.Language, "succeeded");
             metrics.RecordLeaderboard(language.Language, leaderboard);
@@ -139,7 +144,7 @@ public class JokeSchedulerService : BackgroundService
         }
         catch (Exception ex)
         {
-            status.Record(new TickStatus(language.Language, DateTime.UtcNow, false, [], "unknown", ex.GetType().Name));
+            status.Record(new TickStatus(language.Language, UtcNow, false, [], "unknown", ex.GetType().Name));
             metrics.RecordTick(language.Language, "failed");
             activity?.SetStatus(ActivityStatusCode.Error, ex.GetType().Name);
             activity?.AddException(ex);
@@ -160,7 +165,7 @@ public class JokeSchedulerService : BackgroundService
         // Ends a little early, so the holder's own next due time finds it expired. Every replica computes the same
         // due times (TickSchedule), so the others' ticks until then find it held and skip.
         var margin = TimeSpan.FromTicks(Math.Min(TimeSpan.FromMinutes(5).Ticks, period.Ticks / 10));
-        var now = DateTime.UtcNow;
+        var now = UtcNow;
         var lockKey = $"jokes:{language.Language}";
         // A regular tick that runs late (say, after the host was suspended) keeps its slot only while at least half a
         // period of lease is left: far longer than a batch takes, so no other replica can take the slot over while
@@ -239,7 +244,7 @@ public class JokeSchedulerService : BackgroundService
             // delete a different copy and leave none. Another replica cleaning now means this one has nothing to add.
             var locks = scope.ServiceProvider.GetRequiredService<ISchedulerLockRepository>();
             var lockKey = $"duplicates:{language}";
-            var now = DateTime.UtcNow;
+            var now = UtcNow;
             if (!await locks.TryAcquireAsync(lockKey, instanceId, now, now + DuplicatesLeaseLength, stoppingToken))
                 return [];
             try
@@ -267,7 +272,7 @@ public class JokeSchedulerService : BackgroundService
                 // lease runs out on its own in DuplicatesLeaseLength.
                 try
                 {
-                    await locks.ReleaseAsync(lockKey, instanceId, DateTime.UtcNow, CancellationToken.None);
+                    await locks.ReleaseAsync(lockKey, instanceId, UtcNow, CancellationToken.None);
                 }
                 catch (Exception ex)
                 {
@@ -361,7 +366,7 @@ public class JokeSchedulerService : BackgroundService
         }
 
         metrics.RecordJoke(joke.Language, joke.Model, "saved");
-        status.RecordSavedJoke(new SavedJoke(joke.Language, joke.Id, joke.Model, DateTime.UtcNow));
+        status.RecordSavedJoke(new SavedJoke(joke.Language, joke.Id, joke.Model, UtcNow));
         // This replica's visitors see it at once; the other region's when their cached copies expire.
         readCache.Invalidate();
         logger.LogInformation("Joke saved for '{Language}' ({Model}): {Text}", joke.Language, joke.Model, joke.Text);
@@ -421,7 +426,7 @@ public class JokeSchedulerService : BackgroundService
                         Model = model.Model,
                         Text = draft.Text,
                         Explanation = draft.Explanation,
-                        GeneratedAt = DateTime.UtcNow
+                        GeneratedAt = UtcNow
                     };
                 }
 
@@ -456,7 +461,7 @@ public class JokeSchedulerService : BackgroundService
                     language.Language, model.Model, delay.TotalSeconds, ProviderResponse(ex));
             }
 
-            await Task.Delay(delay, stoppingToken);
+            await Task.Delay(delay, time, stoppingToken);
         }
     }
 

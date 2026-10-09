@@ -13,6 +13,8 @@ using Microsoft.Extensions.Options;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
+// The one clock: everything reads "now" and waits through it, so tests can move time instead of waiting for it.
+builder.Services.AddSingleton(TimeProvider.System);
 // Traces, metrics and logs to Grafana Cloud, when OTEL_EXPORTER_OTLP_ENDPOINT is set (see TelemetryExtensions).
 builder.AddTelemetry();
 

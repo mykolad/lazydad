@@ -5,6 +5,7 @@ using LazyDad.Data.Repositories;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 using Moq;
 
 namespace LazyDad.Tests;
@@ -17,6 +18,7 @@ public class TopJokeServiceTests
     private readonly Mock<ITopJokeRepository> topJokeRepositoryMock = new();
     private readonly Mock<ILlmClientFactory> llmClientFactoryMock = new();
     private readonly Mock<IChatClient> chatClientMock = new();
+    private readonly FakeTimeProvider time = new(new DateTimeOffset(2026, 10, 9, 8, 0, 0, TimeSpan.Zero));
 
     private readonly TopJokesOptions topJokesOptions = new()
     {
@@ -40,7 +42,8 @@ public class TopJokeServiceTests
             topJokeRepositoryMock.Object,
             llmClientFactoryMock.Object,
             Options.Create(topJokesOptions),
-            NullLogger<TopJokeService>.Instance);
+            NullLogger<TopJokeService>.Instance,
+            time);
 
     private static Joke MakeJoke(int id)
         => new() { Id = id, Language = Language, Model = "gpt-5.3-chat", Text = $"Joke {id}", GeneratedAt = DateTime.UtcNow };
@@ -104,7 +107,8 @@ public class TopJokeServiceTests
         Assert.True(changed);
         topJokeRepositoryMock.Verify(r => r.ReplaceAsync(
             Language,
-            It.Is<IReadOnlyList<TopJoke>>(e => e.Select(x => x.JokeId).SequenceEqual(new[] { 1, 10, 2 })),
+            It.Is<IReadOnlyList<TopJoke>>(e => e.Select(x => x.JokeId).SequenceEqual(new[] { 1, 10, 2 })
+                && e.All(x => x.SelectedAt == time.GetUtcNow().UtcDateTime)),
             It.IsAny<CancellationToken>()), Times.Once);
     }
 

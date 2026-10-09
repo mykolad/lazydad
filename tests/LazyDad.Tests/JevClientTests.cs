@@ -22,7 +22,7 @@ public sealed class JevClientTests : IDisposable
     private JevClient CreateClient()
         => new(new HttpClient(handler),
             Options.Create(new SimilarityOptions { Jev = { Endpoint = "https://jev.test/api/v1/decide", Model = "jev-9.9.9", ApiKey = " secret-key\n" } }),
-            new SimilarityMetrics(Meters));
+            new SimilarityMetrics(Meters, TimeProvider.System));
 
     private const string Answer = """
         {"model":"jev-9.9.9",
