@@ -1,4 +1,5 @@
 using LazyDad.Api.Configuration;
+using LazyDad.Api.Controllers;
 using LazyDad.Api.Networking;
 using LazyDad.Api.Services;
 using LazyDad.Api.SignIn;
@@ -98,7 +99,7 @@ app.MapControllers();
 // CONTAINER_APP_REVISION). Smoke tests wait for both, so they can't pass against a draining revision.
 var appVersion = app.Services.GetRequiredService<IOptions<AppInfoOptions>>().Value.Version;
 var appRevision = app.Configuration["CONTAINER_APP_REVISION"] ?? "local";
-app.MapGet("/healthz", () => Results.Ok(new { status = "healthy", version = appVersion, revision = appRevision }));
+app.MapGet("/healthz", () => Results.Ok(new HealthResponse("healthy", appVersion, appRevision)));
 // This process, new at every start: a restarted revision keeps its name, so the smoke tests' retry tells the processes
 // apart by this.
 var processId = Guid.NewGuid().ToString("N");
@@ -116,15 +117,7 @@ app.MapGet("/status", async (SchedulerStatus status, IJokeRepository jokes, KeyR
     catch (Exception) when (!cancellationToken.IsCancellationRequested)
     {
     }
-    return Results.Ok(new
-    {
-        version = appVersion,
-        revision = appRevision,
-        process = processId,
-        ticks,
-        savedJokes,
-        signIn = new { keyRing = keyRing.State },
-    });
+    return Results.Ok(new StatusResponse(appVersion, appRevision, processId, ticks, savedJokes, new SignInStatus(keyRing.State)));
 });
 
 // The page shell (wwwroot/index.html) depends only on the build and the configuration (the jokes

@@ -51,15 +51,7 @@ public class JokesController : ControllerBase
     {
         var top = await cache.GetOrLoadAsync("top",
             (services, token) => services.GetRequiredService<ITopJokeRepository>().GetAllAsync(token), cancellationToken);
-        return Ok(top.Select(t => new
-        {
-            t.Language,
-            t.Rank,
-            t.Reason,
-            t.JudgeModel,
-            t.SelectedAt,
-            t.Joke
-        }));
+        return Ok(top.Select(TopJokeResponse.From).ToList());
     }
 
     /// <summary>
@@ -95,7 +87,7 @@ public class JokesController : ControllerBase
             cancellationToken);
         var items = rows.Take(limit).ToList();
         var next = rows.Count > limit ? JokeCursor.After(items[^1]).ToString() : null;
-        return Ok(new { total, items, next });
+        return Ok(new FeedPage(total, items.Select(JokeResponse.From).ToList(), next));
     }
 
     /// <summary>The page header: how many jokes exist, and when this revision's scheduler runs next (UTC, or null before it's scheduled).</summary>
@@ -103,7 +95,7 @@ public class JokesController : ControllerBase
     public async Task<IActionResult> GetSummary(CancellationToken cancellationToken)
     {
         var count = await cache.GetOrLoadAsync("count", CountJokes, cancellationToken);
-        return Ok(new { count, nextBatchAt = schedulerStatus.NextTickAt });
+        return Ok(new JokeSummary(count, schedulerStatus.NextTickAt));
     }
 
     /// <summary>
@@ -124,7 +116,7 @@ public class JokesController : ControllerBase
             ? await jokeRepository.GetByIdAsync(id, cancellationToken)
             : await jokeRepository.AddVotesAsync(id, upDelta, downDelta, cancellationToken);
 
-        return joke is null ? NotFound() : Ok(new { up = joke.Up, down = joke.Down });
+        return joke is null ? NotFound() : Ok(new VoteCounts(joke.Up, joke.Down));
 
         static bool IsVote(int value) => value is -1 or 0 or 1;
     }
@@ -133,7 +125,7 @@ public class JokesController : ControllerBase
     public async Task<IActionResult> GetById(int id, CancellationToken cancellationToken)
     {
         var joke = await GetJokeCached(cache, id, cancellationToken);
-        return joke is null ? NotFound() : Ok(joke);
+        return joke is null ? NotFound() : Ok(JokeResponse.From(joke));
     }
 
     /// <summary>"You might also like" on a joke's page: up to <c>limit</c> jokes like this one, most similar first (see JokeSimilarity).</summary>
@@ -150,7 +142,7 @@ public class JokesController : ControllerBase
         var index = await cache.GetOrLoadAsync("similarity", LoadSimilarityIndex, cancellationToken);
         var result = JokeSimilarity.Similar(joke, index, limit);
         similarityMetrics.RecordSimilar(result.Method);
-        return Ok(result.Jokes);
+        return Ok(result.Jokes.Select(JokeResponse.From).ToList());
     }
 
     private async Task<List<JokeSimilarity.Entry>> LoadSimilarityIndex(IServiceProvider services, CancellationToken cancellationToken)

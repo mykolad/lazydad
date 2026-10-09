@@ -54,17 +54,67 @@ public sealed class JokesControllerTests : IDisposable
     private static JsonElement Json(IActionResult result)
         => JsonDocument.Parse(JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(result).Value, JsonSerializerOptions.Web)).RootElement;
 
+    private static string RawJson(IActionResult result)
+        => JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(result).Value, JsonSerializerOptions.Web);
+
     private static Joke MakeJoke(int id) => new() { Id = id, Language = "Ukrainian", Model = "gpt-5.3-chat", Text = $"Joke {id}" };
+
+    // A joke with every field set, and how the API shows it: app.js reads these names, and the text hash stays private.
+    private static Joke FullJoke(int id) => new()
+    {
+        Id = id, Language = "Ukrainian", Model = "gpt-5.3-chat", Text = $"Joke {id}", Explanation = "A pun.",
+        GeneratedAt = new DateTime(2026, 10, 1, 8, 0, 0, DateTimeKind.Utc), Up = 3, Down = 1, TextHash = [1, 2, 3]
+    };
+
+    private static string FullJokeJson(int id)
+        => $$"""{"id":{{id}},"language":"Ukrainian","model":"gpt-5.3-chat","text":"Joke {{id}}","generatedAt":"2026-10-01T08:00:00Z","explanation":"A pun.","up":3,"down":1}""";
+
+    [Fact]
+    public async Task ResponsesKeepTheirJson()
+    {
+        // The public API, field by field: a change here is a change app.js and the smoke tests see.
+        jokeRepositoryMock.Setup(r => r.GetByIdAsync(7, It.IsAny<CancellationToken>())).ReturnsAsync(FullJoke(7));
+        jokeRepositoryMock.Setup(r => r.CountAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+        jokeRepositoryMock.Setup(r => r.GetPageAsync(JokeSort.Newest, null, 2, It.IsAny<CancellationToken>())).ReturnsAsync([FullJoke(7)]);
+        jokeRepositoryMock.Setup(r => r.AddVotesAsync(7, 1, 0, It.IsAny<CancellationToken>())).ReturnsAsync(FullJoke(7));
+        jokeRepositoryMock.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([FullJoke(7), FullJoke(8)]);
+        topJokeRepositoryMock.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(
+        [
+            new TopJoke
+            {
+                Language = "Ukrainian", Rank = 1, JokeId = 7, Joke = FullJoke(7), Reason = "Clever", JudgeModel = "gpt-6-sol",
+                SelectedAt = new DateTime(2026, 10, 1, 9, 0, 0, DateTimeKind.Utc)
+            }
+        ]);
+        schedulerStatus.RecordNextTick("Ukrainian", new DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc));
+        var controller = CreateController();
+
+        Assert.Equal(FullJokeJson(7), RawJson(await controller.GetById(7, CancellationToken.None)));
+        Assert.Equal(
+            $$"""[{"language":"Ukrainian","rank":1,"reason":"Clever","judgeModel":"gpt-6-sol","selectedAt":"2026-10-01T09:00:00Z","joke":{{FullJokeJson(7)}}}]""",
+            RawJson(await controller.GetTop(CancellationToken.None)));
+        Assert.Equal(
+            $$"""{"total":1,"items":[{{FullJokeJson(7)}}],"next":null}""",
+            RawJson(await controller.GetFeed("new", null, 1, CancellationToken.None)));
+        Assert.Equal(
+            """{"count":1,"nextBatchAt":"2026-10-01T12:00:00Z"}""",
+            RawJson(await controller.GetSummary(CancellationToken.None)));
+        Assert.Equal(
+            """{"up":3,"down":1}""",
+            RawJson(await controller.Vote(7, new VoteRequest(1, 0), CancellationToken.None)));
+        Assert.Equal(
+            $"[{FullJokeJson(8)}]",
+            RawJson(await controller.GetSimilar(7, 1, CancellationToken.None)));
+    }
 
     [Fact]
     public async Task GetById_WhenFound_ReturnsOk()
     {
-        var joke = MakeJoke(7);
-        jokeRepositoryMock.Setup(r => r.GetByIdAsync(7, It.IsAny<CancellationToken>())).ReturnsAsync(joke);
+        jokeRepositoryMock.Setup(r => r.GetByIdAsync(7, It.IsAny<CancellationToken>())).ReturnsAsync(MakeJoke(7));
 
         var result = await CreateController().GetById(7, CancellationToken.None);
 
-        Assert.Same(joke, Assert.IsType<OkObjectResult>(result).Value);
+        Assert.Equal("Joke 7", Assert.IsType<JokeResponse>(Assert.IsType<OkObjectResult>(result).Value).Text);
     }
 
     [Fact]
@@ -87,7 +137,6 @@ public sealed class JokesControllerTests : IDisposable
 
         var result = await CreateController().GetTop(CancellationToken.None);
 
-        // The projection is an anonymous type; check the JSON shape clients actually receive.
         var json = JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(result).Value, JsonSerializerOptions.Web);
         using var document = JsonDocument.Parse(json);
         var entry = Assert.Single(document.RootElement.EnumerateArray());

@@ -74,6 +74,8 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   `GET /jokes/top` → the Top 3 per language. There's no "every joke" endpoint: every read is bounded or cached (#91);
   `GET /me` → `{signedIn, provider}`, `GET /auth/signin/{provider}?returnUrl=`, `POST /auth/signout` (never cached; sign-out
   only with the page's `X-LazyDad: 1` header, which another site's form can't send).
+  Every response is a record in `Controllers/ApiResponses.cs` (`JokeResponse.From(joke)` etc.), never an entity or an
+  anonymous object: a new column isn't public until it's added there. `ResponsesKeepTheirJson` pins the JSON `app.js` reads.
 - **Read cache** (`JokeReadCache`, `ReadCache:Seconds`, 30 by default, 0 = off): the joke count, the Top 3, each joke by id, the
   similarity index and each feed page (by sort, cursor and size) are kept in memory per replica (at most 20,000 rows), since every visitor reads
   the same ones and the load test found the database to be the first limit (`docs/performance.md`, the history of
