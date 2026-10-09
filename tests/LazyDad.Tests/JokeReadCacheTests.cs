@@ -78,6 +78,28 @@ public class JokeReadCacheTests
         Assert.True(used.Disposed);
     }
 
+    [Fact]
+    public async Task ALoadEndingJustAsAnotherCallerMisses_IsntRunAgain()
+    {
+        // The load ends on another thread while the second caller is between its cache miss and joining the load. That
+        // window is a few instructions wide, so it takes many tries to hit; a correct cache never loads twice.
+        var loadedTwice = 0;
+        for (var i = 0; i < 20_000; i++)
+        {
+            using var cache = Create(null);
+            var database = new TaskCompletionSource<int>();
+            var first = cache.GetOrLoadAsync("count", (_, _) => database.Task, CancellationToken.None);
+            var finishing = Task.Run(() => database.SetResult(955));
+
+            if (await cache.GetOrLoadAsync("count", (_, _) => Task.FromResult(-1), CancellationToken.None) != 955)
+                loadedTwice++;
+            await finishing;
+            await first;
+        }
+
+        Assert.Equal(0, loadedTwice);
+    }
+
     // Stands in for a scoped DbContext.
     private sealed class Connection : IDisposable
     {
