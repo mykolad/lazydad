@@ -262,9 +262,12 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
     images or protection tags (runbook sections 2 and 6). Legacy `AcrPull`/`AcrPush` don't work in this mode, and the
     purge task needs its own identity with a repository role.
 - Port exposed by the container: **8080**, the .NET base image's default (`ASPNETCORE_HTTP_PORTS=8080`); don't set `ASPNETCORE_URLS` too, or the app warns at every start
+- **The runtime image is chiseled** (`aspnet:10.0-noble-chiseled-extra`: only what .NET needs, with ICU and time zones;
+  no shell or package manager), so `az containerapp exec` gets no shell: debug through the logs and traces. Nothing in
+  the final stage may `RUN` a command.
 - **The container runs as the base image's non-root `app` user** (`$APP_UID`). It owns only `wwwroot/index.html`, which the
-  image creates empty and the app writes in place at startup (it can't create or rename files in `wwwroot`). The rest of
-  `/app` is root's and read-only to it. Anything else the app writes at runtime needs a writable place (its home,
+  build stage creates empty and the app writes in place at startup (it can't create or rename files in `wwwroot`). The
+  rest of `/app` is root's and read-only to it. Anything else the app writes at runtime needs a writable place (its home,
   `/home/app`, or `/tmp`).
 - **Version metadata is baked into the image.** Build Image (`build-image.yml`) passes build args, and the Dockerfile turns
   them into `App__Version` (short SHA), `App__Revision` (full SHA), `App__CommitDate`, `App__SourceUrl`
