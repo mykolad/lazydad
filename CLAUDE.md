@@ -49,6 +49,9 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   the countdown, UA/EN interface (jokes stay Ukrainian), and light/dark/system theme. Preferences and the reader's
   votes live in `localStorage`. `wwwroot/app.css` has the Organic design tokens (dark = reversed ramps).
   Brand files (sloth logo per theme, favicons, `site.webmanifest`) are static files in `wwwroot`.
+  Cache headers (`StaticFileCaching`): `app.js`/`app.css` with this build's `?v=` are `immutable` for a year;
+  `index.html` is `no-cache` (or a deploy wouldn't reach visitors), and so is another version's URL or any file of a
+  local build; the unversioned brand files are kept a day.
   Design spec and deviations: `docs/design/redesign-2026-09.md`.
 - **A joke's page** (`/j/<id>`, what every share button shares): `JokePageController` serves the same shell per request,
   with the joke in `<title>` and the link-preview tags (Open Graph, `canonical`) that messengers read without running

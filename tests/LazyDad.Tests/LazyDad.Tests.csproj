@@ -23,6 +23,11 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <!-- The page's static files, for the HTTP tests (LazyDadApp copies them into its content root). -->
+  <ItemGroup>
+    <Content Include="..\..\src\LazyDad.Api\wwwroot\**" Exclude="..\..\src\LazyDad.Api\wwwroot\index.html" LinkBase="wwwroot" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\src\LazyDad.Api\LazyDad.Api.csproj" />
     <ProjectReference Include="..\..\src\LazyDad.Data\LazyDad.Data.csproj" />
