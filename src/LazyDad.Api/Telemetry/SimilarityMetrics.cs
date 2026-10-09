@@ -33,13 +33,7 @@ public sealed class SimilarityMetrics
 
     private sealed record CreditsReading(double Usd, DateTimeOffset At);
 
-    public SimilarityMetrics(IMeterFactory meterFactory)
-        : this(meterFactory, TimeProvider.System)
-    {
-    }
-
-    /// <summary>For tests: a fake clock.</summary>
-    internal SimilarityMetrics(IMeterFactory meterFactory, TimeProvider time)
+    public SimilarityMetrics(IMeterFactory meterFactory, TimeProvider time)
     {
         this.time = time;
         var meter = meterFactory.Create(LazyDadTelemetry.Name);
