@@ -26,8 +26,12 @@ public sealed class LazyDadApp : WebApplicationFactory<Program>
     public LazyDadApp(Dictionary<string, string?> settings)
     {
         this.settings = settings;
-        // The app reads its settings from its content root: the real appsettings.json, which the build copies here.
+        // The app reads its settings and serves its static files from its content root: the real appsettings.json and
+        // wwwroot, which the build copies here.
         File.Copy(Path.Combine(AppContext.BaseDirectory, "appsettings.json"), Path.Combine(contentRoot, "appsettings.json"));
+        var wwwroot = Directory.CreateDirectory(Path.Combine(contentRoot, "wwwroot")).FullName;
+        foreach (var file in Directory.GetFiles(Path.Combine(AppContext.BaseDirectory, "wwwroot")))
+            File.Copy(file, Path.Combine(wwwroot, Path.GetFileName(file)));
     }
 
     public TestDatabase Database { get; } = new();
