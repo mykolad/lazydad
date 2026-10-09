@@ -262,5 +262,5 @@ static double Cosine(double[] a, double[] b)
 }
 
 record Joke(int Id, string Text, string? Explanation, int Up, int Down);
-record FeedPage(List<Joke> Items, string? Next);
+sealed record FeedPage(List<Joke> Items, string? Next);
 record JevAnswer(string Topic, Dictionary<string, double> TopicProbabilities, string Wordplay, Dictionary<string, double> WordplayProbabilities, double CostUsd);
