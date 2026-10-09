@@ -311,6 +311,13 @@ dotnet build lazydad.slnx
 dotnet test  lazydad.slnx
 ```
 
+Shared settings live at the root: `Directory.Build.props` (framework, nullable, implicit usings), `Directory.Packages.props`
+(every package version; projects and the file-based apps' `#:package` name packages without one) and `global.json`
+(a .NET 10 SDK from 10.0.200, never a newer major one). Any 10.0 feature band, on purpose (the owner's choice,
+#93): CI's `10.0.x` and Docker's `sdk:10.0` move to the newest band together, while a dev machine may lag a band
+behind. Pinning one band would mean pinning the Docker SDK tag and updating every machine with it. The Dockerfile
+copies all three before `dotnet restore`.
+
 ## Build and Test
 
 `.github/workflows/build-and-test.yml` (**Build and Test**, job `build-and-test`, the required check on `master`)

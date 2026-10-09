@@ -1,4 +1,4 @@
-#:package Azure.Identity@1.21.0
+#:package Azure.Identity
 #:property PublishAot=false
 
 // Similarity experiment: which method finds better "you might also like" jokes? (README.md next to this file.)
