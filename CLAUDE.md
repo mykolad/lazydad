@@ -311,6 +311,10 @@ dotnet build lazydad.slnx
 dotnet test  lazydad.slnx
 ```
 
+Shared settings live at the root: `Directory.Build.props` (framework, nullable, implicit usings), `Directory.Packages.props`
+(every package version; projects and the file-based apps' `#:package` name packages without one) and `global.json`
+(a .NET 10 SDK from 10.0.200, never a newer major one). The Dockerfile copies all three before `dotnet restore`.
+
 ## Build and Test
 
 `.github/workflows/build-and-test.yml` (**Build and Test**, job `build-and-test`, the required check on `master`)

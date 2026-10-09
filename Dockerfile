@@ -1,6 +1,8 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
+# The shared build settings and package versions are part of restoring.
+COPY ["global.json", "Directory.Build.props", "Directory.Packages.props", "./"]
 COPY ["src/LazyDad.Api/LazyDad.Api.csproj", "src/LazyDad.Api/"]
 COPY ["src/LazyDad.Data/LazyDad.Data.csproj", "src/LazyDad.Data/"]
 RUN dotnet restore "src/LazyDad.Api/LazyDad.Api.csproj"
