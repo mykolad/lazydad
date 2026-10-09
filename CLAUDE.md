@@ -71,6 +71,7 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
 - **API for the page:** `GET /jokes/feed?sort=new|top&limit=(≤ 50)[&after=<next>]` → `{total, items, next}` (keyset cursor, so new jokes don't shift pages);
   `GET /jokes/summary` → `{count, nextBatchAt}`; `POST /jokes/{id}/vote {value, previous}` → `{up, down}`;
   `GET /jokes/{id}` (cached like the feed); `GET /jokes/{id}/similar?limit=(≤ 12)` → the most similar jokes;
+  `GET /jokes/top` → the Top 3 per language. There's no "every joke" endpoint: every read is bounded or cached (#91);
   `GET /me` → `{signedIn, provider}`, `GET /auth/signin/{provider}?returnUrl=`, `POST /auth/signout` (never cached; sign-out
   only with the page's `X-LazyDad: 1` header, which another site's form can't send).
 - **Read cache** (`JokeReadCache`, `ReadCache:Seconds`, 30 by default, 0 = off): the joke count, the Top 3, each joke by id, the
@@ -377,8 +378,8 @@ from `master`.
 
 The smoke tests check that `/healthz` reports the new version and revision, that the page and API are served,
 that the new revision itself saved a joke in every enabled language, from any of its configured models (it lists each
-joke on `/status` as soon as it's saved; DB rows alone could come from the draining revision), that those jokes are in
-`/jokes`, that
+joke on `/status` as soon as it's saved; DB rows alone could come from the draining revision), that each of those jokes is
+served by `/jokes/<id>`, that
 the leaderboard is populated with valid ranks, that `app.js`/`app.css`, `/jokes/feed` and `/jokes/summary`
 are served, that a joke's page (`/j/<id>`) carries its link-preview tags and `/jokes/<id>/similar` answers, that the vote endpoint answers (with a no-op vote, so it never changes the counts), that `/me` answers signed out
 (and `no-store`), and that the new revision's key ring check is `ok` (every deployed app has sign-in configured, so `off` fails too).
