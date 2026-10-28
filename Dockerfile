@@ -11,6 +11,10 @@ RUN dotnet publish "src/LazyDad.Api/LazyDad.Api.csproj" -c Release -o /app/publi
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app
 COPY --from=build /app/publish .
+# The app writes wwwroot/index.html at startup, so its user owns that one file. Everything else, the wwwroot folder
+# included, stays root's: owning the folder would let the app delete or replace app.js and the other files.
+RUN touch /app/wwwroot/index.html && chown $APP_UID /app/wwwroot/index.html
+USER $APP_UID
 
 # The base image already listens on 8080 (ASPNETCORE_HTTP_PORTS=8080). Setting ASPNETCORE_URLS as well only made the
 # app warn at every start that one overrides the other.
