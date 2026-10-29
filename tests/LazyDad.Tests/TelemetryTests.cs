@@ -138,11 +138,13 @@ public class TelemetryTests
         Assert.Contains("skipped", first);       // a series no tick has touched yet: it can only be one of the zeros
         Assert.Contains("lazydad.jokes", first);
 
-        // A tick right after: its 1 arrives in a later export, on top of the 0 Grafana already has.
+        // A tick right after: its 1 arrives in a later export, on top of the 0 Grafana already has. Not necessarily the
+        // second one to arrive: CI once got an export in between without the app's metrics.
         metrics.RecordTick("Ukrainian", "failed");
         Assert.True(app.Services.GetRequiredService<MeterProvider>().ForceFlush());
-        await collector.WaitForCountAsync("/otlp/v1/metrics", 2, TimeSpan.FromSeconds(30));
-        Assert.Contains("lazydad.scheduler.ticks", collector.Bodies("/otlp/v1/metrics")[1]);
+        await collector.WaitUntilAsync(() => collector.Bodies("/otlp/v1/metrics").Skip(1).Any(b => b.Contains("lazydad.scheduler.ticks")),
+            TimeSpan.FromSeconds(30));
+        Assert.Contains(collector.Bodies("/otlp/v1/metrics").Skip(1), b => b.Contains("lazydad.scheduler.ticks"));
     }
 
     /// <summary>Accepts OTLP/HTTP exports and keeps what arrived.</summary>
@@ -166,10 +168,10 @@ public class TelemetryTests
                 await Task.Delay(50);
         }
 
-        public async Task WaitForCountAsync(string path, int count, TimeSpan timeout)
+        public async Task WaitUntilAsync(Func<bool> arrived, TimeSpan timeout)
         {
             var deadline = DateTime.UtcNow + timeout;
-            while (Bodies(path).Count < count && DateTime.UtcNow < deadline)
+            while (!arrived() && DateTime.UtcNow < deadline)
                 await Task.Delay(50);
         }
 
