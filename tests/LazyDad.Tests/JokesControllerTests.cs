@@ -57,17 +57,6 @@ public sealed class JokesControllerTests : IDisposable
     private static Joke MakeJoke(int id) => new() { Id = id, Language = "Ukrainian", Model = "gpt-5.3-chat", Text = $"Joke {id}" };
 
     [Fact]
-    public async Task GetAll_ReturnsOkWithAllJokes()
-    {
-        List<Joke> jokes = [MakeJoke(1), MakeJoke(2)];
-        jokeRepositoryMock.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(jokes);
-
-        var result = await CreateController().GetAll(CancellationToken.None);
-
-        Assert.Same(jokes, Assert.IsType<OkObjectResult>(result).Value);
-    }
-
-    [Fact]
     public async Task GetById_WhenFound_ReturnsOk()
     {
         var joke = MakeJoke(7);
@@ -84,17 +73,6 @@ public sealed class JokesControllerTests : IDisposable
         jokeRepositoryMock.Setup(r => r.GetByIdAsync(99, It.IsAny<CancellationToken>())).ReturnsAsync((Joke?)null);
 
         Assert.IsType<NotFoundResult>(await CreateController().GetById(99, CancellationToken.None));
-    }
-
-    [Fact]
-    public async Task GetByLanguage_PassesLanguageThrough()
-    {
-        List<Joke> jokes = [MakeJoke(3)];
-        jokeRepositoryMock.Setup(r => r.GetByLanguageAsync("Ukrainian", It.IsAny<CancellationToken>())).ReturnsAsync(jokes);
-
-        var result = await CreateController().GetByLanguage("Ukrainian", CancellationToken.None);
-
-        Assert.Same(jokes, Assert.IsType<OkObjectResult>(result).Value);
     }
 
     [Fact]

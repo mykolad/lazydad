@@ -1,0 +1,10 @@
+<Project>
+
+  <!-- Every project in the repository, file-based apps included. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+</Project>
