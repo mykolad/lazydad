@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 using Moq;
 
 namespace LazyDad.Tests;
@@ -23,7 +24,7 @@ public sealed class JokeProfilerTests : IDisposable
     private readonly ServiceProvider metricsProvider = new ServiceCollection().AddMetrics().BuildServiceProvider();
     private readonly List<JokeProfile> saved = [];
     private readonly SimilarityOptions options = new() { BatchSize = 10, Jev = { ApiKey = "key" } };
-    private readonly Clock clock = new();
+    private readonly FakeTimeProvider clock = new(new DateTimeOffset(2026, 10, 5, 8, 0, 0, TimeSpan.Zero));
 
     public JokeProfilerTests()
     {
@@ -53,7 +54,7 @@ public sealed class JokeProfilerTests : IDisposable
 
     private JokeProfiler CreateProfiler()
         => new(profilesMock.Object, locksMock.Object, jevMock.Object, llmClientFactoryMock.Object, Options.Create(options),
-            new SimilarityMetrics(Meters), NullLogger<JokeProfiler>.Instance, clock);
+            new SimilarityMetrics(Meters, clock), NullLogger<JokeProfiler>.Instance, clock);
 
     private static Joke MakeJoke(int id, string? explanation) => new() { Id = id, Language = "Ukrainian", Text = $"Joke {id}", Explanation = explanation };
 
@@ -168,20 +169,13 @@ public sealed class JokeProfilerTests : IDisposable
         // Every answer takes 10 minutes: calls start at 0, 10 and 20; at 30 the lease (30 minutes) would be over.
         jevMock
             .Setup(j => j.ProfileAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .Callback(() => clock.Now += TimeSpan.FromMinutes(10))
+            .Callback(() => clock.Advance(TimeSpan.FromMinutes(10)))
             .ReturnsAsync([1f]);
 
         var count = await CreateProfiler().ProfileAsync(CancellationToken.None);
 
         Assert.Equal(3, count);
         jevMock.Verify(j => j.ProfileAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Exactly(3));
-    }
-
-    private sealed class Clock : TimeProvider
-    {
-        public DateTimeOffset Now { get; set; } = new(2026, 10, 5, 8, 0, 0, TimeSpan.Zero);
-
-        public override DateTimeOffset GetUtcNow() => Now;
     }
 
     [Fact]
