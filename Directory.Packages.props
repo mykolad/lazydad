@@ -3,6 +3,8 @@
   <!-- Every package version, in one place: the projects name packages without a version. -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <!-- A version here also applies where a package comes in through another one (Microsoft.Data.SqlClient). -->
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
 
   <ItemGroup>
@@ -21,10 +23,10 @@
 
   <!-- EF Core and the ASP.NET Core packages that build on it must stay on the same version. -->
   <ItemGroup>
-    <PackageVersion Include="Microsoft.AspNetCore.DataProtection.EntityFrameworkCore" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.AspNetCore.DataProtection.EntityFrameworkCore" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.14" />
   </ItemGroup>
 
   <ItemGroup>
@@ -37,9 +39,11 @@
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.4" />
   </ItemGroup>
 
-  <!-- File-based apps: tests/load/Seed.cs (Azure.Identity above serves experiments/similarity too). -->
+  <!-- tests/load/Seed.cs, a file-based app, names SqlClient (Azure.Identity above serves experiments/similarity too).
+       EF Core's SqlClient follows this version as well: 6.1.8 is the first with a patched
+       System.Security.Cryptography.Pkcs (October's .NET security fixes). -->
   <ItemGroup>
-    <PackageVersion Include="Microsoft.Data.SqlClient" Version="6.1.6" />
+    <PackageVersion Include="Microsoft.Data.SqlClient" Version="6.1.8" />
   </ItemGroup>
 
 </Project>
