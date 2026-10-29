@@ -88,7 +88,16 @@ var fileProvider = new PhysicalFileProvider(wwwrootPath);
 app.UseForwardedHeaders();
 app.UseMiddleware<CloudflareClientAddressMiddleware>();
 app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = fileProvider });
-app.UseStaticFiles(new StaticFileOptions { FileProvider = fileProvider });
+var appInfo = app.Services.GetRequiredService<IOptions<AppInfoOptions>>().Value;
+var buildVersion = appInfo.CalendarVersion is null ? null : appInfo.Version;
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = fileProvider,
+    OnPrepareResponse = context => context.Context.Response.Headers.CacheControl = StaticFileCaching.For(
+        context.File.Name,
+        context.Context.Request.Query.TryGetValue("v", out var version) ? version.ToString() : null,
+        buildVersion),
+});
 // Before the rate limiter, so a limit can count per voter as well as per address.
 app.UseAuthentication();
 app.UseRateLimiter();
@@ -96,7 +105,7 @@ app.MapControllers();
 // version: the image's commit (baked into the image as App__Version). revision: the Container Apps revision,
 // unique per rollout even when re-deploying the same commit (the platform sets
 // CONTAINER_APP_REVISION). Smoke tests wait for both, so they can't pass against a draining revision.
-var appVersion = app.Services.GetRequiredService<IOptions<AppInfoOptions>>().Value.Version;
+var appVersion = appInfo.Version;
 var appRevision = app.Configuration["CONTAINER_APP_REVISION"] ?? "local";
 app.MapGet("/healthz", () => Results.Ok(new { status = "healthy", version = appVersion, revision = appRevision }));
 // This process, new at every start: a restarted revision keeps its name, so the smoke tests' retry tells the processes

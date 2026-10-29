@@ -9,8 +9,15 @@ namespace LazyDad.Tests;
 public sealed class AppHttpTests : IDisposable
 {
     private const int VotesPerMinute = 3;
+    private const string Version = "e33d99a";
 
-    private readonly LazyDadApp app = new(new() { [VoteRateLimit.ConfigurationKey] = VotesPerMinute.ToString() });
+    private readonly LazyDadApp app = new(new()
+    {
+        [VoteRateLimit.ConfigurationKey] = VotesPerMinute.ToString(),
+        // A build from Deploy Master, not a local one: its versioned files may be cached for good.
+        ["App:Version"] = Version,
+        ["App:CommitDate"] = "2026-10-09T08:00:00Z",
+    });
     private readonly HttpClient client;
 
     public AppHttpTests()
@@ -137,5 +144,33 @@ public sealed class AppHttpTests : IDisposable
         Assert.Empty(status.RootElement.GetProperty("savedJokes").EnumerateArray());
         // No pepper configured, so sign-in is off.
         Assert.Equal("off", status.RootElement.GetProperty("signIn").GetProperty("keyRing").GetString());
+    }
+
+    [Theory]
+    [InlineData("app.js?v=" + Version, StaticFileCaching.Immutable)]
+    [InlineData("app.css?v=" + Version, StaticFileCaching.Immutable)]
+    // An older shell's URL: today's file mustn't be kept under it.
+    [InlineData("app.js?v=0ld0ld0", StaticFileCaching.Revalidate)]
+    [InlineData("", StaticFileCaching.Revalidate)]
+    [InlineData("index.html", StaticFileCaching.Revalidate)]
+    [InlineData("logo.svg", StaticFileCaching.OneDay)]
+    [InlineData("site.webmanifest", StaticFileCaching.OneDay)]
+    public async Task StaticFiles_AreCachedForAsLongAsTheirUrlStaysTrue(string path, string cacheControl)
+    {
+        using var response = await client.GetAsync(path);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(cacheControl, response.Headers.CacheControl?.ToString());
+    }
+
+    [Fact]
+    public async Task AJokesPage_IsNeverCachedForLong()
+    {
+        var joke = await app.AddJokeAsync("A joke worth sharing");
+
+        using var response = await client.GetAsync($"j/{joke.Id}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.False(response.Headers.CacheControl?.MaxAge > TimeSpan.Zero, $"Cache-Control: {response.Headers.CacheControl}");
     }
 }
