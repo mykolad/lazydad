@@ -38,7 +38,7 @@ public sealed class JokesControllerTests : IDisposable
             .BuildServiceProvider();
         // No stored profiles unless a test adds some.
         profileRepositoryMock.Setup(r => r.GetAllAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync([]);
-        similarityMetrics = new SimilarityMetrics(services.GetRequiredService<IMeterFactory>());
+        similarityMetrics = new SimilarityMetrics(services.GetRequiredService<IMeterFactory>(), TimeProvider.System);
         cache = new JokeReadCache(new ConfigurationBuilder().Build(), services.GetRequiredService<IServiceScopeFactory>());
     }
 
