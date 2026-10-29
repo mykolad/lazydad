@@ -1,4 +1,4 @@
-#:package Azure.Identity@1.21.0
+#:package Azure.Identity
 #:property PublishAot=false
 
 // Similarity experiment: which method finds better "you might also like" jokes? (README.md next to this file.)
@@ -262,5 +262,5 @@ static double Cosine(double[] a, double[] b)
 }
 
 record Joke(int Id, string Text, string? Explanation, int Up, int Down);
-record FeedPage(List<Joke> Items, string? Next);
+sealed record FeedPage(List<Joke> Items, string? Next);
 record JevAnswer(string Topic, Dictionary<string, double> TopicProbabilities, string Wordplay, Dictionary<string, double> WordplayProbabilities, double CostUsd);
