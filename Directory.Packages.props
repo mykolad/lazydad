@@ -3,10 +3,17 @@
   <!-- Every package version, in one place: the projects name packages without a version. -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <!-- A version here also applies where a package comes in through another one (Microsoft.Data.SqlClient). -->
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageVersion Include="AspNet.Security.OAuth.GitHub" Version="10.0.0" />
+    <!-- A beta on purpose (#96, checked 2026-10-09). The only stable release, 2.1.0, is built on OpenAI 2.1, and
+         Microsoft.Extensions.AI.OpenAI needs OpenAI 2.10 or later. The stable OpenAI package alone can call Azure's
+         /openai/v1/ API, but its Entra ID constructor (AuthenticationPolicy) is still marked experimental (OPENAI001)
+         in 2.14. Re-check when Azure.AI.OpenAI has a stable release built on OpenAI 2.10+, or when that constructor
+         stops being experimental. -->
     <PackageVersion Include="Azure.AI.OpenAI" Version="2.9.0-beta.1" />
     <PackageVersion Include="Azure.Extensions.AspNetCore.DataProtection.Keys" Version="1.6.4" />
     <PackageVersion Include="Azure.Identity" Version="1.21.0" />
@@ -21,10 +28,10 @@
 
   <!-- EF Core and the ASP.NET Core packages that build on it must stay on the same version. -->
   <ItemGroup>
-    <PackageVersion Include="Microsoft.AspNetCore.DataProtection.EntityFrameworkCore" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.AspNetCore.DataProtection.EntityFrameworkCore" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.14" />
   </ItemGroup>
 
   <ItemGroup>
@@ -37,9 +44,11 @@
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.4" />
   </ItemGroup>
 
-  <!-- File-based apps: tests/load/Seed.cs (Azure.Identity above serves experiments/similarity too). -->
+  <!-- tests/load/Seed.cs, a file-based app, names SqlClient (Azure.Identity above serves experiments/similarity too).
+       EF Core's SqlClient follows this version as well: 6.1.8 is the first with a patched
+       System.Security.Cryptography.Pkcs (October's .NET security fixes). -->
   <ItemGroup>
-    <PackageVersion Include="Microsoft.Data.SqlClient" Version="6.1.6" />
+    <PackageVersion Include="Microsoft.Data.SqlClient" Version="6.1.8" />
   </ItemGroup>
 
 </Project>
