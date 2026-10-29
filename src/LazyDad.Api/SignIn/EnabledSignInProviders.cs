@@ -5,12 +5,14 @@ namespace LazyDad.Api.SignIn;
 /// <summary>
 /// The providers a reader can sign in with here: the authentication schemes registered under a provider's name (see
 /// SignInSetup), so the list and the handlers can't disagree. Only these appear in metrics, so their tags stay bounded.
+/// In <see cref="SignInProviders.DisplayOrder"/>, the order the page's sign-in dialog lists them.
 /// </summary>
 public sealed class EnabledSignInProviders
 {
     public EnabledSignInProviders(IAuthenticationSchemeProvider schemes)
         // The schemes are registered at startup and never change, so the default provider's task is already complete.
-        : this(schemes.GetAllSchemesAsync().GetAwaiter().GetResult().Select(s => s.Name).Where(SignInProviders.IsKnown).ToList())
+        : this(schemes.GetAllSchemesAsync().GetAwaiter().GetResult().Select(s => s.Name).Where(SignInProviders.IsKnown)
+            .OrderBy(name => SignInProviders.DisplayOrder.ToList().IndexOf(name)).ToList())
     {
     }
 

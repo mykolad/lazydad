@@ -1,6 +1,7 @@
 using LazyDad.Api.Configuration;
 using LazyDad.Api.Controllers;
 using LazyDad.Api.Services;
+using LazyDad.Api.SignIn;
 using LazyDad.Data.Entities;
 using LazyDad.Data.Repositories;
 using Microsoft.AspNetCore.Hosting;
@@ -37,6 +38,7 @@ public sealed class JokePageControllerTests : IDisposable
         var html = new HtmlGeneratorService(
             Options.Create(new JokeGenerationOptions { Languages = [new() { Language = "Ukrainian", LanguageCode = "uk" }] }),
             Options.Create(new AppInfoOptions { Version = "e33d99a" }),
+            new EnabledSignInProviders(["github"]),
             Mock.Of<IWebHostEnvironment>(),
             NullLogger<HtmlGeneratorService>.Instance);
         var context = new DefaultHttpContext();

@@ -22,6 +22,8 @@ public static class VoteRateLimit
         services.AddRateLimiter(options =>
         {
             options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+            // The address is the partition's key, kept only in memory. The partitioned limiter drops a partition about 10
+            // seconds after its window refills unused, which is what the privacy page promises ("about a minute").
             options.AddPolicy(JokesController.VotePolicy, context => RateLimitPartition.GetFixedWindowLimiter(
                 context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
                 _ => new FixedWindowRateLimiterOptions { PermitLimit = perMinute, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
