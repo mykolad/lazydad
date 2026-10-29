@@ -55,19 +55,6 @@ public sealed class JokeProfiler : IJokeProfiler
         ILlmClientFactory llmClientFactory,
         IOptions<SimilarityOptions> options,
         SimilarityMetrics metrics,
-        ILogger<JokeProfiler> logger)
-        : this(profiles, locks, jev, llmClientFactory, options, metrics, logger, TimeProvider.System)
-    {
-    }
-
-    /// <summary>For tests: a fake clock.</summary>
-    internal JokeProfiler(
-        IJokeProfileRepository profiles,
-        ISchedulerLockRepository locks,
-        IJevClient jev,
-        ILlmClientFactory llmClientFactory,
-        IOptions<SimilarityOptions> options,
-        SimilarityMetrics metrics,
         ILogger<JokeProfiler> logger,
         TimeProvider time)
     {
