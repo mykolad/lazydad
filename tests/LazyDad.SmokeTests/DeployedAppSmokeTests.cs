@@ -228,6 +228,20 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
     }
 
     [Fact]
+    public async Task PrivacyPage_IsServed_InBothLanguages()
+    {
+        // The providers' registrations link to it, and their crawlers read it without running app.js.
+        var html = await target.PollAsync<(bool Found, string Html)>(async () =>
+        {
+            using var response = await target.Client.GetAsync("privacy");
+            return response.StatusCode == HttpStatusCode.OK ? (true, await response.Content.ReadAsStringAsync()) : null;
+        }, SmokeTarget.ColdStartTimeout, "/privacy");
+
+        Assert.Contains("<div class=\"ld-doc-body\" lang=\"uk\">", html.Html);
+        Assert.Contains("<div class=\"ld-doc-body\" lang=\"en\">", html.Html);
+    }
+
+    [Fact]
     public async Task JokesApi_ReturnsAJsonArray()
     {
         var jokes = await target.PollAsync<JsonElement>(async () => await target.GetJsonAsync("jokes"), SmokeTarget.ColdStartTimeout, "/jokes");

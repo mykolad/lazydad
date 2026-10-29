@@ -142,6 +142,7 @@ svg { display: block; flex: none; }
 .ld-provider--github, .ld-provider--github:hover { background: #24292f; color: #fff; }
 .ld-provider--github:hover { background: #32383f; }
 [data-theme="dark"] .ld-provider--github { box-shadow: inset 0 0 0 1px color-mix(in srgb, #fff 25%, transparent); }
+.ld-dialog-link { align-self: center; font-size: 13px; font-weight: 600; }
 .ld-notice {
   flex: 1 1 100%; display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 20px; border-radius: 22px;
   background: var(--color-accent-200); color: var(--color-accent-900); font-weight: 600;
@@ -406,6 +407,21 @@ a.ld-version:hover { color: var(--color-text); }
 .ld-card-score:has([data-sign="1"]) { color: var(--color-accent-700); }
 .ld-card-score:has([data-sign="-1"]) { color: var(--color-accent-2-700); }
 .ld-card-open { color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+
+/* — the privacy page (/privacy): both languages are in the HTML, and the page's language picks one — */
+.ld-doc { flex: 1 1 100%; max-width: 760px; min-width: 0; display: flex; flex-direction: column; gap: 24px; }
+html[lang="en"] .ld-doc-body[lang="uk"], html:not([lang="en"]) .ld-doc-body[lang="en"] { display: none; }
+.ld-doc-body { padding: clamp(24px, 5cqi, 44px); border-radius: 36px; background: var(--color-surface); font-size: 16px; text-wrap: pretty; }
+.ld-doc-body h2 { font-size: clamp(28px, 4cqi, 38px); }
+.ld-doc-body h3 { margin: 28px 0 8px; font: 900 19px/1.25 var(--font-heading); }
+.ld-doc-body p, .ld-doc-body ul { margin: 0 0 10px; }
+.ld-doc-body ul { padding-left: 22px; }
+.ld-doc-body li + li { margin-top: 6px; }
+.ld-doc-body code { font-size: 14px; }
+/* 70%: 13px text on the surface stays above WCAG AA. */
+.ld-doc-meta { font-size: 13px; color: color-mix(in srgb, var(--color-text) 70%, transparent); }
+
+.ld-footer { padding: 0 var(--gutter) 40px; font-size: 13px; font-weight: 600; }
 
 /* Read by screen readers, not shown. */
 .ld-sr {
