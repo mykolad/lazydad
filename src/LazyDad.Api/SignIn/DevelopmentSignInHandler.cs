@@ -32,7 +32,8 @@ public sealed class DevelopmentSignInHandler : AuthenticationHandler<Authenticat
         var account = Request.Query["account"].ToString();
         var principal = SignInPrincipal.Create(Scheme.Name,
             voterKeys.For(Scheme.Name, string.IsNullOrWhiteSpace(account) ? DefaultAccount : account));
-        await Context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal);
+        await Context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal,
+            new AuthenticationProperties { IsPersistent = properties.IsPersistent });
         Response.Redirect(properties.RedirectUri ?? "/");
     }
 }

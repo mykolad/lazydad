@@ -150,12 +150,66 @@ public sealed class SignInTests : IAsyncDisposable
         Assert.Contains("samesite=lax", cookie);
         Assert.Contains("path=/", cookie);
         Assert.DoesNotContain("domain=", cookie);
-        // A session cookie: gone when the browser closes ("Keep me signed in" is #74).
+        // A session cookie: gone when the browser closes, unless the reader ticks "Keep me signed in".
         Assert.DoesNotContain("expires=", cookie);
 
         var me = await MeAsync(client, CookieValue(response));
         Assert.True(me.GetProperty("signedIn").GetBoolean());
         Assert.Equal("dev", me.GetProperty("provider").GetString());
+    }
+
+    // When the cookie in this answer expires, or null for a session cookie.
+    private static DateTimeOffset? Expires(HttpResponseMessage response)
+    {
+        var attribute = SetCookie(response).Split(';').Select(a => a.Trim())
+            .FirstOrDefault(a => a.StartsWith("expires=", StringComparison.OrdinalIgnoreCase));
+        return attribute is null ? null : DateTimeOffset.Parse(attribute["expires=".Length..], System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    [Fact]
+    public async Task KeepMeSignedIn_MakesTheCookieLast90Days()
+    {
+        var client = Client(await StartDevelopmentAsync());
+
+        using var response = await GetAsync(client, "auth/signin/dev?persist=true&returnUrl=/", null);
+
+        var expires = Assert.NotNull(Expires(response));
+        Assert.InRange(expires - DateTimeOffset.UtcNow, TimeSpan.FromDays(90) - TimeSpan.FromMinutes(5), TimeSpan.FromDays(90));
+        Assert.True((await MeAsync(client, CookieValue(response))).GetProperty("signedIn").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ASignInInUse_IsRenewedOnceHalfItsLifetimeHasPassed_AndKeepsItsKind(bool persistent)
+    {
+        var app = await StartDevelopmentAsync();
+        var voterKey = app.Services.GetRequiredService<VoterKeys>().For(SignInProviders.Development, "alice");
+        var issued = DateTimeOffset.UtcNow - TimeSpan.FromDays(50);
+        var old = Tickets(app).Protect(new AuthenticationTicket(SignInPrincipal.Create(SignInProviders.Development, voterKey),
+            new AuthenticationProperties { IsPersistent = persistent, IssuedUtc = issued, ExpiresUtc = issued + SignInSetup.Lifetime },
+            CookieAuthenticationDefaults.AuthenticationScheme));
+
+        using var response = await GetAsync(Client(app), "me", old);
+
+        var renewed = Tickets(app).Unprotect(CookieValue(response))!;
+        Assert.InRange(renewed.Properties.ExpiresUtc!.Value - DateTimeOffset.UtcNow, TimeSpan.FromDays(89), TimeSpan.FromDays(90));
+        Assert.Equal(persistent, Expires(response) is not null);
+    }
+
+    [Fact]
+    public async Task ASignInNotYetHalfwayThrough_IsNotRenewed()
+    {
+        var app = await StartDevelopmentAsync();
+        var voterKey = app.Services.GetRequiredService<VoterKeys>().For(SignInProviders.Development, "alice");
+        var issued = DateTimeOffset.UtcNow - TimeSpan.FromDays(10);
+        var recent = Tickets(app).Protect(new AuthenticationTicket(SignInPrincipal.Create(SignInProviders.Development, voterKey),
+            new AuthenticationProperties { IsPersistent = true, IssuedUtc = issued, ExpiresUtc = issued + SignInSetup.Lifetime },
+            CookieAuthenticationDefaults.AuthenticationScheme));
+
+        using var response = await GetAsync(Client(app), "me", recent);
+
+        Assert.False(response.Headers.Contains("Set-Cookie"));
     }
 
     [Theory]
@@ -397,6 +451,21 @@ public sealed class SignInTests : IAsyncDisposable
             .Select(m => ((string)m.Tags["provider"]!, (string)m.Tags["operation"]!, (string)m.Tags["outcome"]!))
             .ToList();
         Assert.Equal([("github", SignInBackchannel.Token, SignInBackchannel.Ok), ("github", SignInBackchannel.UserInfo, SignInBackchannel.Ok)], calls);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SignIn_WithGitHub_KeepsTheReadersChoiceToStaySignedIn_ThroughTheRoundTrip(bool persist)
+    {
+        var (client, _, _) = await StartWithGitHubAsync();
+        using var start = await GetAsync(client, $"auth/signin/github?returnUrl=%2F&persist={persist}", null);
+        var correlation = Assert.Single(start.Headers.GetValues("Set-Cookie"), c => c.StartsWith(".AspNetCore.Correlation.", StringComparison.Ordinal));
+
+        using var response = await GitHubCallbackAsync(client, correlation.Split(';')[0],
+            $"code={FakeGitHub.Code}&state={Uri.EscapeDataString(State(start.Headers.Location!))}");
+
+        Assert.Equal(persist, Expires(response) is not null);
     }
 
     [Fact]

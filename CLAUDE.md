@@ -101,8 +101,11 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   - `VoterKeys`: HMAC-SHA256 of `<provider>:<account id>` keyed with `SignIn:VoterKeyPepper` (a Key Vault reference per
     app, `VoterKeyPepper` / `VoterKeyPepperStaging`; runbook section 7, step 7). Empty = sign-in off. Never store or log
     the account id, a claim or a voter key;
-  - the cookie (`SignInSetup`): `__Host-lazydad`, HttpOnly, Secure, `SameSite=Lax`, a session cookie for now, holding
-    exactly the voter key and the provider (`SignInPrincipal`; any other cookie is rejected). With a Key Vault key
+  - the cookie (`SignInSetup`): `__Host-lazydad`, HttpOnly, Secure, `SameSite=Lax`, a session cookie unless the reader ticks
+    "Keep me signed in for 90 days" in the dialog (unticked each time it opens; `persist=true` on the sign-in URL, carried
+    to the callback in `AuthenticationProperties.IsPersistent`): then it lasts 90 days, renewed once half has passed. EU
+    guidance exempts sign-in cookies from consent only when a lasting one is the user's choice, hence no cookie banner.
+    It holds exactly the voter key and the provider (`SignInPrincipal`; any other cookie is rejected). With a Key Vault key
     (`DataProtection:KeyVaultKeyId`, versionless; required wherever sign-in is on, except Development) its key ring is in
     the database (`DataProtectionKeys`, application name `lazydad`, so both production apps share it; always the
     read-write connection), each key wrapped with that key. Without one (a local run) the ring stays on the machine, so a
