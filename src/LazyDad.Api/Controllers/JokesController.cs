@@ -46,13 +46,6 @@ public class JokesController : ControllerBase
         => cache.GetOrLoadAsync($"joke:{id}",
             (services, token) => services.GetRequiredService<IJokeRepository>().GetByIdAsync(id, token), cancellationToken);
 
-    [HttpGet]
-    public async Task<IActionResult> GetAll(CancellationToken cancellationToken)
-    {
-        var jokes = await jokeRepository.GetAllAsync(cancellationToken);
-        return Ok(jokes);
-    }
-
     [HttpGet("top")]
     public async Task<IActionResult> GetTop(CancellationToken cancellationToken)
     {
@@ -175,13 +168,6 @@ public class JokesController : ControllerBase
         return JokeSimilarity.Index(jokes,
             jev.ToDictionary(p => p.JokeId, p => JokeProfiler.FromBytes(p.Vector)),
             embeddings.ToDictionary(p => p.JokeId, p => JokeProfiler.FromBytes(p.Vector)));
-    }
-
-    [HttpGet("language/{language}")]
-    public async Task<IActionResult> GetByLanguage(string language, CancellationToken cancellationToken)
-    {
-        var jokes = await jokeRepository.GetByLanguageAsync(language, cancellationToken);
-        return Ok(jokes);
     }
 }
 

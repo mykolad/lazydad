@@ -4,12 +4,12 @@ GET {{LazyDad.Api_HostAddress}}/healthz
 
 ###
 
-GET {{LazyDad.Api_HostAddress}}/jokes
+GET {{LazyDad.Api_HostAddress}}/jokes/feed?sort=new&limit=20
 Accept: application/json
 
 ###
 
-GET {{LazyDad.Api_HostAddress}}/jokes/language/Ukrainian
+GET {{LazyDad.Api_HostAddress}}/jokes/top
 Accept: application/json
 
 ###

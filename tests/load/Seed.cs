@@ -1,4 +1,4 @@
-#:package Microsoft.Data.SqlClient@6.1.6
+#:package Microsoft.Data.SqlClient
 
 // Prepares the load-test database (Load Test Environment workflow): the app's database user, then synthetic jokes
 // with votes and a Top 3, so the feed, its pages and the leaderboard look like production's. Run it after the

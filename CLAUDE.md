@@ -71,6 +71,7 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
 - **API for the page:** `GET /jokes/feed?sort=new|top&limit=(≤ 50)[&after=<next>]` → `{total, items, next}` (keyset cursor, so new jokes don't shift pages);
   `GET /jokes/summary` → `{count, nextBatchAt}`; `POST /jokes/{id}/vote {value, previous}` → `{up, down}`;
   `GET /jokes/{id}` (cached like the feed); `GET /jokes/{id}/similar?limit=(≤ 12)` → the most similar jokes;
+  `GET /jokes/top` → the Top 3 per language. There's no "every joke" endpoint: every read is bounded or cached (#91);
   `GET /me` → `{signedIn, provider}`, `GET /auth/signin/{provider}?returnUrl=`, `POST /auth/signout` (never cached; sign-out
   only with the page's `X-LazyDad: 1` header, which another site's form can't send).
 - **Read cache** (`JokeReadCache`, `ReadCache:Seconds`, 30 by default, 0 = off): the joke count, the Top 3, each joke by id, the
@@ -318,6 +319,13 @@ dotnet build lazydad.slnx
 dotnet test  lazydad.slnx
 ```
 
+Shared settings live at the root: `Directory.Build.props` (framework, nullable, implicit usings), `Directory.Packages.props`
+(every package version; projects and the file-based apps' `#:package` name packages without one) and `global.json`
+(a .NET 10 SDK from 10.0.200, never a newer major one). Any 10.0 feature band, on purpose (the owner's choice,
+#93): CI's `10.0.x` and Docker's `sdk:10.0` move to the newest band together, while a dev machine may lag a band
+behind. Pinning one band would mean pinning the Docker SDK tag and updating every machine with it. The Dockerfile
+copies all three before `dotnet restore`.
+
 ## Build and Test
 
 `.github/workflows/build-and-test.yml` (**Build and Test**, job `build-and-test`, the required check on `master`)
@@ -384,8 +392,8 @@ from `master`.
 
 The smoke tests check that `/healthz` reports the new version and revision, that the page and API are served,
 that the new revision itself saved a joke in every enabled language, from any of its configured models (it lists each
-joke on `/status` as soon as it's saved; DB rows alone could come from the draining revision), that those jokes are in
-`/jokes`, that
+joke on `/status` as soon as it's saved; DB rows alone could come from the draining revision), that each of those jokes is
+served by `/jokes/<id>`, that
 the leaderboard is populated with valid ranks, that `app.js`/`app.css`, `/jokes/feed` and `/jokes/summary`
 are served, that a joke's page (`/j/<id>`) carries its link-preview tags and `/jokes/<id>/similar` answers, that the vote endpoint answers (with a no-op vote, so it never changes the counts), that `/me` answers signed out
 (and `no-store`), and that the new revision's key ring check is `ok` (every deployed app has sign-in configured, so `off` fails too).
