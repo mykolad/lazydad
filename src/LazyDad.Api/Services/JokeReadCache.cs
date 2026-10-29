@@ -63,6 +63,10 @@ public sealed class JokeReadCache : IDisposable
     {
         try
         {
+            // A load that ended between the caller's cache miss and its GetOrAdd has cached its value (before leaving
+            // loading), so it's here now: without this check, that caller would query again.
+            if (cache.TryGetValue(fullKey, out T? cached))
+                return cached;
             var value = await LoadInOwnScopeAsync(load, CancellationToken.None);
             cache.Set(fullKey, value, new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = lifetime, Size = Rows(value) });
             return value;
