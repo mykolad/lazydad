@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
     <PackageReference Include="Microsoft.Extensions.Diagnostics.Testing" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
@@ -18,6 +19,11 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+  </ItemGroup>
+
+  <!-- The page's static files, for the HTTP tests (LazyDadApp copies them into its content root). -->
+  <ItemGroup>
+    <Content Include="..\..\src\LazyDad.Api\wwwroot\**" Exclude="..\..\src\LazyDad.Api\wwwroot\index.html" LinkBase="wwwroot" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

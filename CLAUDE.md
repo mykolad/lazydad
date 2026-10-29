@@ -12,7 +12,7 @@ Deployed to Azure Container Apps.
 ```
 src/LazyDad.Api    — ASP.NET Core Web API (controllers, background services, configuration)
 src/LazyDad.Data   — EF Core DbContext, entities, migrations, repositories
-tests/LazyDad.Tests      — xUnit + Moq unit tests (plus SQLite in-memory for repositories)
+tests/LazyDad.Tests      — xUnit + Moq unit tests (plus SQLite in-memory for repositories, and the whole app over HTTP)
 tests/LazyDad.SmokeTests — smoke tests against a deployed app (run by Deploy Master, not by Build and Test)
 tests/load               — the load test: k6 visitors (visitors.js) and the database seeding (Seed.cs, a file-based app)
 ```
@@ -49,6 +49,9 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   the countdown, UA/EN interface (jokes stay Ukrainian), and light/dark/system theme. Preferences and the reader's
   votes live in `localStorage`. `wwwroot/app.css` has the Organic design tokens (dark = reversed ramps).
   Brand files (sloth logo per theme, favicons, `site.webmanifest`) are static files in `wwwroot`.
+  Cache headers (`StaticFileCaching`): `app.js`/`app.css` with this build's `?v=` are `immutable` for a year;
+  `index.html` is `no-cache` (or a deploy wouldn't reach visitors), and so is another version's URL or any file of a
+  local build; the unversioned brand files are kept a day.
   Design spec and deviations: `docs/design/redesign-2026-09.md`.
 - **A joke's page** (`/j/<id>`, what every share button shares): `JokePageController` serves the same shell per request,
   with the joke in `<title>` and the link-preview tags (Open Graph, `canonical`) that messengers read without running
@@ -325,6 +328,11 @@ Shared settings live at the root: `Directory.Build.props` (framework, nullable, 
 #93): CI's `10.0.x` and Docker's `sdk:10.0` move to the newest band together, while a dev machine may lag a band
 behind. Pinning one band would mean pinning the Docker SDK tag and updating every machine with it. The Dockerfile
 copies all three before `dotnet restore`.
+
+`LazyDadApp` (a `WebApplicationFactory`) runs the real `Program.cs` in memory for HTTP-level tests (`AppHttpTests`:
+routing, binding, the middleware order, the vote limit): a `TestDatabase`, no scheduler, and a temporary content root
+with the real `appsettings.json`. Its environment is `Testing`, never `Development`, which would load the user secrets
+and with them production's database.
 
 ## Build and Test
 
