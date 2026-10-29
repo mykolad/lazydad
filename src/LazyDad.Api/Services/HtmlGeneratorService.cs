@@ -66,11 +66,9 @@ public class HtmlGeneratorService
             var wwwroot = Path.Combine(env.ContentRootPath, "wwwroot");
             Directory.CreateDirectory(wwwroot);
 
-            // Write to a temp file and rename over the old page, so a request never sees a half-written file.
-            var path = Path.Combine(wwwroot, "index.html");
-            var tempPath = path + ".tmp";
-            await File.WriteAllTextAsync(tempPath, html, Encoding.UTF8, cancellationToken);
-            File.Move(tempPath, path, overwrite: true);
+            // In place, not a temp file renamed over it: in the container the app may write this file but not its folder
+            // (see the Dockerfile). It's written before the server listens, so no request sees it half-written.
+            await File.WriteAllTextAsync(Path.Combine(wwwroot, "index.html"), html, Encoding.UTF8, cancellationToken);
 
             logger.LogInformation("index.html written (version {Version}).", appInfo.Value.Version);
         }
