@@ -23,7 +23,7 @@ Both see the same input: the joke and, when it has one, its "why it's funny".
 
    Your `az login` calls it (you have `Foundry User` on the resource, runbook section 5).
 3. **From the repository root:** `dotnet run experiments/similarity/Similarity.cs`. It reads the jokes from
-   `https://lazydad.fyi/jokes`, calls both services, and keeps their answers in `experiments/similarity/out/` (ignored by
+   `https://lazydad.fyi/jokes/feed`, page by page, calls both services, and keeps their answers in `experiments/similarity/out/` (ignored by
    git), so a second run doesn't pay again. It prints what Jev cost and how many suggestions both methods share.
 4. **Open `experiments/similarity/out/compare.html`.** For 25 random jokes it shows each method's top 3 as X and Y, in
    random order. Pick the better list for each, then reveal the score: which method was which, and each joke's topic and
