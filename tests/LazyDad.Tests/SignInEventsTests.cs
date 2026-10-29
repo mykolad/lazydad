@@ -28,6 +28,7 @@ public sealed class SignInEventsTests : IDisposable
             .AddSingleton(Options.Create(new SignInOptions { VoterKeyPepper = Pepper }))
             .AddSingleton<VoterKeys>()
             .AddSingleton(new EnabledSignInProviders([SignInProviders.Microsoft]))
+            .AddSingleton(new SignInProviderStatus([]))
             .AddSingleton<SignInMetrics>()
             .BuildServiceProvider();
         services.GetRequiredService<SignInMetrics>();

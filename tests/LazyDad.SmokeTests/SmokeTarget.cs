@@ -64,6 +64,14 @@ public sealed class SmokeTarget : IDisposable
 
     public Task<JsonElement> GetJsonAsync(string path) => Client.GetFromJsonAsync<JsonElement>(path);
 
+    /// <summary>
+    /// Whether a <c>/status</c> answer came from the process under test: the expected revision, and on the retry not the
+    /// process that answered before the restart (the revision keeps its name, and the old process may still answer).
+    /// </summary>
+    public bool IsFromTheProcessUnderTest(JsonElement status)
+        => (ExpectedRevision is null || status.GetProperty("revision").GetString() == ExpectedRevision)
+            && (NotProcess is null || status.GetProperty("process").GetString() != NotProcess);
+
     /// <summary>Enabled languages and their models, from the deployed appsettings.json.</summary>
     public static IReadOnlyDictionary<string, IReadOnlyList<string>> ConfiguredLanguages()
     {

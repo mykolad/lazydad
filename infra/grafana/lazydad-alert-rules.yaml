@@ -116,3 +116,20 @@ groups:
           description: >-
             The log line "Jev couldn't profile joke" or "The embedding model couldn't profile" has the error (for Jev,
             its answer: 402 is out of credits, 401 a wrong key). The next tick tries again.
+
+      - alert: LazyDadSignInProviderDown
+        # One alert per app and provider. Each app probes every configured sign-in provider every 15 minutes
+        # (SignInProbeService: a made-up code exchanged with the app's client id and secret); lazydad_signin_provider_state
+        # is 1 for its last state. 30 minutes is two probes in a row, so one slow answer doesn't alert.
+        expr: >-
+          max by (job, provider) (lazydad_signin_provider_state{job=~"lazydad-app|lazydad-app-swedencentral",
+          state!="valid"}) == 1
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Sign-in with {{ $labels.provider }} is failing on {{ $labels.job }}.'
+          description: >-
+            /status (signIn.providers) shows the state: invalid means the provider refuses the app's client id or
+            secret (a secret that expired or was replaced: runbook section 7, step 8), unreachable that it doesn't
+            answer. The log line from the probe has the provider's error. Readers can't sign in with it meanwhile.

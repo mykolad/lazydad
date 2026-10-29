@@ -1,3 +1,4 @@
+using AspNet.Security.OAuth.GitHub;
 using Azure.Identity;
 using LazyDad.Api.Configuration;
 using LazyDad.Api.Telemetry;
@@ -39,6 +40,8 @@ public static class SignInSetup
         services.AddSingleton<EnabledSignInProviders>();
         services.AddSingleton<SignInMetrics>();
         services.AddSingleton<KeyRingCheck>();
+        services.AddSingleton<SignInProviderStatus>();
+        services.AddHostedService<SignInProbeService>();
 
         // With a Key Vault key, the key ring lives in the database, on its read-write connection (never a read-only
         // replica: a key is used as soon as it's made), read about once a day, and each key is encrypted with the Key
@@ -101,6 +104,7 @@ public static class SignInSetup
         if (builder.Environment.IsDevelopment())
             authentication.AddScheme<AuthenticationSchemeOptions, DevelopmentSignInHandler>(SignInProviders.Development, null);
         if (options.GitHub.Configured)
+        {
             authentication.AddGitHub(SignInProviders.GitHub, github =>
             {
                 Remote(github, SignInProviders.GitHub, options.GitHub);
@@ -110,6 +114,33 @@ public static class SignInSetup
                 github.Events.OnTicketReceived = context
                     => SignInEvents.OnTicketReceived(context, SignInProviders.GitHub, p => p.FindFirstValue(ClaimTypes.NameIdentifier));
             });
+            Backchannel<GitHubAuthenticationOptions>(services, SignInProviders.GitHub, uri =>
+                uri.AbsoluteUri == GitHubAuthenticationDefaults.TokenEndpoint ? SignInBackchannel.Token
+                : uri.AbsoluteUri == GitHubAuthenticationDefaults.UserInformationEndpoint ? SignInBackchannel.UserInfo
+                : SignInBackchannel.Other);
+            services.AddSingleton<ISignInProbe>(provider => OAuthCodeProbe.GitHub(options.GitHub, provider));
+        }
+    }
+
+    /// <summary>
+    /// The provider's back channel: a named HTTP client (<see cref="SignInBackchannel.ClientName"/>) whose calls are
+    /// timed, shared by its handler and its probe. Tests replace its primary handler with a fake provider.
+    /// </summary>
+    private static void Backchannel<TOptions>(IServiceCollection services, string provider, Func<Uri, string> operation)
+        where TOptions : RemoteAuthenticationOptions
+    {
+        services.AddHttpClient(SignInBackchannel.ClientName(provider), client =>
+            {
+                // What the handler's own back channel would have: GitHub's API refuses a request without a user agent.
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("LazyDad (+https://lazydad.fyi)");
+                client.Timeout = TimeSpan.FromSeconds(30);
+                client.MaxResponseContentBufferSize = SignInBackchannel.MaxResponseBytes;
+            })
+            // The handler keeps its client for the app's lifetime, so connections are renewed instead (DNS changes).
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(15) })
+            .AddHttpMessageHandler(services => new SignInBackchannel.Timing(provider, operation, services.GetRequiredService<SignInMetrics>()));
+        services.AddOptions<TOptions>(provider)
+            .Configure<IHttpClientFactory>((remote, clients) => remote.Backchannel = clients.CreateClient(SignInBackchannel.ClientName(provider)));
     }
 
     /// <summary>What every OAuth provider shares: its registration, PKCE, no tokens kept, failures back to the page.</summary>

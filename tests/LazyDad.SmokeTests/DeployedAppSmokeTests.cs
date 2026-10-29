@@ -153,12 +153,53 @@ public class DeployedAppSmokeTests : IClassFixture<SmokeTarget>
         var keyRing = await target.PollAsync<JsonElement>(async () =>
         {
             var json = await target.GetJsonAsync("status");
-            var isExpectedRevision = target.ExpectedRevision is null || json.GetProperty("revision").GetString() == target.ExpectedRevision;
-            return isExpectedRevision && json.TryGetProperty("signIn", out var signIn)
-                && signIn.GetProperty("keyRing").GetString() != "pending" ? signIn.GetProperty("keyRing") : null;
-        }, SmokeTarget.ColdStartTimeout, $"revision '{target.ExpectedRevision}' to finish its key ring check");
+            return target.IsFromTheProcessUnderTest(json) && json.TryGetProperty("signIn", out var signIn)
+                && signIn.GetProperty("keyRing").GetString() != "pending" ? signIn.GetProperty("keyRing").Clone() : null;
+        }, SmokeTarget.ColdStartTimeout, $"revision '{target.ExpectedRevision}' to finish its key ring check" +
+            (target.NotProcess is null ? "" : $", from a process other than {target.NotProcess}"));
 
         Assert.Equal("ok", keyRing.GetString());
+    }
+
+    /// <summary>Where each provider's sign-in page is; a provider enabled without one here fails the test until it's added.</summary>
+    private static readonly IReadOnlyDictionary<string, string> AuthorizeUrls = new Dictionary<string, string>
+    {
+        ["github"] = "https://github.com/login/oauth/authorize",
+    };
+
+    [Fact]
+    public async Task EveryEnabledSignInProvider_AcceptsTheAppsClient_AndGetsReadersWithTheRightCallback()
+    {
+        // The new revision probes each configured provider at startup (a made-up code exchanged with the app's client id
+        // and secret). "invalid" fails the deploy: a wrong id, or a secret that expired or was replaced, is a setting
+        // that went wrong. "unreachable" (the provider didn't answer) doesn't: a provider's outage isn't this revision's,
+        // rolling back wouldn't help, and LazyDadSignInProviderDown alerts if it lasts. "off": not configured here.
+        var providers = await target.PollAsync<JsonElement>(async () =>
+        {
+            var json = await target.GetJsonAsync("status");
+            return target.IsFromTheProcessUnderTest(json) && json.TryGetProperty("signIn", out var signIn) && signIn.TryGetProperty("providers", out var states)
+                && states.EnumerateObject().All(p => p.Value.GetString() != "pending") ? states.Clone() : null;
+        }, SmokeTarget.ColdStartTimeout, $"revision '{target.ExpectedRevision}' to probe its sign-in providers" +
+            (target.NotProcess is null ? "" : $", from a process other than {target.NotProcess}"));
+
+        using var noRedirects = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { BaseAddress = target.Client.BaseAddress };
+        foreach (var provider in providers.EnumerateObject().Where(p => p.Value.GetString() != "off"))
+        {
+            Assert.True(provider.Value.GetString() is "valid" or "unreachable",
+                $"{provider.Name} is {provider.Value.GetString()} on /status: it refuses the app's client id or secret.");
+
+            // The start of a sign-in (it counts as "started" in lazydad_signins_total, once per deploy).
+            using var response = await noRedirects.GetAsync($"auth/signin/{provider.Name}");
+            Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+            var location = response.Headers.Location!;
+            Assert.True(AuthorizeUrls.TryGetValue(provider.Name, out var authorize), $"Add {provider.Name}'s authorize URL to the smoke test.");
+            Assert.Equal(authorize, location.GetLeftPart(UriPartial.Path));
+            var query = System.Web.HttpUtility.ParseQueryString(location.Query);
+            Assert.False(string.IsNullOrEmpty(query["client_id"]));
+            // The callback the provider must have registered: this app's own address (https, from the ingress' forwarded
+            // headers). Production's registration has lazydad.fyi's, where readers come from.
+            Assert.Equal(new Uri(target.Client.BaseAddress!, $"signin-{provider.Name}").AbsoluteUri, query["redirect_uri"]);
+        }
     }
 
     [Fact]

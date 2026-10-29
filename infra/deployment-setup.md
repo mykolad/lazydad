@@ -1090,8 +1090,13 @@ A client id without its secret (or the other way round) stops the new revision a
 and `/auth/signin/github` answers `404`. To check by hand, open `/auth/signin/github` on the app, approve on GitHub's
 page, and `/me` shows `{"signedIn": true, "provider": "github"}` (staging admits only your IP; for production, use
 `https://lazydad.fyi`). A failed sign-in lands on `/?signin=failed`; `lazydad_signins_total{provider="github"}` counts
-it. Replacing an OAuth app keeps every voter (the account id is the reader's GitHub id, the same for every app); only
-the client id and secret change.
+it. `/status` shows `"signIn": {"providers": {"github": "valid", …}}` once the app's probe (at startup, then every 15
+minutes) found that GitHub accepts the client id and secret: `invalid` is a wrong id or a secret that expired or was
+replaced, `unreachable` no answer. The smoke tests fail on `invalid`, and `LazyDadSignInProviderDown` (section 11)
+alerts on either after 30 minutes.
+Whether the OAuth app lists the right redirect URI isn't checked automatically (that takes someone signed in to
+GitHub), so after changing an OAuth app's settings, sign in by hand. Replacing an OAuth app keeps every voter (the account id is the reader's
+GitHub id, the same for every app); only the client id and secret change.
 
 **A new client secret** (GitHub's don't expire, but one may leak): generate a second one on the OAuth app's page, put it
 in Key Vault as above, then restart each of that environment's apps so they read it (`az containerapp revision restart
@@ -1680,6 +1685,7 @@ would look down and idle all the time.
   | `LazyDadServerErrors` | more than 2 server errors (5xx) in 15 minutes, not counting `/healthz` | warning |
 | `LazyDadJevCreditsLow` | Jev reports less than $1 of credits left (top up before similar jokes fall back to embeddings) | warning |
 | `LazyDadProfileFailed` | Jev or the embedding model couldn't profile a joke for similar jokes (30 minutes), one alert per app and kind; the next tick retries | warning |
+| `LazyDadSignInProviderDown` | a sign-in provider's probe hasn't found it `valid` for 30 minutes (it refuses the client id or secret, or doesn't answer), one alert per app and provider; readers can't sign in with it | critical |
 
   Import them once: *Alerting → Alert rules → More → Import to Grafana-managed rules*, import source **YAML file**,
   the file, the stack's `…-prom` data source, a folder (e.g. `LazyDad`), then *Import*. Grafana converts them to its own
@@ -1688,7 +1694,8 @@ would look down and idle all the time.
 
 **5. The dashboard.** `infra/grafana/lazydad-dashboard.json` shows the apps picked in the *App* selector at the top:
 production's two by default, added up (pick one app, or staging, to see it alone). Requests, errors and latency; ticks,
-jokes and leaderboard updates by outcome (ticks per app: each batch runs on one of them); LLM call duration and tokens
+jokes and leaderboard updates by outcome (ticks per app: each batch runs on one of them); similar jokes; sign-in (how fast
+each provider answers, sign-ins by outcome, probes by state); LLM call duration and tokens
 per model; CPU and memory per app against each container's limits; SQL and outbound calls; and the logs, each line
 starting with its app's name. In Grafana: *Dashboards → New → Import*, upload the file, *Import* (to update it, the same,
 with *Overwrite*: the file keeps the dashboard's uid). The *Metrics* and *Logs* selectors at the top offer only the

@@ -1,7 +1,7 @@
 {
   "title": "LazyDad",
   "uid": "lazydad-overview",
-  "description": "Requests, jokes, similar jokes (Jev), LLM calls, resources, database and logs of the LazyDad apps picked in the App selector: production's two by default, added up; resources and ticks per app. Import it as described in infra/deployment-setup.md, section 11.",
+  "description": "Requests, jokes, similar jokes (Jev), sign-in, LLM calls, resources, database and logs of the LazyDad apps picked in the App selector: production's two by default, added up; resources and ticks per app. Import it as described in infra/deployment-setup.md, section 11.",
   "tags": ["lazydad"],
   "timezone": "browser",
   "editable": true,
@@ -216,9 +216,49 @@
           "expr": "sum(sum_over_time(((lazydad_jev_cost_total{job=~\"$job\"} - lazydad_jev_cost_total{job=~\"$job\"} offset 1m) >= 0 or lazydad_jev_cost_total{job=~\"$job\"})[$__interval:1m]))" }]
     },
 
-    { "type": "row", "title": "LLM calls (per hour)", "id": 30, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 } },
+    { "type": "row", "title": "Sign-in (per hour)", "id": 80, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 } },
     {
-      "type": "timeseries", "title": "Call duration p50 and p95, by model", "id": 31, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 41 }, "interval": "1h",
+      "type": "timeseries", "title": "Provider calls p50 and p95, by provider and operation", "id": 81, "gridPos": { "h": 8, "w": 8, "x": 0, "y": 41 }, "interval": "1h",
+      "description": "How fast each provider answers the app's own calls: token (exchanging the reader's code), userinfo (reading the account id) and probe (a made-up code, every 15 minutes per app). The reader's time on the provider's page isn't measured. Per hour with calls.",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "points", "pointSize": 7, "showPoints": "always" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "p95 {{provider}} {{operation}}",
+          "expr": "histogram_quantile(0.95, sum by (le, provider, operation) (sum_over_time(((lazydad_signin_provider_duration_seconds_bucket{job=~\"$job\"} - lazydad_signin_provider_duration_seconds_bucket{job=~\"$job\"} offset 1m) >= 0 or lazydad_signin_provider_duration_seconds_bucket{job=~\"$job\"})[$__interval:1m])))" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "p50 {{provider}} {{operation}}",
+          "expr": "histogram_quantile(0.5, sum by (le, provider, operation) (sum_over_time(((lazydad_signin_provider_duration_seconds_bucket{job=~\"$job\"} - lazydad_signin_provider_duration_seconds_bucket{job=~\"$job\"} offset 1m) >= 0 or lazydad_signin_provider_duration_seconds_bucket{job=~\"$job\"})[$__interval:1m])))" }
+      ]
+    },
+    {
+      "type": "timeseries", "title": "Sign-ins, by provider and outcome", "id": 82, "gridPos": { "h": 8, "w": 8, "x": 8, "y": 41 }, "interval": "1h",
+      "description": "started: sent to the provider (each deploy's smoke test starts one per enabled provider); completed: signed in; failed: the provider refused, the reader cancelled, or the callback didn't check out. Completed over started is how many readers finish a sign-in.",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1, "stacking": { "mode": "normal" } } },
+        "overrides": [
+          { "matcher": { "id": "byRegexp", "options": ".* completed$" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] },
+          { "matcher": { "id": "byRegexp", "options": ".* started$" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }] },
+          { "matcher": { "id": "byRegexp", "options": ".* failed$" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{provider}} {{outcome}}",
+        "expr": "round(sum by (provider, outcome) (sum_over_time(((lazydad_signins_total{job=~\"$job\"} - lazydad_signins_total{job=~\"$job\"} offset 1m) >= 0 or lazydad_signins_total{job=~\"$job\"})[$__interval:1m])))" }]
+    },
+    {
+      "type": "timeseries", "title": "Provider probes, by provider and state", "id": 83, "gridPos": { "h": 8, "w": 8, "x": 16, "y": 41 }, "interval": "1h",
+      "description": "Every 15 minutes each app exchanges a made-up code with each provider: valid (it accepts the app's client id and secret), invalid (a wrong id, or an expired or replaced secret: signing in with it fails), unreachable (no answer, a timeout, 429 or 5xx). LazyDadSignInProviderDown alerts after 30 minutes without valid; /status shows the latest.",
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1, "stacking": { "mode": "normal" } } },
+        "overrides": [
+          { "matcher": { "id": "byRegexp", "options": ".* valid$" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] },
+          { "matcher": { "id": "byRegexp", "options": ".* invalid$" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
+          { "matcher": { "id": "byRegexp", "options": ".* unreachable$" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] }] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "refId": "A", "datasource": { "type": "prometheus", "uid": "${prom}" }, "legendFormat": "{{provider}} {{outcome}}",
+        "expr": "round(sum by (provider, outcome) (sum_over_time(((lazydad_signin_provider_duration_seconds_count{job=~\"$job\", operation=\"probe\"} - lazydad_signin_provider_duration_seconds_count{job=~\"$job\", operation=\"probe\"} offset 1m) >= 0 or lazydad_signin_provider_duration_seconds_count{job=~\"$job\", operation=\"probe\"})[$__interval:1m])))" }]
+    },
+    { "type": "row", "title": "LLM calls (per hour)", "id": 30, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 49 } },
+    {
+      "type": "timeseries", "title": "Call duration p50 and p95, by model", "id": 31, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 50 }, "interval": "1h",
       "description": "Per hour with calls; the judge's calls are the gpt-6-sol ones.",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "points", "pointSize": 7, "showPoints": "always" } }, "overrides": [] },
@@ -231,7 +271,7 @@
       ]
     },
     {
-      "type": "timeseries", "title": "Tokens, by model and type", "id": 32, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 41 }, "interval": "1h",
+      "type": "timeseries", "title": "Tokens, by model and type", "id": 32, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 50 }, "interval": "1h",
       "description": "input and output tokens per hour. Thinking models (Kimi-K2.5) count their reasoning as output.",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1, "stacking": { "mode": "normal" } } }, "overrides": [] },
@@ -240,9 +280,9 @@
         "expr": "round(sum by (gen_ai_request_model, gen_ai_token_type) (sum_over_time(((gen_ai_client_token_usage_sum{job=~\"$job\"} - gen_ai_client_token_usage_sum{job=~\"$job\"} offset 1m) >= 0 or gen_ai_client_token_usage_sum{job=~\"$job\"})[$__interval:1m])))" }]
     },
 
-    { "type": "row", "title": "Resources", "id": 40, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 49 } },
+    { "type": "row", "title": "Resources", "id": 40, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 58 } },
     {
-      "type": "timeseries", "title": "CPU (cores)", "id": 41, "gridPos": { "h": 8, "w": 8, "x": 0, "y": 50 },
+      "type": "timeseries", "title": "CPU (cores)", "id": 41, "gridPos": { "h": 8, "w": 8, "x": 0, "y": 59 },
       "description": "CPU time each app process used per second. Each container has 0.25 vCPU (the dashed line).",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 3, "min": 0, "color": { "mode": "palette-classic" },
@@ -253,7 +293,7 @@
         "expr": "sum by (job, cpu_mode) (rate(dotnet_process_cpu_time_seconds_total{job=~\"$job\"}[$__rate_interval]))" }]
     },
     {
-      "type": "timeseries", "title": "Memory", "id": 42, "gridPos": { "h": 8, "w": 8, "x": 8, "y": 50 },
+      "type": "timeseries", "title": "Memory", "id": 42, "gridPos": { "h": 8, "w": 8, "x": 8, "y": 59 },
       "description": "Each app's working set (what the container counts) and managed heap after the last garbage collection. Each container has 0.5 GiB (the dashed line).",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "bytes", "min": 0, "color": { "mode": "palette-classic" },
@@ -268,7 +308,7 @@
       ]
     },
     {
-      "type": "timeseries", "title": "Exceptions and garbage collections", "id": 43, "gridPos": { "h": 8, "w": 8, "x": 16, "y": 50 },
+      "type": "timeseries", "title": "Exceptions and garbage collections", "id": 43, "gridPos": { "h": 8, "w": 8, "x": 16, "y": 59 },
       "description": "Exceptions thrown per minute by type, handled ones included: CredentialUnavailableException is DefaultAzureCredential trying its sign-in options in turn, and the socket, IO and canceled ones are mostly connections closing. A new type, or many more of one, is worth a look. Plus garbage collections per minute.",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 1, "min": 0, "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 0 } }, "overrides": [] },
@@ -281,9 +321,9 @@
       ]
     },
 
-    { "type": "row", "title": "Database and outbound calls", "id": 50, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 58 } },
+    { "type": "row", "title": "Database and outbound calls", "id": 50, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 67 } },
     {
-      "type": "timeseries", "title": "SQL commands: per minute and p95 duration", "id": 51, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 59 },
+      "type": "timeseries", "title": "SQL commands: per minute and p95 duration", "id": 51, "gridPos": { "h": 8, "w": 12, "x": 0, "y": 68 },
       "description": "Gaps in the duration are times without SQL commands (the scheduler and visitors cause them).",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "short", "min": 0, "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 0, "spanNulls": false, "showPoints": "auto" } },
@@ -297,7 +337,7 @@
       ]
     },
     {
-      "type": "timeseries", "title": "Outbound HTTP calls per minute, by host", "id": 52, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 59 },
+      "type": "timeseries", "title": "Outbound HTTP calls per minute, by host", "id": 52, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 68 },
       "description": "The app's calls out: the AI endpoint, Grafana (telemetry), and localhost, which is Container Apps' managed identity endpoint (the app's sign-in tokens).",
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 1, "min": 0, "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "stacking": { "mode": "normal" } } }, "overrides": [] },
@@ -306,16 +346,16 @@
         "expr": "sum by (server_address) (rate(http_client_request_duration_seconds_count{job=~\"$job\"}[$__rate_interval])) * 60" }]
     },
 
-    { "type": "row", "title": "Logs", "id": 60, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 67 } },
+    { "type": "row", "title": "Logs", "id": 60, "collapsed": false, "panels": [], "gridPos": { "h": 1, "w": 24, "x": 0, "y": 76 } },
     {
-      "type": "logs", "title": "Warnings and errors", "id": 61, "gridPos": { "h": 10, "w": 24, "x": 0, "y": 68 },
+      "type": "logs", "title": "Warnings and errors", "id": 61, "gridPos": { "h": 10, "w": 24, "x": 0, "y": 77 },
       "datasource": { "type": "loki", "uid": "${loki}" },
       "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true, "dedupStrategy": "none" },
       "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "${loki}" },
         "expr": "{service_name=~\"$job\"} | severity_text=~\"(?i)warn.*|error|critical|fatal\" | line_format \"{{.service_name}}: {{__line__}}\"" }]
     },
     {
-      "type": "logs", "title": "All logs", "id": 62, "gridPos": { "h": 10, "w": 24, "x": 0, "y": 78 },
+      "type": "logs", "title": "All logs", "id": 62, "gridPos": { "h": 10, "w": 24, "x": 0, "y": 87 },
       "datasource": { "type": "loki", "uid": "${loki}" },
       "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true, "dedupStrategy": "none" },
       "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "${loki}" }, "expr": "{service_name=~\"$job\"} | line_format \"{{.service_name}}: {{__line__}}\"" }]
