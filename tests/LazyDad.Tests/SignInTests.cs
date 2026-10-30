@@ -129,9 +129,7 @@ public sealed class SignInTests : IAsyncDisposable
 
         using var response = await GetAsync(client, "me", null);
 
-        var me = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
-        Assert.False(me.GetProperty("signedIn").GetBoolean());
-        Assert.Equal(JsonValueKind.Null, me.GetProperty("provider").ValueKind);
+        Assert.Equal("""{"signedIn":false,"provider":null}""", await response.Content.ReadAsStringAsync());
         Assert.Contains("no-store", response.Headers.CacheControl!.ToString());
     }
 
@@ -154,9 +152,7 @@ public sealed class SignInTests : IAsyncDisposable
         // A session cookie: gone when the browser closes ("Keep me signed in" is #74).
         Assert.DoesNotContain("expires=", cookie);
 
-        var me = await MeAsync(client, CookieValue(response));
-        Assert.True(me.GetProperty("signedIn").GetBoolean());
-        Assert.Equal("dev", me.GetProperty("provider").GetString());
+        Assert.Equal("""{"signedIn":true,"provider":"dev"}""", (await MeAsync(client, CookieValue(response))).GetRawText());
     }
 
     [Theory]

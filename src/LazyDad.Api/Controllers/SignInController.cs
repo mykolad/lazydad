@@ -61,6 +61,6 @@ public class SignInController : ControllerBase
     [HttpGet("me")]
     public IActionResult Me()
         => SignInPrincipal.TryRead(User, out _, out var provider)
-            ? Ok(new { signedIn = true, provider })
-            : Ok(new { signedIn = false, provider = (string?)null });
+            ? Ok(new MeResponse(true, provider))
+            : Ok(new MeResponse(false, null));
 }
