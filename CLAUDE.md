@@ -48,7 +48,8 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
   feed (infinite scroll, pages of 20, sort Newest / Top voted), votes, link sharing, the lightbulbs ("why it's funny"),
   the countdown, UA/EN interface (jokes stay Ukrainian), light/dark/system theme, and sign-in in the header (a modal
   `<dialog>` with a button per provider, in its brand's colours; once signed in, the provider's name with a menu holding
-  "Sign out"; no sign-in UI when no provider is enabled). A sign-in leaves for the provider and comes back to the same
+  "Delete my votes" (asks first, in another modal; also a button on the privacy page while signed in) and "Sign out";
+  no sign-in UI when no provider is enabled). A sign-in leaves for the provider and comes back to the same
   address; the list's sort and scroll position wait in `sessionStorage` meanwhile, and `/?signin=failed` goes back to
   where it started and says so. Preferences and the reader's
   votes live in `localStorage`. `wwwroot/app.css` has the Organic design tokens (dark = reversed ramps).
@@ -79,8 +80,9 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
 - **API for the page:** `GET /jokes/feed?sort=new|top&limit=(≤ 50)[&after=<next>]` → `{total, items, next}` (keyset cursor, so new jokes don't shift pages);
   `GET /jokes/summary` → `{count, nextBatchAt}`; `POST /jokes/{id}/vote {value, previous}` → `{up, down}`;
   `GET /jokes/{id}` (cached like the feed); `GET /jokes/{id}/similar?limit=(≤ 12)` → the most similar jokes;
-  `GET /me` → `{signedIn, provider}`, `GET /auth/signin/{provider}?returnUrl=`, `POST /auth/signout` (never cached; sign-out
-  only with the page's `X-LazyDad: 1` header, which another site's form can't send).
+  `GET /me` → `{signedIn, provider}`, `GET /auth/signin/{provider}?returnUrl=[&persist=true]`, `POST /auth/signout`,
+  `DELETE /me/votes` → `204` (signed in, else `401`) (never cached; sign-out and deleting only with the page's
+  `X-LazyDad: 1` header, which another site's form can't send).
 - **Read cache** (`JokeReadCache`, `ReadCache:Seconds`, 30 by default, 0 = off): the joke count, the Top 3, each joke by id, the
   similarity index and each feed page (by sort, cursor and size) are kept in memory per replica (at most 20,000 rows), since every visitor reads
   the same ones and the load test found the database to be the first limit (`docs/performance.md`, the history of
@@ -112,7 +114,9 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
     local run against production's database never adds an unencrypted key to production's ring. `KeyRingCheck` proves the ring at startup in the background (`/status`
     `signIn.keyRing`: `off`, `pending`, `ok`, `failed`);
   - `SignInController`: `GET /auth/signin/{provider}?returnUrl=` (local URLs only; 404 for a provider that isn't
-    enabled), `POST /auth/signout`, `GET /me` → `{signedIn, provider}`, all `no-store`. Providers are authentication
+    enabled), `POST /auth/signout`, `GET /me` → `{signedIn, provider}`, `DELETE /me/votes` (everything stored about the
+    reader: `VoteRepository.DeleteAllAsync`, which takes the votes off the jokes' counts; other readers see the counts
+    once their cached copy expires), all `no-store`. Providers are authentication
     schemes named after them; their callbacks go through `SignInEvents` (only the voter key survives;
     `lazydad_signins_total{provider, outcome}`, `completed` counted once the cookie is written). `EnabledSignInProviders` lists the registered provider schemes, so
     the controller has one path for all. A provider's scheme exists only while sign-in is on and the provider is
@@ -403,7 +407,7 @@ the leaderboard is populated with valid ranks, that `app.js`/`app.css`, `/jokes/
 are served, that a joke's page (`/j/<id>`) carries its link-preview tags and `/jokes/<id>/similar` answers, that the vote endpoint answers (with a no-op vote, so it never changes the counts), that `/me` answers signed out
 (and `no-store`), that the new revision's key ring check is `ok` (every deployed app has sign-in configured, so `off` fails too),
 that no sign-in provider is `invalid` and each configured one redirects with the app's own callback, that the page offers
-exactly the providers `/status` shows as enabled, and that `/privacy` is served in both languages.
+exactly the providers `/status` shows as enabled, that `/privacy` is served in both languages, and that `DELETE /me/votes` signed out is `401`.
 To run them against staging locally:
 
 ```
