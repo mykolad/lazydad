@@ -151,7 +151,7 @@ public sealed class JevClient : IJevClient
     private static object Question(string instructions, IReadOnlyList<KeyValuePair<string, string>> options)
         => new { type = "choice", instructions, criteria = options.ToDictionary(o => o.Key, o => o.Value) };
 
-    private static IEnumerable<float> Probabilities(JsonNode answer, IReadOnlyList<KeyValuePair<string, string>> options)
+    private static float[] Probabilities(JsonNode answer, IReadOnlyList<KeyValuePair<string, string>> options)
     {
         var probabilities = (answer["probabilities"] ?? throw new FormatException("Jev's answer has no probabilities.")).AsObject();
         // Read now, inside the caller's try: a lazy sequence would fail later, outside it.

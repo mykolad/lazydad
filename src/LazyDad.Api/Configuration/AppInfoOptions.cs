@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace LazyDad.Api.Configuration;
 
 /// <summary>
@@ -21,7 +23,7 @@ public class AppInfoOptions
     public string SourceUrl { get; set; } = string.Empty;
 
     /// <summary>CalVer from the commit date, e.g. 2026.09.25; null for local builds.</summary>
-    public string? CalendarVersion => CommitDate?.UtcDateTime.ToString("yyyy.MM.dd");
+    public string? CalendarVersion => CommitDate?.UtcDateTime.ToString("yyyy.MM.dd", CultureInfo.InvariantCulture);
 
     /// <summary>Link to the commit, when both the repository and the full SHA are known.</summary>
     public string? CommitUrl => string.IsNullOrWhiteSpace(SourceUrl) || string.IsNullOrWhiteSpace(Revision)

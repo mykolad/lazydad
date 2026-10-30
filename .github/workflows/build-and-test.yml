@@ -43,6 +43,11 @@ jobs:
       - name: Build
         run: dotnet build LazyDad.slnx -c Release --no-restore
 
+      # The build enforces most of .editorconfig, but a few style rules (an unneeded `this.`, import order) run only in
+      # the IDE and in dotnet format.
+      - name: Code style
+        run: dotnet format style LazyDad.slnx --verify-no-changes --severity warn --no-restore
+
       # Same script as local runs; the coverage minimum lives there.
       - name: Test, coverage report, and coverage gate
         shell: pwsh

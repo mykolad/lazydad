@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -13,7 +14,7 @@ public sealed class AppHttpTests : IDisposable
 
     private readonly LazyDadApp app = new(new()
     {
-        [VoteRateLimit.ConfigurationKey] = VotesPerMinute.ToString(),
+        [VoteRateLimit.ConfigurationKey] = VotesPerMinute.ToString(CultureInfo.InvariantCulture),
         // A build from Deploy Master, not a local one: its versioned files may be cached for good.
         ["App:Version"] = Version,
         ["App:CommitDate"] = "2026-10-09T08:00:00Z",

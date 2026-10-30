@@ -127,16 +127,22 @@ public sealed class LlmClientFactory : ILlmClientFactory, IDisposable
     private sealed class SharedEmbeddingGenerator(IEmbeddingGenerator<string, Embedding<float>> innerGenerator)
         : DelegatingEmbeddingGenerator<string, Embedding<float>>(innerGenerator)
     {
+        // Not calling the base on purpose: it would dispose the shared generator.
+#pragma warning disable CA2215
         protected override void Dispose(bool disposing)
         {
         }
+#pragma warning restore CA2215
     }
 
     /// <summary>A shared client handed to a caller: disposing it leaves the shared client alive.</summary>
     private sealed class SharedChatClient(IChatClient innerClient) : DelegatingChatClient(innerClient)
     {
+        // Not calling the base on purpose: it would dispose the shared client.
+#pragma warning disable CA2215
         protected override void Dispose(bool disposing)
         {
         }
+#pragma warning restore CA2215
     }
 }

@@ -1,7 +1,7 @@
+using System.Text.Json;
 using LazyDad.Api.Configuration;
 using LazyDad.Api.SignIn;
 using LazyDad.Data;
-using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;

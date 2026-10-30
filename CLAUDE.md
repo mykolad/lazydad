@@ -19,10 +19,15 @@ tests/load               — the load test: k6 visitors (visitors.js) and the da
 
 ## Code style rules
 
-- **No underscore prefix** on private fields (`context`, not `_context`).
-- **`this.` only when required** to disambiguate a field from a same-named parameter.
+`.editorconfig` holds the style, and the build enforces it (`Directory.Build.props`: `EnforceCodeStyleInBuild`, the
+`latest-recommended` analyzers, warnings as errors). A few style rules run only in the IDE and in `dotnet format` (an
+unneeded `this.`, import order), so Build and Test also runs `dotnet format style --verify-no-changes`. Suppress a rule
+in `.editorconfig` or with a `#pragma`, always with the reason next to it.
+
+- **No underscore prefix** on private fields (`context`, not `_context`). Enforced (IDE1006).
+- **`this.` only when required** to disambiguate a field from a same-named parameter. Enforced (IDE0003, by `dotnet format`).
 - **No default arguments** on method parameters — callers always pass explicitly
-  (e.g. `CancellationToken cancellationToken`, never `= default`).
+  (e.g. `CancellationToken cancellationToken`, never `= default`). No analyzer has this rule: review keeps it.
 - **Tests check behaviour, not logs.** Assert on outcomes: what's saved, returned or sent, `/status`, metrics, spans.
   Never on log messages (their wording, level or content), and don't add tests whose only purpose is a log line:
   logging is for diagnosing, and changing a message must not break a test. To wait for background work, wait for its
