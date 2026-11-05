@@ -345,7 +345,7 @@ and with them production's database.
 
 `.github/workflows/build-and-test.yml` (**Build and Test**, job `build-and-test`, the required check on `master`)
 runs on every PR and on pushes to `master`: build, then
-`tools/coverage.ps1` for tests, coverage (coverlet → ReportGenerator, pinned in `dotnet-tools.json`),
+`tools/coverage.ps1` for tests, coverage (coverlet → ReportGenerator, pinned in `.config/dotnet-tools.json`),
 and the gate. The job fails if line coverage is below the script's `$MinLineCoverage`.
 Coverage settings (included assemblies, migrations excluded) live in
 `tests/LazyDad.Tests/coverage.runsettings`. The workflow runs the same script, so a local run reproduces the gate:
@@ -374,7 +374,7 @@ Its second job, **`clean-database-migrations`**, runs against a throwaway SQL Se
 
 1. **build** (the reusable `.github/workflows/build-image.yml`, **Build Image**) builds the image
    `lazydad-preview:<short-sha>`, pushes it to ACR (outputting its digest), and builds the EF migration bundle
-   (`dotnet-ef`, pinned in `dotnet-tools.json`).
+   (`dotnet-ef`, pinned in `.config/dotnet-tools.json`).
 2. **staging**, then **production** (`lazydad-app`, which migrates) and then **production-swedencentral**
    (`lazydad-app-swedencentral`, the same database, so no migrations; only after the first passed): the same reusable
    `.github/workflows/deploy-environment.yml` (**Deploy Environment**) for each app. It opens the SQL firewall for the

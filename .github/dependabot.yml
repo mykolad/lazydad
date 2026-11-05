@@ -3,7 +3,8 @@
 version: 2
 
 updates:
-  # Directory.Packages.props (every package version) and dotnet-tools.json.
+  # Directory.Packages.props (every package version) and .config/dotnet-tools.json (the only place Dependabot looks for
+  # the tool manifest).
   - package-ecosystem: nuget
     directory: /
     schedule:
