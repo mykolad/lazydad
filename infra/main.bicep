@@ -91,3 +91,6 @@ module loadTestGroupAccess 'modules/loadTestGroupAccess.bicep' = {
     principalId: resources.outputs.loadTestDeployerPrincipalId
   }
 }
+
+// Each GitHub environment's AZURE_CLIENT_ID variable (infra/README.md).
+output githubClientIds object = resources.outputs.githubClientIds
