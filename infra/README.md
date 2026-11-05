@@ -42,9 +42,15 @@ az deployment sub create --location westeurope --name lazydad --template-file in
 
 The deployment's `githubClientIds` output is each GitHub environment's `AZURE_CLIENT_ID` variable.
 
+`what-if` always lists two role assignments as `Unsupported`: the two outside `lazydad-rg` (on the subscription and on
+`lazydad-loadtest-rg`), named from a principal id it only learns during the deployment
+(`modules/subscriptionRole.bicep` says why).
+
 **Role assignments are named from what they grant** (`guid(scope, identity, role)`), so deploying again changes
 nothing, and a role granted by hand next to Bicep's fails the deployment (`RoleAssignmentExists`) rather than being
-kept twice: delete the hand-made one, and grant it in Bicep.
+kept twice: delete the hand-made one, and grant it in Bicep. The custom roles likewise: one made by hand under the same
+name fails it (`RoleDefinitionWithSameNameExists`); delete its assignments, then the role, then deploy. The runbook's
+hand-made assignments and roles were swapped for Bicep's this way once, when #141 was first deployed.
 
 **The secrets must exist before the roles on them.** Bicep never holds a secret's value; the roles that let each app read
 its own secrets are on the secrets themselves. In a new vault, the first deployment fails at those: set the secrets

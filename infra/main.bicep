@@ -75,11 +75,10 @@ module resources 'resources.bicep' = {
   }
 }
 
-resource productionDeployerServiceTags 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(subscription().id, 'lazydad-github-cd', serviceTagReaderRole.id)
-  properties: {
+module productionDeployerServiceTags 'modules/subscriptionRole.bicep' = {
+  name: 'production-deployer-service-tags'
+  params: {
     principalId: resources.outputs.productionDeployerPrincipalId
-    principalType: 'ServicePrincipal'
     roleDefinitionId: serviceTagReaderRole.id
   }
 }
