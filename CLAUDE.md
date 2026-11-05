@@ -313,6 +313,10 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
   stays tagged `deployed-<env>` / `deploying-<env>` (`<env>-swedencentral` for production's second app) in the environment's
   repository, applied in two phases around each rollout; `previous-<env>`
   keeps what served before the latest rollout from the purge, for a manual rollback).
+- **Bicep** (`infra/main.bicep`, `infra/README.md`; #87, moving in part by part): the resource groups, the logs, the
+  vault and its keys, the identities and their GitHub trusts, the custom roles and every role assignment so far. Deployed
+  by hand (`az deployment sub what-if`, then `create`); each part is adopted with a `what-if` that shows no changes.
+  Change those in Bicep, not by hand: a role granted by hand next to Bicep's fails the next deployment.
 
 ## Pull requests
 
