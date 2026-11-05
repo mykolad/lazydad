@@ -43,6 +43,17 @@ jobs:
       - name: Build
         run: dotnet build LazyDad.slnx -c Release --no-restore
 
+      # The Azure CLI on the runner compiles and lints the infrastructure; deploying it is a separate step (infra/README.md).
+      - name: Bicep builds without warnings
+        run: |
+          az bicep install
+          az bicep lint --file infra/main.bicep --diagnostics-format sarif > bicep-lint.sarif
+          az bicep build --file infra/main.bicep --stdout > /dev/null
+          if jq -e '[.runs[].results[]] | length > 0' bicep-lint.sarif > /dev/null; then
+            jq -r '.runs[].results[] | "::error file=\(.locations[0].physicalLocation.artifactLocation.uri)::\(.message.text)"' bicep-lint.sarif
+            exit 1
+          fi
+
       # The build enforces most of .editorconfig, but a few style rules (an unneeded `this.`, import order) run only in
       # the IDE and in dotnet format.
       - name: Code style
