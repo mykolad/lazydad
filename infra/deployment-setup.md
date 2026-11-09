@@ -29,7 +29,7 @@ when its app stops answering; Cloudflare stays in front of both. Both apps use t
 | 9 | GitHub environments and variables; the first deploy |
 | 10 | `lazydad.fyi` behind Cloudflare and Traffic Manager |
 | 11 | Monitoring and logs: Grafana Cloud |
-| 12 | Operations: checks, token rotation, the ingress ranges, taking a region out, a load test, registry purge, manual rollback, restoring the database |
+| 12 | Operations: checks, token rotation, the ingress ranges, taking a region out, a load test, registry purge, restoring the database |
 
 What it all looks like at the end:
 
@@ -247,7 +247,7 @@ What it keeps, in each repository:
      tags (`^[0-9a-f]{7}`), and Deploy Environment tags in two phases, so the job can stop at any point:
      - **before the rollout**, it re-tags the image of the revision **serving traffic** as `deployed-<env>` in its own repository
        (not the app's desired image, which after a failed rollout names the failed one; repairing any
-       earlier interrupted run), and also as `previous-<env>` (so a manual rollback can return to it; the automatic
+       earlier interrupted run), and also as `previous-<env>` (so Roll Back Production can return to it; the automatic
        rollback gets its digest from the deploy job itself).
        This is fatal on failure, and only then does it tag the new digest `deploying-<env>`;
      - **after the rollout**, it moves `deployed-<env>` to the new digest.
@@ -1865,80 +1865,11 @@ workflow's identity can't do) and the jokes. The app is never open to everyone: 
 anything if staging has no `home` rule, and a new app starts with internal ingress, made external only once its rules
 admit just your IP.
 
-**1. Once: the identities, their roles and the resource group.** (The first role needs section 6's
-`LazyDad Deployer`.)
+**1. Once: the identities, their roles and the resource group.** They're in Bicep (`infra/README.md`):
+`lazydad-loadtest-rg`, `lazydad-github-loadtest` with its GitHub trust and the roles above, and `lazydad-loadtest-app`
+with its role on `OtlpHeadersStaging`.
 
-```bash
-az group create -n lazydad-loadtest-rg -l westeurope -o none
-az identity create -g $RG -n lazydad-github-loadtest -l westeurope -o none
-az identity create -g $RG -n lazydad-loadtest-app -l westeurope -o none
-LT=$(az identity show -g $RG -n lazydad-github-loadtest --query principalId -o tsv)
-ACR_ID=$(az acr show -n lazydadacr --query id -o tsv)
-role() {   # $1 the role, $2 the scope
-  az role assignment create --assignee-object-id "$LT" --assignee-principal-type ServicePrincipal --role "$1" --scope "$2" -o none
-}
-role Contributor "$(az group show -n lazydad-loadtest-rg --query id -o tsv)"
-role "LazyDad Deployer" "$(az containerapp env show -g $RG -n lazydad-cae --query id -o tsv)"
-role "Managed Identity Operator" "$(az identity show -g $RG -n lazydad-acr-pull --query id -o tsv)"
-role "Managed Identity Operator" "$(az identity show -g $RG -n lazydad-loadtest-app --query id -o tsv)"
-role Reader "$ACR_ID"
-role Reader "$(az containerapp show -g $RG -n lazydad-app-staging --query id -o tsv)"
-# The registry role, limited to lazydad-loadtest (section 6's condition), deletes included:
-not=""
-for action in content/read metadata/read content/write metadata/write content/delete metadata/delete; do
-  not+="${not:+ AND }!(ActionMatches{'Microsoft.ContainerRegistry/registries/repositories/$action'})"
-done
-az role assignment create --assignee-object-id "$LT" --assignee-principal-type ServicePrincipal \
-  --role "Container Registry Repository Contributor" --scope "$ACR_ID" --condition-version 2.0 -o none \
-  --condition "(($not) OR (@Request[Microsoft.ContainerRegistry/registries/repositories:name] StringEqualsIgnoreCase 'lazydad-loadtest'))"
-# Trusted from the loadtest GitHub environment only (section 6's immutable subject):
-az identity federated-credential create -g $RG --identity-name lazydad-github-loadtest -n github-loadtest-immutable \
-  --issuer https://token.actions.githubusercontent.com --audiences api://AzureADTokenExchange -o none \
-  --subject "repo:mykolad@$(gh api users/mykolad --jq .id)/lazydad@$(gh api repos/$REPO --jq .id):environment:loadtest"
-```
-
-<details><summary>PowerShell 7</summary>
-
-```powershell
-az group create -n lazydad-loadtest-rg -l westeurope -o none
-az identity create -g $RG -n lazydad-github-loadtest -l westeurope -o none
-az identity create -g $RG -n lazydad-loadtest-app -l westeurope -o none
-$LT = az identity show -g $RG -n lazydad-github-loadtest --query principalId -o tsv
-$ACR_ID = az acr show -n lazydadacr --query id -o tsv
-function Add-Role([string]$Role, [string]$Scope) {
-  az role assignment create --assignee-object-id $LT --assignee-principal-type ServicePrincipal --role $Role --scope $Scope -o none
-}
-Add-Role Contributor (az group show -n lazydad-loadtest-rg --query id -o tsv)
-Add-Role 'LazyDad Deployer' (az containerapp env show -g $RG -n lazydad-cae --query id -o tsv)
-Add-Role 'Managed Identity Operator' (az identity show -g $RG -n lazydad-acr-pull --query id -o tsv)
-Add-Role 'Managed Identity Operator' (az identity show -g $RG -n lazydad-loadtest-app --query id -o tsv)
-Add-Role Reader $ACR_ID
-Add-Role Reader (az containerapp show -g $RG -n lazydad-app-staging --query id -o tsv)
-# The registry role, limited to lazydad-loadtest (section 6's condition), deletes included:
-$not = ('content/read', 'metadata/read', 'content/write', 'metadata/write', 'content/delete', 'metadata/delete' |
-  ForEach-Object { "!(ActionMatches{'Microsoft.ContainerRegistry/registries/repositories/$_'})" }) -join ' AND '
-az role assignment create --assignee-object-id $LT --assignee-principal-type ServicePrincipal `
-  --role 'Container Registry Repository Contributor' --scope $ACR_ID --condition-version 2.0 -o none `
-  --condition "(($not) OR (@Request[Microsoft.ContainerRegistry/registries/repositories:name] StringEqualsIgnoreCase 'lazydad-loadtest'))"
-# Trusted from the loadtest GitHub environment only (section 6's immutable subject):
-az identity federated-credential create -g $RG --identity-name lazydad-github-loadtest -n github-loadtest-immutable `
-  --issuer https://token.actions.githubusercontent.com --audiences api://AzureADTokenExchange -o none `
-  --subject "repo:mykolad@$(gh api users/mykolad --jq .id)/lazydad@$(gh api repos/$REPO --jq .id):environment:loadtest"
-```
-
-</details>
-
-**2. Once: let the app read staging's Grafana token.** No new token: the load-test app sends with `OtlpHeadersStaging`.
-
-```bash
-az role assignment create --assignee-object-id "$(az identity show -g $RG -n lazydad-loadtest-app --query principalId -o tsv)" \
-  --assignee-principal-type ServicePrincipal --role "Key Vault Secrets User" \
-  --scope "$(az keyvault show -n lazydad-kv --query id -o tsv)/secrets/OtlpHeadersStaging" -o none
-```
-
-*PowerShell 7: the same command, with `` ` `` for `\` and `(az …)` for `"$(az …)"`.*
-
-**3. Once: the GitHub environments.** `loadtest` accepts every branch (no branch policy) and holds the identity;
+**2. Once: the GitHub environments.** `loadtest` accepts every branch (no branch policy) and holds the identity;
 `loadtest-teardown` holds nothing but your approval, which the tear-down waits for.
 
 ```bash
@@ -1959,7 +1890,7 @@ gh variable set AZURE_CLIENT_ID -R $REPO --env loadtest --body (az identity show
 
 </details>
 
-**4. A test.**
+**3. A test.**
 
 1. *Actions → Load Test Environment → Run workflow*: the branch, *jokes* and *replicas*. In about 10 minutes the
    run's summary shows the app's address and the k6 command.
@@ -2009,20 +1940,6 @@ az acr task run --registry lazydadacr --name purge-old-images
 ```
 
 </details>
-
-### Manual rollback
-
-Deploy Master and Roll Back Production (both through Deploy Environment) protect the images they deploy from the
-purge (section 2). For a rollback outside the pipelines (e.g. to an image Roll Back Production refuses: one that
-production's revisions never ran, one built before images carried their version, or one older than
-`ROLLBACK_MIN_COMMIT`), do the same yourself, for both prod apps: deploy by digest (`az acr repository show -n
-lazydadacr --image lazydad:<tag> --query digest -o tsv`, then `--image lazydadacr.azurecr.io/lazydad@<digest>`), and
-move each app's `deployed-*` tag to it (`deployed-production`, `deployed-production-swedencentral`) or lock the image (`az acr repository update -n lazydadacr --image lazydad:<tag>
---delete-enabled false`). Production pulls only from `lazydad`: an image that never ran there is only in
-`lazydad-preview`, so copy it first, as Deploy Environment does (`docker pull`, `docker tag` into `lazydad`,
-`docker push`; your registry role allows it, section 2) and check that the digest stayed the same. An image built before #17 reports version `dev` unless you also pass `--set-env-vars
-App__Version=<tag>`; the next pipeline deploy removes that setting again. An image from before #30 (older than
-`ROLLBACK_MIN_COMMIT`) only knows API keys, so its model calls fail now that key authentication is off.
 
 ### Restoring the database
 
