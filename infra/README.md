@@ -42,9 +42,14 @@ az deployment sub create --location westeurope --name lazydad --template-file in
 
 The deployment's `githubClientIds` output is each GitHub environment's `AZURE_CLIENT_ID` variable.
 
-`what-if` always lists two role assignments as `Unsupported`: the two outside `lazydad-rg` (on the subscription and on
-`lazydad-loadtest-rg`), named from a principal id it only learns during the deployment
-(`modules/subscriptionRole.bicep` says why).
+Two kinds of noise in every `what-if`, which aren't changes:
+- **`Unsupported`** on two role assignments: the two outside `lazydad-rg` (on the subscription and on
+  `lazydad-loadtest-rg`), named from a principal id it only learns during the deployment
+  (`modules/subscriptionRole.bicep` says why).
+- **`Modify` on `properties.principalId`** (with `principalType`) on each role assignment whose principal is an
+  identity in these files (the managed identities, the staging app's, the purge task's): `what-if` shows the
+  `reference(...)` it doesn't evaluate rather than the id. Look at the other properties: a `Modify` on anything else, or
+  on an assignment for the owner, is real.
 
 **Role assignments are named from what they grant** (`guid(scope, identity, role)`), so deploying again changes
 nothing, and a role granted by hand next to Bicep's fails the deployment (`RoleAssignmentExists`) rather than being
