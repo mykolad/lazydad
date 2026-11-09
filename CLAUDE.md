@@ -312,7 +312,7 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"   # then dotnet run; 
   images, and what each app runs: revisions are pinned to the image digest, and the manifest
   stays tagged `deployed-<env>` / `deploying-<env>` (`<env>-swedencentral` for production's second app) in the environment's
   repository, applied in two phases around each rollout; `previous-<env>`
-  keeps what served before the latest rollout from the purge, for a manual rollback).
+  keeps what served before the latest rollout from the purge, for Roll Back Production).
 - **Bicep** (`infra/main.bicep`, `infra/README.md`; #87, moving in part by part): the resource groups, the logs, the
   vault and its keys, the identities and their GitHub trusts, the custom roles and every role assignment so far. Deployed
   by hand (`az deployment sub what-if`, then `create`); each part is adopted with a `what-if` that shows no changes.
@@ -468,8 +468,6 @@ staging's `home` rule, never written to the repo or logs) and telemetry to Grafa
 approval (the `loadtest-teardown` environment). The load comes from the owner's machine: `k6 run -e BASE_URL=…
 tests/load/visitors.js`, which plays visitors (page, then read about 15 s, vote twice, scroll; up to 10 scrolls) in
 growing steps until p95 > 2 s or errors > 2%. Runbook section 12, "Load test".
-
-`tsg/redeploy.ps1` is only a manual fallback now. It skips staging, migrations and smoke tests.
 
 ## Docker
 

@@ -199,7 +199,7 @@ jobs:
           esac
           # Fatal on failure (bash -e): never move the candidate tag while the serving image is unprotected.
           retag "$serving" "$REGISTRY/$REPOSITORY:deployed-$TARGET"
-          # What served before this rollout, kept from the purge so a manual rollback can still return to it.
+          # What served before this rollout, kept from the purge so Roll Back Production can still return to it.
           retag "$serving" "$REGISTRY/$REPOSITORY:previous-$TARGET"
           retag "$REGISTRY/$REPOSITORY@${{ inputs.digest }}" "$REGISTRY/$REPOSITORY:deploying-$TARGET"
 
