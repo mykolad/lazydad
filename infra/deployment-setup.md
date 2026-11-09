@@ -8,6 +8,10 @@ copy). One more key passes through this runbook, and only Azure keeps it: the Lo
 Container Apps environment stores to send its logs (section 1). Keep this in sync with reality until it's replaced by
 Bicep (IaC is on the plan).
 
+> **Partly in Bicep now** (`infra/README.md`, #87): the resource groups, the Log Analytics workspace, the vault and its
+> keys, the identities with their GitHub trusts, the custom roles and every role assignment. Change those in Bicep;
+> the commands for them below are how they were first made, and stay until the rest moves too.
+
 Production runs in **two regions**, one app in each: `lazydad-app` in West Europe and `lazydad-app-swedencentral` in
 Sweden Central, next to the database. Azure Traffic Manager shares `lazydad.fyi` between them and takes a region out
 when its app stops answering; Cloudflare stays in front of both. Both apps use the one database, in Sweden Central.
